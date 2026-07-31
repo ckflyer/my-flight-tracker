@@ -1,0 +1,18 @@
+services:
+  flight-tracker:
+    build: .
+    container_name: flight-tracker
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # Everything persistent lives here: flighttracker.db (schedule/aircraft/
+      # positions) and settings.json. Point this at a TrueNAS dataset.
+      - ./data:/app/data
+    environment:
+      # Optional: set OpenSky credentials here, OR just paste them into the
+      # Settings page in the app after it's running (stored in data/settings.json).
+      # If both are set, the Settings page value wins.
+      - OPENSKY_CLIENT_ID=${OPENSKY_CLIENT_ID:-}
+      - OPENSKY_CLIENT_SECRET=${OPENSKY_CLIENT_SECRET:-}
+      - TZ=${TZ:-America/Chicago}
