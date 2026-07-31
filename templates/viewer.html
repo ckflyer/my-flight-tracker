@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="{{ settings.theme }}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Flight Tracker</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    :root, [data-theme="dark"] {
+      --bg: #0f1419;
+      --card: #1a2332;
+      --accent: #3b82f6;
+      --text: #e7ecf3;
+      --muted: #8b9bb4;
+      --good: #22c55e;
+      --warn: #f59e0b;
+      --border: #2a3548;
+      --map-border: #334155;
+    }
+    [data-theme="light"] {
+      --bg: #f1f5f9;
+      --card: #ffffff;
+      --accent: #2563eb;
+      --text: #0f172a;
+      --muted: #64748b;
+      --good: #16a34a;
+      --warn: #d97706;
+      --border: #e2e8f0;
+      --map-border: #cbd5e1;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 1rem;
+      line-height: 1.4;
+    }
+    h1 { font-size: 1.25rem; font-weight: 600; margin-bottom: 0.35rem; color: var(--muted); }
+    .nav { font-size: 0.85rem; margin-bottom: 1rem; }
+    .nav a { color: var(--accent); text-decoration: none; margin-right: 0.75rem; }
+    .card {
+      background: var(--card);
+      border-radius: 16px;
+      padding: 1.25rem;
+      margin-bottom: 1rem;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+    }
+    .card.current { border: 2px solid var(--accent); }
+    .label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+    .section-label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin: 1rem 0 0.5rem;
+    }
+    .flight-num { font-size: 1.5rem; font-weight: 700; }
+    .route {
+      font-size: 1.75rem;
+      font-weight: 600;
+      margin: 0.5rem 0;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .times { display: flex; justify-content: space-between; margin-top: 0.75rem; }
+    .time-block { text-align: left; }
+    .time-block.arr { text-align: right; }
+    .time { font-size: 1.25rem; font-weight: 600; }
+    .status {
+      display: inline-block;
+      padding: 0.2rem 0.6rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      margin-top: 0.5rem;
+    }
+    .status.In-Air, .status.in-air { background: rgba(34,197,94,0.2); color: var(--good); }
+    .status.Scheduled, .status.scheduled { background: rgba(59,130,246,0.2); color: var(--accent); }
+    .status.Departing, .status.departing { background: rgba(245,158,11,0.2); color: var(--warn); }
+    .status.Arrived, .status.arrived { background: rgba(139,155,180,0.2); color: var(--muted); }
+    .dh {
+      display: inline-block;
+      padding: 0.15rem 0.45rem;
+      border-radius: 6px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      background: rgba(245,158,11,0.2);
+      color: var(--warn);
+      margin-left: 0.4rem;
+      vertical-align: middle;
+    }
+    .buttons { display: flex; gap: 0.5rem; margin-top: 1rem; flex-wrap: wrap; }
+    .btn {
+      flex: 1;
+      min-width: 120px;
+      text-align: center;
+      padding: 0.75rem 1rem;
+      border-radius: 10px;
+      background: var(--accent);
+      color: white;
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 0.9rem;
+    }
+    .btn.secondary { background: #334155; }
+    [data-theme="light"] .btn.secondary { background: #94a3b8; }
+    .list-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.85rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .list-item:last-child { border-bottom: none; }
+    .list-item .meta { font-size: 0.8rem; color: var(--muted); margin-top: 0.15rem; }
+    .empty { color: var(--muted); text-align: center; padding: 2rem; }
+    .footer { text-align: center; color: var(--muted); font-size: 0.75rem; margin-top: 2rem; }
+    .toggle {
+      display: block;
+      width: 100%;
+      background: #243044;
+      color: var(--text);
+      border: none;
+      border-radius: 10px;
+      padding: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: 0.75rem;
+    }
+    [data-theme="light"] .toggle { background: #e2e8f0; }
+    #past-section { display: none; }
+    #past-section.open { display: block; }
+    .live-box {
+      margin-top: 0.85rem;
+      padding: 0.75rem;
+      background: rgba(15,23,42,0.5);
+      border-radius: 10px;
+      border: 1px solid var(--map-border);
+    }
+    [data-theme="light"] .live-box { background: #f8fafc; }
+    .live-box.muted-live { color: var(--muted); font-size: 0.85rem; }
+    .live-grid {
+      display: flex;
+      gap: 1.25rem;
+      flex-wrap: wrap;
+      margin-top: 0.35rem;
+    }
+    .live-val { font-size: 1.15rem; font-weight: 700; }
+    .live-unit { font-size: 0.75rem; color: var(--muted); }
+    .live-meta { font-size: 0.75rem; color: var(--muted); margin-top: 0.4rem; }
+    #flight-map {
+      height: 240px;
+      border-radius: 12px;
+      margin-top: 0.75rem;
+      border: 1px solid var(--map-border);
+      z-index: 1;
+    }
+    .plane-icon {
+      background: transparent !important;
+      border: none !important;
+    }
+    .plane-icon svg {
+      display: block;
+      overflow: visible;
+    }
+  </style>
+</head>
+<body>
+  <h1>Where are you?</h1>
+  <div class="nav">
+    <a href="/admin">Schedule</a>
+    <a href="/settings">Settings</a>
+  </div>
+
+  {% if past %}
+  <button class="toggle" id="past-toggle" onclick="togglePast()">Show past flights ({{ past|length }})</button>
+  <div id="past-section" class="card">
+    {% for leg in past %}
+    <div class="list-item">
+      <div>
+        <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
+        {{ leg.origin }} → {{ leg.destination }}
+        <div class="meta">{{ leg.date }} · {{ leg.dep }} – {{ leg.arr }}</div>
+      </div>
+      <span class="status {{ leg.status }}">{{ leg.status }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if current %}
+  <div class="card current">
+    <div class="label">Currently on</div>
+    <div class="flight-num">{{ current.callsign }}{% if current.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
+    <div class="route">
+      <span>{{ current.origin }}</span>
+      <span style="color:var(--muted);font-size:1rem">→</span>
+      <span>{{ current.destination }}</span>
+    </div>
+    <div class="times">
+      <div class="time-block">
+        <div class="label">Depart</div>
+        <div class="time">{{ current.dep }}</div>
+      </div>
+      <div class="time-block arr">
+        <div class="label">Arrive</div>
+        <div class="time">{{ current.arr }}</div>
+      </div>
+    </div>
+    <span class="status {{ current.status }}">{{ current.status }}</span>
+    {% if live %}
+    <div class="live-box">
+      <div class="label">Live ADS-B</div>
+      <div class="live-grid">
+        {% if live.altitude_ft is not none %}
+        <div><span class="live-val">{{ live.altitude_ft }}</span> <span class="live-unit">ft</span></div>
+        {% endif %}
+        {% if live.speed_kts is not none %}
+        <div><span class="live-val">{{ live.speed_kts }}</span> <span class="live-unit">kts</span></div>
+        {% endif %}
+        {% if live.track is not none %}
+        <div><span class="live-val">{{ live.track|int }}°</span> <span class="live-unit">trk</span></div>
+        {% endif %}
+        {% if live.on_ground %}
+        <div><span class="live-val">On ground</span></div>
+        {% endif %}
+      </div>
+      {% if live.icao24 %}
+      <div class="live-meta">ICAO {{ live.icao24 }}{% if live.callsign %} · {{ live.callsign }}{% endif %}</div>
+      {% endif %}
+    </div>
+    {% if live.lat is not none and live.lon is not none %}
+    <div id="flight-map"></div>
+    {% endif %}
+    {% else %}
+    <div class="live-box muted-live">No live ADS-B position right now</div>
+    {% endif %}
+    <div class="buttons">
+      {% if settings.show_flightaware %}
+      <a class="btn" href="{{ current.links.flightaware }}" target="_blank" rel="noopener">FlightAware</a>
+      {% endif %}
+      {% if settings.show_fr24 %}
+      <a class="btn {% if settings.show_flightaware %}secondary{% endif %}" href="{{ current.links.fr24 }}" target="_blank" rel="noopener">FlightRadar24</a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if upcoming %}
+  <div class="section-label">Upcoming</div>
+  <div class="card">
+    {% for leg in upcoming %}
+    <div class="list-item">
+      <div>
+        <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
+        {{ leg.origin }} → {{ leg.destination }}
+        <div class="meta">{{ leg.date }} · {{ leg.dep }} – {{ leg.arr }}</div>
+      </div>
+      <div style="text-align:right">
+        <span class="status {{ leg.status }}">{{ leg.status }}</span>
+        <div style="margin-top:0.5rem">
+          {% if settings.show_flightaware %}
+          <a href="{{ leg.links.flightaware }}" target="_blank" rel="noopener" style="color:var(--accent);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">FlightAware</a>
+          {% endif %}
+          {% if settings.show_flightaware and settings.show_fr24 %}
+          <span style="color:var(--muted)">·</span>
+          {% endif %}
+          {% if settings.show_fr24 %}
+          <a href="{{ leg.links.fr24 }}" target="_blank" rel="noopener" style="color:var(--muted);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">FR24</a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if not current and not upcoming and not past %}
+  <div class="card empty">
+    No flights in the schedule.<br>
+    <span style="font-size:0.85rem">Import a schedule on the admin page.</span>
+  </div>
+  {% endif %}
+
+  <div class="footer">
+    Auto-refreshes · Times are local to each airport
+  </div>
+
+  <script>
+    function togglePast() {
+      const sec = document.getElementById('past-section');
+      const btn = document.getElementById('past-toggle');
+      sec.classList.toggle('open');
+      if (sec.classList.contains('open')) {
+        btn.textContent = 'Hide past flights';
+      } else {
+        btn.textContent = 'Show past flights ({{ past|length }})';
+      }
+    }
+
+    (function() {
+      const mapEl = document.getElementById('flight-map');
+      if (!mapEl) return;
+
+      const live = {{ live | tojson if live else 'null' }};
+      const current = {{ current | tojson if current else 'null' }};
+      if (!live || live.lat == null || live.lon == null) return;
+
+      const map = L.map('flight-map', { zoomControl: true });
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 12,
+        attribution: '&copy; OpenStreetMap'
+      }).addTo(map);
+
+      const pts = [[live.lat, live.lon]];
+
+      // Origin marker
+      if (current && current.origin_lat != null) {
+        L.circleMarker([current.origin_lat, current.origin_lon], {
+          radius: 7, color: '#22c55e', fillColor: '#22c55e', fillOpacity: 0.95, weight: 2
+        }).addTo(map).bindPopup('Origin: ' + current.origin);
+        pts.push([current.origin_lat, current.origin_lon]);
+      }
+      // Destination marker
+      if (current && current.dest_lat != null) {
+        L.circleMarker([current.dest_lat, current.dest_lon], {
+          radius: 7, color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.95, weight: 2
+        }).addTo(map).bindPopup('Destination: ' + current.destination);
+        pts.push([current.dest_lat, current.dest_lon]);
+      }
+
+      // Route: origin → plane → destination (solid segments)
+      if (current && current.origin_lat != null) {
+        L.polyline(
+          [[current.origin_lat, current.origin_lon], [live.lat, live.lon]],
+          { color: '#22c55e', weight: 3, opacity: 0.85 }
+        ).addTo(map);
+      }
+      if (current && current.dest_lat != null) {
+        L.polyline(
+          [[live.lat, live.lon], [current.dest_lat, current.dest_lon]],
+          { color: '#3b82f6', weight: 3, opacity: 0.85, dashArray: '6 8' }
+        ).addTo(map);
+      }
+
+      // Plane silhouette – nose points along track (0° = north)
+      const track = (live.track != null) ? Number(live.track) : 0;
+      const svg = `
+        <svg width="40" height="40" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"
+             style="transform: rotate(${track}deg); transform-origin: 20px 20px; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.55));">
+          <path fill="#ffffff" stroke="#0f172a" stroke-width="1" stroke-linejoin="round"
+            d="M20 2 L23.5 14 L36 18 L36 21 L23.5 19.5 L22 30 L27 34 L27 36 L20 33 L13 36 L13 34 L18 30 L16.5 19.5 L4 21 L4 18 L16.5 14 Z"/>
+        </svg>`;
+      const planeIcon = L.divIcon({
+        className: 'plane-icon',
+        html: svg,
+        iconSize: [40, 40],
+        iconAnchor: [20, 20]
+      });
+      L.marker([live.lat, live.lon], { icon: planeIcon, zIndexOffset: 1000 })
+        .addTo(map)
+        .bindPopup('Live position');
+
+      if (pts.length === 1) map.setView(pts[0], 7);
+      else map.fitBounds(pts, { padding: [36, 36], maxZoom: 8 });
+    })();
+
+    setTimeout(() => location.reload(), {{ poll_ms }});
+  </script>
+</body>
+</html>

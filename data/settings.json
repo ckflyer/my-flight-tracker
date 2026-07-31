@@ -1,0 +1,9 @@
+{
+  "opensky_client_id": "ckflyer-api-client",
+  "opensky_client_secret": "5f6CHklxijF08FGMD3wTAPys2xu1kuAr",
+  "time_format": "24",
+  "show_flightaware": true,
+  "show_fr24": false,
+  "theme": "dark",
+  "poll_seconds": 45
+}

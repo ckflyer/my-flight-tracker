@@ -1,0 +1,215 @@
+{
+  "updated_at": "2026-07-31T19:28:40.053845Z",
+  "legs": [
+    {
+      "id": "2026-07-30-3795-DFW-SGF",
+      "date": "2026-07-30",
+      "flight_number": "3795",
+      "origin": "DFW",
+      "destination": "SGF",
+      "dep_time_local": "13:40:00",
+      "arr_time_local": "15:07:00",
+      "is_deadhead": false,
+      "origin_info": {
+        "iata": "DFW",
+        "icao": "KDFW",
+        "name": "Dallas-Fort Worth International Airport",
+        "city": "Dallas-Fort Worth",
+        "country": "US",
+        "timezone": "America/Chicago",
+        "lat": 32.897233,
+        "lon": -97.037695
+      },
+      "dest_info": {
+        "iata": "SGF",
+        "icao": "KSGF",
+        "name": "Springfield-Branson Ntl Airport",
+        "city": "Springfield",
+        "country": "US",
+        "timezone": "America/Chicago",
+        "lat": 37.245661,
+        "lon": -93.388627
+      }
+    },
+    {
+      "id": "2026-07-31-3795-DFW-SGF",
+      "date": "2026-07-31",
+      "flight_number": "3795",
+      "origin": "DFW",
+      "destination": "SGF",
+      "dep_time_local": "13:40:00",
+      "arr_time_local": "15:07:00",
+      "is_deadhead": false,
+      "origin_info": {
+        "iata": "DFW",
+        "icao": "KDFW",
+        "name": "Dallas-Fort Worth International Airport",
+        "city": "Dallas-Fort Worth",
+        "country": "US",
+        "timezone": "America/Chicago",
+        "lat": 32.897233,
+        "lon": -97.037695
+      },
+      "dest_info": {
+        "iata": "SGF",
+        "icao": "KSGF",
+        "name": "Springfield-Branson Ntl Airport",
+        "city": "Springfield",
+        "country": "US",
+        "timezone": "America/Chicago",
+        "lat": 37.245661,
+        "lon": -93.388627
+      }
+    },
+    {
+      "id": "2026-08-02-3916-DFW-MTY",
+      "date": "2026-08-02",
+      "flight_number": "3916",
+      "origin": "DFW",
+      "destination": "MTY",
+      "dep_time_local": "21:50:00",
+      "arr_time_local": "22:39:00",
+      "is_deadhead": false,
+      "origin_info": {
+        "iata": "DFW",
+        "icao": "KDFW",
+        "name": "Dallas-Fort Worth International Airport",
+        "city": "Dallas-Fort Worth",
+        "country": "US",
+        "timezone": "America/Chicago",
+        "lat": 32.897233,
+        "lon": -97.037695
+      },
+      "dest_info": {
+        "iata": "MTY",
+        "icao": "MMMY",
+        "name": "General Mariano Escobedo International Airport",
+        "city": "Monterrey",
+        "country": "MX",
+        "timezone": "America/Mexico_City",
+        "lat": 25.7785,
+        "lon": -100.107
+      }
+    },
+    {
+      "id": "2026-08-03-3998-MTY-PHX",
+      "date": "2026-08-03",
+      "flight_number": "3998",
+      "origin": "MTY",
+      "destination": "PHX",
+      "dep_time_local": "17:05:00",
+      "arr_time_local": "18:44:00",
+      "is_deadhead": false,
+      "origin_info": {
+        "iata": "MTY",
+        "icao": "MMMY",
+        "name": "General Mariano Escobedo International Airport",
+        "city": "Monterrey",
+        "country": "MX",
+        "timezone": "America/Mexico_City",
+        "lat": 25.7785,
+        "lon": -100.107
+      },
+      "dest_info": {
+        "iata": "PHX",
+        "icao": "KPHX",
+        "name": "Phoenix Sky Harbor International Airport",
+        "city": "Phoenix",
+        "country": "US",
+        "timezone": "America/Phoenix",
+        "lat": 33.434278,
+        "lon": -112.011583
+      }
+    },
+    {
+      "id": "2026-08-03-4028-PHX-EUG",
+      "date": "2026-08-03",
+      "flight_number": "4028",
+      "origin": "PHX",
+      "destination": "EUG",
+      "dep_time_local": "20:40:00",
+      "arr_time_local": "23:17:00",
+      "is_deadhead": false,
+      "origin_info": {
+        "iata": "PHX",
+        "icao": "KPHX",
+        "name": "Phoenix Sky Harbor International Airport",
+        "city": "Phoenix",
+        "country": "US",
+        "timezone": "America/Phoenix",
+        "lat": 33.434278,
+        "lon": -112.011583
+      },
+      "dest_info": {
+        "iata": "EUG",
+        "icao": "KEUG",
+        "name": "Mahlon Sweet Field",
+        "city": "Eugene",
+        "country": "US",
+        "timezone": "America/Los_Angeles",
+        "lat": 44.124583,
+        "lon": -123.211972
+      }
+    },
+    {
+      "id": "2026-08-04-4114-EUG-PHX",
+      "date": "2026-08-04",
+      "flight_number": "4114",
+      "origin": "EUG",
+      "destination": "PHX",
+      "dep_time_local": "13:39:00",
+      "arr_time_local": "16:16:00",
+      "is_deadhead": false,
+      "origin_info": {
+        "iata": "EUG",
+        "icao": "KEUG",
+        "name": "Mahlon Sweet Field",
+        "city": "Eugene",
+        "country": "US",
+        "timezone": "America/Los_Angeles",
+        "lat": 44.124583,
+        "lon": -123.211972
+      },
+      "dest_info": {
+        "iata": "PHX",
+        "icao": "KPHX",
+        "name": "Phoenix Sky Harbor International Airport",
+        "city": "Phoenix",
+        "country": "US",
+        "timezone": "America/Phoenix",
+        "lat": 33.434278,
+        "lon": -112.011583
+      }
+    },
+    {
+      "id": "2026-08-04-3232-PHX-DFW-DH",
+      "date": "2026-08-04",
+      "flight_number": "3232",
+      "origin": "PHX",
+      "destination": "DFW",
+      "dep_time_local": "17:15:00",
+      "arr_time_local": "21:50:00",
+      "is_deadhead": true,
+      "origin_info": {
+        "iata": "PHX",
+        "icao": "KPHX",
+        "name": "Phoenix Sky Harbor International Airport",
+        "city": "Phoenix",
+        "country": "US",
+        "timezone": "America/Phoenix",
+        "lat": 33.434278,
+        "lon": -112.011583
+      },
+      "dest_info": {
+        "iata": "DFW",
+        "icao": "KDFW",
+        "name": "Dallas-Fort Worth International Airport",
+        "city": "Dallas-Fort Worth",
+        "country": "US",
+        "timezone": "America/Chicago",
+        "lat": 32.897233,
+        "lon": -97.037695
+      }
+    }
+  ]
+}
