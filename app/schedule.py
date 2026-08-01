@@ -94,6 +94,13 @@ def get_current_info(now: Optional[datetime] = None) -> CurrentFlightInfo:
     """
     Split schedule into past / current / upcoming based on schedule times.
     now should be timezone-aware (preferably UTC).
+
+    The "current" window intentionally extends 3 hours past the scheduled
+    arrival time (not just until the clock says it should have landed).
+    Real flights run late, and taxi-in/landing detection needs the leg to
+    still be "current" so live tracking keeps working through a delay,
+    instead of the card vanishing into the past-flights list right when a
+    delay makes it most useful.
     """
     if now is None:
         now = datetime.now(ZoneInfo("UTC"))
@@ -109,22 +116,22 @@ def get_current_info(now: Optional[datetime] = None) -> CurrentFlightInfo:
     past: List[FlightLeg] = []
     upcoming: List[FlightLeg] = []
 
+    CURRENT_GRACE = timedelta(hours=3)
+
     for leg in legs:
         dep_utc = leg.dep_datetime_utc()
         arr_utc = leg.arr_datetime_utc()
         if not dep_utc or not arr_utc:
             continue
 
-        status = leg.status_at(now)
-
-        if status in ("Departing", "In Air"):
-            current = leg
-        elif status == "Arrived":
-            past.append(leg)
-        else:  # Scheduled
+        if now < dep_utc - timedelta(minutes=20):
             upcoming.append(leg)
-            if next_leg is None and dep_utc > now:
+            if next_leg is None:
                 next_leg = leg
+        elif now < arr_utc + CURRENT_GRACE:
+            current = leg
+        else:
+            past.append(leg)
 
     # Past chronological (oldest first) so scrolling up through history feels natural
     past.sort(key=lambda l: l.dep_datetime_utc() or datetime.min)

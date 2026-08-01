@@ -61,6 +61,11 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_positions_leg ON positions(leg_id, ts)"
         )
+        # Migration: on_ground wasn't in the original schema. Needed to tell
+        # taxi-out/taxi-in/arrived apart from in-air breadcrumb points.
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(positions)").fetchall()]
+        if "on_ground" not in cols:
+            conn.execute("ALTER TABLE positions ADD COLUMN on_ground INTEGER")
         conn.commit()
     finally:
         conn.close()

@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
-from datetime import datetime, time as dtime
+from datetime import datetime, timedelta, time as dtime
 from zoneinfo import ZoneInfo
 from typing import Optional
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -12,7 +12,7 @@ from .opensky import live_summary
 from .models import FlightLeg
 from .settings import load_settings, save_settings, apply_opensky_env, AppSettings
 from .aircraft import note_aircraft_seen, get_aircraft_info, list_aircraft, update_aircraft
-from .track import record_position, get_breadcrumb, compute_progress, compute_eta
+from .track import record_position, get_breadcrumb, compute_progress, compute_eta, get_position_history, compute_phase
 
 BASE = Path(__file__).resolve().parent.parent
 jinja_env = Environment(
@@ -86,19 +86,31 @@ async def viewer(request: Request):
     current = leg_view(info.current, now, tf)
     live = None
     if info.current:
-        status = info.current.status_at(now)
-        if status in ("Departing", "In Air"):
+        dep_utc = info.current.dep_datetime_utc()
+        arr_utc = info.current.arr_datetime_utc()
+        # Poll from 20 min before scheduled departure through 3 hours past
+        # scheduled arrival — wide enough to catch taxi-out early and keep
+        # tracking through a real delay, capped so we don't poll forever.
+        should_poll = (
+            dep_utc and arr_utc
+            and now >= dep_utc - timedelta(minutes=20)
+            and now <= arr_utc + timedelta(hours=3)
+        )
+        if should_poll:
             live = live_summary(info.current.callsign)
         if current:
+            history = get_position_history(info.current.id)
             current["progress_pct"] = compute_progress(info.current, live, now)
             current["eta"] = compute_eta(info.current, live, now, tf)
             current["breadcrumb"] = []
             current["aircraft"] = None
             if live and live.get("lat") is not None and live.get("lon") is not None:
                 note_aircraft_seen(live.get("icao24"))
-                record_position(info.current.id, live["lat"], live["lon"], now)
+                record_position(info.current.id, live["lat"], live["lon"], now, live.get("on_ground"))
                 current["breadcrumb"] = get_breadcrumb(info.current.id)
                 current["aircraft"] = get_aircraft_info(live.get("icao24"))
+                history = get_position_history(info.current.id)  # include the point just recorded
+            current["status"] = compute_phase(info.current, live, history, now, settings.poll_seconds)
     ctx = {
         "request": request,
         "current": current,

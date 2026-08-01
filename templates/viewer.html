@@ -93,10 +93,11 @@
       font-weight: 600;
       margin-top: 0.5rem;
     }
-    .status.In-Air, .status.in-air { background: rgba(34,197,94,0.2); color: var(--good); }
-    .status.Scheduled, .status.scheduled { background: rgba(59,130,246,0.2); color: var(--accent); }
-    .status.Departing, .status.departing { background: rgba(245,158,11,0.2); color: var(--warn); }
-    .status.Arrived, .status.arrived { background: rgba(139,155,180,0.2); color: var(--muted); }
+    .status.in-air { background: rgba(34,197,94,0.2); color: var(--good); }
+    .status.landing { background: rgba(56,189,248,0.22); color: #38bdf8; }
+    .status.scheduled { background: rgba(59,130,246,0.2); color: var(--accent); }
+    .status.departing, .status.taxi-out, .status.taxi-in { background: rgba(245,158,11,0.2); color: var(--warn); }
+    .status.arrived { background: rgba(139,155,180,0.2); color: var(--muted); }
     .dh {
       display: inline-block;
       padding: 0.15rem 0.45rem;
@@ -234,7 +235,7 @@
           <div class="meta">{{ leg.date }} · {{ leg.dep }} – {{ leg.arr }}</div>
         </div>
         <div style="text-align:right">
-          <span class="status {{ leg.status }}">{{ leg.status }}</span>
+          <span class="status {{ leg.status|lower|replace(' ', '-') }}">{{ leg.status }}</span>
           {% if leg.origin_lat is not none or leg.dest_lat is not none %}
           <div style="margin-top:0.5rem">
             <a href="#" data-preview-toggle="past-prev-{{ loop.index }}" style="color:var(--muted);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">Map</a>
@@ -272,7 +273,7 @@
         <div class="time">{{ current.arr }}</div>
       </div>
     </div>
-    <span class="status {{ current.status }}">{{ current.status }}</span>
+    <span class="status {{ current.status|lower|replace(' ', '-') }}">{{ current.status }}</span>
     {% if live %}
     <div class="live-box">
       <div class="label">Live ADS-B</div>
@@ -337,7 +338,7 @@
           <div class="meta">{{ leg.date }} · {{ leg.dep }} – {{ leg.arr }}</div>
         </div>
         <div style="text-align:right">
-          <span class="status {{ leg.status }}">{{ leg.status }}</span>
+          <span class="status {{ leg.status|lower|replace(' ', '-') }}">{{ leg.status }}</span>
           <div style="margin-top:0.5rem">
             {% if settings.show_flightaware %}
             <a data-fa-link href="{{ leg.links.flightaware }}" target="_blank" rel="noopener" style="color:var(--accent);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">FlightAware</a>
@@ -461,6 +462,22 @@
         maxZoom: 12,
         attribution: '&copy; OpenStreetMap'
       }).addTo(map);
+
+      // Weather radar overlay (current flight's map only) — RainViewer's
+      // public API, no key required. Fails silently if unreachable.
+      fetch('https://api.rainviewer.com/public/weather-maps.json')
+        .then(r => r.json())
+        .then(data => {
+          const frames = data && data.radar && data.radar.past;
+          if (!frames || !frames.length) return;
+          const latest = frames[frames.length - 1];
+          L.tileLayer(data.host + latest.path + '/256/{z}/{x}/{y}/2/1_1.png', {
+            opacity: 0.55,
+            maxNativeZoom: 7,
+            attribution: 'Radar &copy; RainViewer'
+          }).addTo(map);
+        })
+        .catch(() => {});
 
       const pts = [[live.lat, live.lon]];
 
