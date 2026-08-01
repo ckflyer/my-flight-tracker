@@ -112,6 +112,8 @@ def init_db() -> None:
             # Whoever already exists (the original single pilot, pre-multi-user)
             # becomes admin automatically on upgrade.
             conn.execute("UPDATE users SET is_admin = 1 WHERE id = (SELECT MIN(id) FROM users)")
+        if "recovery_code_hash" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN recovery_code_hash TEXT")
         conn.commit()
     finally:
         conn.close()

@@ -261,6 +261,23 @@
     .upcoming-item { border-bottom: 1px solid var(--border); }
     .upcoming-item:last-child { border-bottom: none; }
     .upcoming-item .list-item { border-bottom: none; }
+    .day-label {
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      padding: 0.85rem 0 0.35rem;
+    }
+    .day-label:first-child { padding-top: 0; }
+    .overnight-divider {
+      font-size: 0.8rem;
+      color: var(--accent);
+      background: rgba(59,130,246,0.08);
+      border-radius: 8px;
+      padding: 0.5rem 0.7rem;
+      margin: 0.6rem 0;
+    }
     .preview-map {
       display: none;
       height: 160px;
@@ -290,33 +307,39 @@
     </div>
   </div>
 
-  {% if past %}
-  <button class="toggle" id="past-toggle" onclick="togglePast()">Show past flights ({{ past|length }})</button>
+  {% if past_groups %}
+  <button class="toggle" id="past-toggle" onclick="togglePast()">Show past flights ({{ past_count }})</button>
   <div id="past-section" class="card">
-    {% for leg in past %}
+    {% for group in past_groups %}
+    <div class="day-label">{{ group.date_label }}</div>
+    {% for leg in group.legs %}
     <div class="upcoming-item">
       <div class="list-item">
         <div>
           <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
           {{ leg.origin }} → {{ leg.destination }}
-          <div class="meta">{{ leg.date }} · {{ leg.dep }} – {{ leg.arr }}</div>
+          <div class="meta">{{ leg.dep }} – {{ leg.arr }}</div>
         </div>
         <div style="text-align:right">
           <span class="status {{ leg.status|lower|replace(' ', '-') }}">{{ leg.status }}</span>
           {% if leg.origin_lat is not none or leg.dest_lat is not none %}
           <div style="margin-top:0.5rem">
-            <a href="#" data-preview-toggle="past-prev-{{ loop.index }}" style="color:var(--muted);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">Map</a>
+            <a href="#" data-preview-toggle="past-prev-{{ leg.id }}" style="color:var(--muted);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">Map</a>
           </div>
           {% endif %}
         </div>
       </div>
       {% if leg.origin_lat is not none or leg.dest_lat is not none %}
-      <div class="preview-map" id="past-prev-{{ loop.index }}"
+      <div class="preview-map" id="past-prev-{{ leg.id }}"
            data-origin-lat="{{ leg.origin_lat }}" data-origin-lon="{{ leg.origin_lon }}"
            data-dest-lat="{{ leg.dest_lat }}" data-dest-lon="{{ leg.dest_lon }}"
            data-origin="{{ leg.origin }}" data-dest="{{ leg.destination }}"></div>
       {% endif %}
     </div>
+    {% endfor %}
+    {% if group.overnight %}
+    <div class="overnight-divider">🌙 Overnight in {{ group.overnight.city }} — {{ group.overnight.duration }}</div>
+    {% endif %}
     {% endfor %}
   </div>
   {% endif %}
@@ -394,16 +417,18 @@
   </div>
   {% endif %}
 
-  {% if upcoming %}
+  {% if upcoming_groups %}
   <div class="section-label">Upcoming</div>
   <div class="card">
-    {% for leg in upcoming %}
+    {% for group in upcoming_groups %}
+    <div class="day-label">{{ group.date_label }}</div>
+    {% for leg in group.legs %}
     <div class="upcoming-item">
       <div class="list-item">
         <div>
           <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
           {{ leg.origin }} → {{ leg.destination }}
-          <div class="meta">{{ leg.date }} · {{ leg.dep }} – {{ leg.arr }}</div>
+          <div class="meta">{{ leg.dep }} – {{ leg.arr }}</div>
         </div>
         <div style="text-align:right">
           <span class="status {{ leg.status|lower|replace(' ', '-') }}">{{ leg.status }}</span>
@@ -419,18 +444,22 @@
             {% endif %}
             {% if leg.origin_lat is not none or leg.dest_lat is not none %}
             <span style="color:var(--muted)">·</span>
-            <a href="#" data-preview-toggle="prev-{{ loop.index }}" style="color:var(--muted);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">Map</a>
+            <a href="#" data-preview-toggle="prev-{{ leg.id }}" style="color:var(--muted);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">Map</a>
             {% endif %}
           </div>
         </div>
       </div>
       {% if leg.origin_lat is not none or leg.dest_lat is not none %}
-      <div class="preview-map" id="prev-{{ loop.index }}"
+      <div class="preview-map" id="prev-{{ leg.id }}"
            data-origin-lat="{{ leg.origin_lat }}" data-origin-lon="{{ leg.origin_lon }}"
            data-dest-lat="{{ leg.dest_lat }}" data-dest-lon="{{ leg.dest_lon }}"
            data-origin="{{ leg.origin }}" data-dest="{{ leg.destination }}"></div>
       {% endif %}
     </div>
+    {% endfor %}
+    {% if group.overnight %}
+    <div class="overnight-divider">🌙 Overnight in {{ group.overnight.city }} — {{ group.overnight.duration }}</div>
+    {% endif %}
     {% endfor %}
   </div>
   {% endif %}
@@ -525,7 +554,7 @@
       if (sec.classList.contains('open')) {
         btn.textContent = 'Hide past flights';
       } else {
-        btn.textContent = 'Show past flights ({{ past|length }})';
+        btn.textContent = 'Show past flights ({{ past_count }})';
       }
     }
 

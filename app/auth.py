@@ -65,6 +65,53 @@ def _generate_unique_share_code(conn) -> str:
     raise RuntimeError("could not generate a unique share code")
 
 
+RECOVERY_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"  # no 0/O/1/I/L — avoids ambiguous chars
+
+
+def generate_recovery_code() -> str:
+    parts = ["".join(secrets.choice(RECOVERY_ALPHABET) for _ in range(4)) for _ in range(3)]
+    return "-".join(parts)
+
+
+def set_recovery_code(user_id: int) -> str:
+    """Generates a new recovery code, stores only its hash, and returns the
+    plaintext once — callers must show it to the user immediately, since it
+    can never be retrieved again after this."""
+    code = generate_recovery_code()
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE users SET recovery_code_hash = ? WHERE id = ?",
+            (hash_password(code), user_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return code
+
+
+def reset_password_with_recovery_code(username: str, code: str, new_password: str) -> bool:
+    """Verifies the recovery code and resets the password if it matches.
+    Immediately rotates to a new recovery code on success (returned
+    separately via set_recovery_code by the caller) since the old one is
+    now spent — a recovery code is meant to be single-use."""
+    user = get_user_by_username(username)
+    if not user or not user.get("recovery_code_hash"):
+        return False
+    if not verify_password(code.strip(), user["recovery_code_hash"]):
+        return False
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (hash_password(new_password), user["id"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return True
+
+
 def count_users() -> int:
     conn = get_connection()
     try:

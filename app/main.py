@@ -20,8 +20,9 @@ from .track import (
 from .auth import (
     get_or_create_secret_key, count_users, create_user, get_user_by_username,
     get_user_by_id, get_user_by_share_code, verify_password, regenerate_share_code,
-    list_all_users, delete_user,
+    list_all_users, delete_user, set_recovery_code, reset_password_with_recovery_code,
 )
+from .ratelimit import check_rate_limit
 
 BASE = Path(__file__).resolve().parent.parent
 jinja_env = Environment(
@@ -129,6 +130,57 @@ def leg_view(leg: Optional[FlightLeg], now: datetime, time_format: str = "24") -
     }
 
 
+def group_legs_by_day(legs: list, now: datetime, time_format: str = "24") -> list:
+    """Groups legs by calendar date (labeled e.g. 'March 27' — no relative
+    'Day 1/2/3' numbering, since that breaks down whenever multiple trips
+    are imported at once or trips run back-to-back with a short turnaround).
+
+    Between each pair of consecutive day-groups, computes the overnight
+    duration and destination city using the duty-day definition: duty ends
+    15 minutes after block-in, starts 45 minutes before block-out. Deadhead
+    legs count the same as flying legs for this — they're still duty time.
+    """
+    if not legs:
+        return []
+
+    day_buckets = []
+    current_date = None
+    for leg in legs:
+        if leg.date != current_date:
+            day_buckets.append({"date": leg.date, "legs": [leg]})
+            current_date = leg.date
+        else:
+            day_buckets[-1]["legs"].append(leg)
+
+    groups = []
+    for i, bucket in enumerate(day_buckets):
+        day_legs = bucket["legs"]
+        group = {
+            "date_label": bucket["date"].strftime("%B %d").replace(" 0", " "),
+            "legs": [leg_view(l, now, time_format) for l in day_legs],
+            "overnight": None,
+        }
+        if i < len(day_buckets) - 1:
+            last_leg = day_legs[-1]
+            next_leg = day_buckets[i + 1]["legs"][0]
+            last_arr_utc = last_leg.arr_datetime_utc()
+            next_dep_utc = next_leg.dep_datetime_utc()
+            if last_arr_utc and next_dep_utc:
+                duty_ends = last_arr_utc + timedelta(minutes=15)
+                duty_starts = next_dep_utc - timedelta(minutes=45)
+                gap_seconds = (duty_starts - duty_ends).total_seconds()
+                if gap_seconds > 0:
+                    hours = int(gap_seconds // 3600)
+                    minutes = int((gap_seconds % 3600) // 60)
+                    city = (last_leg.dest_info.city if last_leg.dest_info else last_leg.destination)
+                    group["overnight"] = {
+                        "duration": f"{hours}h {minutes:02d}m",
+                        "city": city,
+                    }
+        groups.append(group)
+    return groups
+
+
 # ---------------------------------------------------------------------------
 # Setup (first-run bootstrap) + login/logout
 # ---------------------------------------------------------------------------
@@ -167,7 +219,10 @@ async def setup_post(
 
     user_id = create_user(username, password, email)
     request.session["user_id"] = user_id
-    return RedirectResponse(url="/admin", status_code=303)
+    code = set_recovery_code(user_id)
+    request.session["_pending_recovery_code"] = code
+    request.session["_pending_recovery_next"] = "/opensky-guide?first=1"
+    return RedirectResponse(url="/recovery-code", status_code=303)
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -192,6 +247,10 @@ async def register_post(
     confirm_password: str = Form(...),
     email: str = Form(""),
 ):
+    if not check_rate_limit(request, "register", max_attempts=5, window_seconds=3600):
+        template = jinja_env.get_template("register.html")
+        return HTMLResponse(template.render(request=request, error="Too many attempts. Try again in a bit."), status_code=429)
+
     username = username.strip()
     error = None
     if len(username) < 3:
@@ -211,11 +270,17 @@ async def register_post(
     request.session["user_id"] = user_id
     request.session.pop("viewer_user_id", None)
     request.session.pop("viewer_code", None)
-    return RedirectResponse(url="/admin", status_code=303)
+    code = set_recovery_code(user_id)
+    request.session["_pending_recovery_code"] = code
+    request.session["_pending_recovery_next"] = "/opensky-guide?first=1"
+    return RedirectResponse(url="/recovery-code", status_code=303)
 
 
 @app.post("/login/pilot", response_class=HTMLResponse)
 async def login_pilot(request: Request, username: str = Form(...), password: str = Form(...)):
+    if not check_rate_limit(request, "login_pilot", max_attempts=8, window_seconds=600):
+        template = jinja_env.get_template("login.html")
+        return HTMLResponse(template.render(request=request, error="Too many attempts. Try again in a few minutes."), status_code=429)
     user = get_user_by_username(username)
     if not user or not verify_password(password, user["password_hash"]):
         template = jinja_env.get_template("login.html")
@@ -228,6 +293,9 @@ async def login_pilot(request: Request, username: str = Form(...), password: str
 
 @app.post("/login/code", response_class=HTMLResponse)
 async def login_code(request: Request, code: str = Form(...)):
+    if not check_rate_limit(request, "login_code", max_attempts=15, window_seconds=600):
+        template = jinja_env.get_template("login.html")
+        return HTMLResponse(template.render(request=request, error="Too many attempts. Try again in a few minutes."), status_code=429)
     user = get_user_by_share_code(code.strip())
     if not user:
         template = jinja_env.get_template("login.html")
@@ -236,6 +304,74 @@ async def login_code(request: Request, code: str = Form(...)):
     request.session["viewer_code"] = user["share_code"]
     request.session.pop("user_id", None)
     return RedirectResponse(url="/", status_code=303)
+
+
+@app.get("/recovery-code", response_class=HTMLResponse)
+async def recovery_code_reveal(request: Request):
+    code = request.session.pop("_pending_recovery_code", None)
+    next_url = request.session.pop("_pending_recovery_next", "/admin")
+    if not code:
+        # Nothing pending (e.g. page revisited/bookmarked after the fact) —
+        # there's no code to show a second time, so just move along.
+        return RedirectResponse(url="/admin", status_code=303)
+    template = jinja_env.get_template("recovery_code.html")
+    return HTMLResponse(template.render(request=request, recovery_code=code, next_url=next_url))
+
+
+@app.get("/opensky-guide", response_class=HTMLResponse)
+async def opensky_guide(request: Request, first: str = ""):
+    template = jinja_env.get_template("opensky_guide.html")
+    return HTMLResponse(template.render(request=request, show_skip=True, skip_url="/admin"))
+
+
+@app.get("/login/forgot", response_class=HTMLResponse)
+async def forgot_password_get(request: Request):
+    template = jinja_env.get_template("forgot_password.html")
+    return HTMLResponse(template.render(request=request, error=None))
+
+
+@app.post("/login/forgot", response_class=HTMLResponse)
+async def forgot_password_post(
+    request: Request,
+    username: str = Form(...),
+    recovery_code: str = Form(...),
+    new_password: str = Form(...),
+    confirm_password: str = Form(...),
+):
+    if not check_rate_limit(request, "forgot_password", max_attempts=8, window_seconds=600):
+        template = jinja_env.get_template("forgot_password.html")
+        return HTMLResponse(template.render(request=request, error="Too many attempts. Try again in a few minutes."), status_code=429)
+
+    error = None
+    if len(new_password) < 8:
+        error = "New password must be at least 8 characters."
+    elif new_password != confirm_password:
+        error = "Passwords don't match."
+    elif not reset_password_with_recovery_code(username.strip(), recovery_code, new_password):
+        error = "That username/recovery code combination doesn't match."
+
+    if error:
+        template = jinja_env.get_template("forgot_password.html")
+        return HTMLResponse(template.render(request=request, error=error))
+
+    # The recovery code just used is now spent — rotate to a new one and
+    # show it, same as at registration.
+    user = get_user_by_username(username.strip())
+    new_code = set_recovery_code(user["id"])
+    request.session["_pending_recovery_code"] = new_code
+    request.session["_pending_recovery_next"] = "/login"
+    return RedirectResponse(url="/recovery-code", status_code=303)
+
+
+@app.post("/settings/regenerate-recovery")
+async def settings_regenerate_recovery(request: Request):
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    new_code = set_recovery_code(pilot["id"])
+    request.session["_pending_recovery_code"] = new_code
+    request.session["_pending_recovery_next"] = "/settings"
+    return RedirectResponse(url="/recovery-code", status_code=303)
 
 
 @app.post("/logout")
@@ -294,8 +430,9 @@ async def viewer(request: Request):
         "request": request,
         "current": current,
         "live": live,
-        "upcoming": [leg_view(l, now, tf) for l in info.upcoming],
-        "past": [leg_view(l, now, tf) for l in info.past],
+        "upcoming_groups": group_legs_by_day(info.upcoming, now, tf),
+        "past_groups": group_legs_by_day(info.past, now, tf),
+        "past_count": len(info.past),
         "settings": settings.model_dump(),
         "poll_ms": max(20, settings.poll_seconds) * 1000,
         "is_pilot": pilot is not None,

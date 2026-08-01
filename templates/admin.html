@@ -131,11 +131,38 @@
       color: var(--accent);
       margin: 0.5rem 0 1rem;
     }
-    .share-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; }
-    .btn-secondary {
-      background: transparent;
-      border: 1px solid #334155;
-      color: var(--text);
+    .share-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }
+    .share-actions button { margin-top: 0; }
+    .icon-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 42px;
+      height: 42px;
+      padding: 0;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 1.15rem;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .ffdo-help { margin-bottom: 0.6rem; font-size: 0.85rem; }
+    .ffdo-help summary {
+      cursor: pointer;
+      color: var(--accent);
+      font-weight: 600;
+      list-style: none;
+    }
+    .ffdo-help summary::-webkit-details-marker { display: none; }
+    .ffdo-help p {
+      margin-top: 0.5rem;
+      color: var(--muted);
+      line-height: 1.5;
+      background: rgba(255,255,255,0.03);
+      padding: 0.65rem 0.8rem;
+      border-radius: 8px;
     }
   </style>
 </head>
@@ -160,23 +187,25 @@
     <div class="count">Share with viewers</div>
     <div class="share-code" id="share-code">{{ share_code }}</div>
     <div class="share-actions">
+      <button type="button" id="share-btn">Share</button>
       <form method="post" action="/admin/regenerate-code" onsubmit="return confirm('Generate a new code? Anyone using the current code will lose access immediately.');" style="margin:0;">
-        <button type="submit" class="btn-secondary">Regenerate code</button>
+        <button type="submit" class="icon-btn" title="Regenerate code" aria-label="Regenerate code">🔄</button>
       </form>
-      <button type="button" class="btn-secondary" id="share-btn">Share</button>
     </div>
   </div>
 
   <div class="card">
     <form method="post" action="/admin/import">
       <label style="display:block; margin-bottom:0.5rem; color:var(--muted); font-size:0.85rem;">
-        Format: MM/DD/YYYY  FLIGHT  ORIG  DEPTIME  DEST  ARRTIME
+        Copy and paste your FFDO below
       </label>
-      <textarea name="text" placeholder="06/26/2026 3729 DFW 1742 OKC 1837
-06/26/2026 3729 OKC 1911 DFW 2011
-..."></textarea>
+      <details class="ffdo-help">
+        <summary>❓ How do I find my FFDO?</summary>
+        <p>In your CCI schedule, tap the three dots in the top right, tap <strong>FFDO</strong>, then find, copy, and paste your FFDO — for one trip or all of them.</p>
+      </details>
+      <textarea name="text" placeholder="Paste your FFDO here"></textarea>
       <div>
-        <button type="submit">Update schedule</button>
+        <button type="submit">Import Schedule</button>
       </div>
     </form>
   </div>
