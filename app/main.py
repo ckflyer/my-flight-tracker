@@ -25,12 +25,14 @@ from .auth import (
     list_all_users, delete_user, set_recovery_code, reset_password_with_recovery_code,
 )
 from .ratelimit import check_rate_limit
+from .version import VERSION
 
 BASE = Path(__file__).resolve().parent.parent
 jinja_env = Environment(
     loader=FileSystemLoader(str(BASE / "templates")),
     autoescape=select_autoescape(["html", "xml"]),
 )
+jinja_env.globals["version"] = VERSION
 
 app = FastAPI(title="Pilot Tracker")
 app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
@@ -258,22 +260,15 @@ def apply_gap_trip_starts(legs: list, threshold_hours: float = GAP_TRIP_THRESHOL
             this_first.trip_start = True
 
 
-def build_review_groups(legs: list, time_format: str = "24") -> list:
-    """Day-grouped view of a freshly-parsed (not yet saved) schedule, for
-    the import review/confirmation page. Each leg carries its raw fields
-    as hidden-input-ready strings so the confirm step can rebuild the
-    FlightLeg objects without re-parsing the original text."""
-    groups = []
-    current_date = None
-    for leg in legs:
-        if leg.date != current_date:
-            groups.append({
-                "date_label": leg.date.strftime("%B %d").replace(" 0", " "),
-                "suggested_break": leg.trip_start,
-                "legs": [],
-            })
-            current_date = leg.date
-        groups[-1]["legs"].append({
+def build_review_legs(legs: list, time_format: str = "24") -> list:
+    """Flat, chronological view of a freshly-parsed (not yet saved)
+    schedule for the drag-and-drop import review page. Each leg carries
+    its raw fields as hidden-input-ready strings so the confirm step can
+    rebuild the FlightLeg objects without re-parsing the original text,
+    plus whether a trip break is suggested immediately before it."""
+    out = []
+    for i, leg in enumerate(legs):
+        out.append({
             "raw_date": leg.date.isoformat(),
             "raw_flight": leg.flight_number,
             "raw_origin": leg.origin,
@@ -283,11 +278,13 @@ def build_review_groups(legs: list, time_format: str = "24") -> list:
             "raw_dh": "1" if leg.is_deadhead else "0",
             "callsign": leg.callsign,
             "route": f"{leg.origin} → {leg.destination}",
+            "date_label": leg.date.strftime("%B %d").replace(" 0", " "),
             "dep": fmt_local(leg, "dep", time_format),
             "arr": fmt_local(leg, "arr", time_format),
             "is_deadhead": leg.is_deadhead,
+            "suggested_break_before": bool(leg.trip_start and i > 0),
         })
-    return groups
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -652,9 +649,9 @@ async def admin_import(request: Request, text: str = Form(...)):
         return RedirectResponse(url="/admin", status_code=303)
     apply_gap_trip_starts(legs)
     settings = load_settings(pilot["id"])
-    groups = build_review_groups(legs, settings.time_format)
+    review_legs = build_review_legs(legs, settings.time_format)
     template = jinja_env.get_template("import_review.html")
-    return HTMLResponse(template.render(request=request, groups=groups, settings=settings.model_dump()))
+    return HTMLResponse(template.render(request=request, legs=review_legs, settings=settings.model_dump()))
 
 
 @app.post("/admin/import/confirm")
@@ -670,15 +667,15 @@ async def admin_import_confirm(request: Request):
     deps = form.getlist("leg_dep")
     arrs = form.getlist("leg_arr")
     dhs = form.getlist("leg_dh")
-    day_idxs = form.getlist("leg_day_idx")
+    trip_starts = form.getlist("leg_trip_start")
 
     legs = []
     for i in range(len(dates)):
-        is_first_leg_of_day = (i == 0) or (day_idxs[i] != day_idxs[i - 1])
-        trip_start = False
-        if is_first_leg_of_day:
-            trip_start = (day_idxs[i] == "0") or (form.get(f"day_break_{day_idxs[i]}") is not None)
         is_dh = dhs[i] == "1"
+        # First leg is always a trip start regardless of what the client
+        # computed — a safety net, not just a default, in case JS ever
+        # fails to run for some reason.
+        trip_start = (i == 0) or (i < len(trip_starts) and trip_starts[i] == "1")
         leg_id = f"{dates[i]}-{flights[i]}-{origins[i]}-{dests[i]}"
         if is_dh:
             leg_id += "-DH"
