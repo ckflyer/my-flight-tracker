@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Pilot Tracker · Schedule</title>
+  <title>Pilot Tracker · Flights</title>
   <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
   <link rel="shortcut icon" href="/static/favicon.ico">
   <style>
@@ -74,6 +74,20 @@
     th { color: var(--muted); font-weight: 500; font-size: 0.75rem; text-transform: uppercase; }
     td:last-child, th:last-child { width: 44px; white-space: normal; }
     .count { color: var(--muted); margin-bottom: 0.75rem; }
+    .toggle {
+      display: block;
+      width: 100%;
+      background: rgba(127,127,127,0.12);
+      color: var(--text);
+      border: none;
+      border-radius: 10px;
+      padding: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin-bottom: 0.75rem;
+    }
+    #past-section { display: none; }
+    #past-section.open { display: block; }
     .dh {
       display: inline-block;
       padding: 0.15rem 0.45rem;
@@ -215,7 +229,8 @@
     <div class="topbar-right">
       <nav class="topnav">
         <a href="/">Tracker</a>
-        <a href="/admin" class="active">Schedule</a>
+        <a href="/calendar">Calendar</a>
+        <a href="/admin" class="active">Flights</a>
         <a href="/settings">Settings</a>
       </nav>
       <form method="post" action="/logout" style="margin:0;">
@@ -223,7 +238,7 @@
       </form>
     </div>
   </div>
-  <h1>Schedule</h1>
+  <h1>Flights</h1>
   <p class="sub">Paste your trip schedule below.</p>
 
   <div class="card">
@@ -261,9 +276,7 @@
     </form>
   </div>
 
-  <div class="card">
-    <div class="count">{{ count }} leg(s) loaded</div>
-    {% if rows %}
+  {% macro render_table(rows) %}
     <div class="table-scroll">
     <table>
       <thead>
@@ -298,12 +311,36 @@
       </tbody>
     </table>
     </div>
+  {% endmacro %}
+
+  <div class="card">
+    <div class="count">{{ count }} leg(s) loaded</div>
+    {% if upcoming_rows %}
+      {{ render_table(upcoming_rows) }}
     {% else %}
-    <p style="color:var(--muted)">No flights loaded yet.</p>
+    <p style="color:var(--muted)">No upcoming flights loaded yet.</p>
     {% endif %}
   </div>
 
+  {% if past_rows %}
+  <button class="toggle" id="past-toggle" onclick="togglePast()">Show past flights ({{ past_count }})</button>
+  <div id="past-section" class="card">
+    {{ render_table(past_rows) }}
+  </div>
+  {% endif %}
+
   <script>
+    function togglePast() {
+      const sec = document.getElementById('past-section');
+      const btn = document.getElementById('past-toggle');
+      sec.classList.toggle('open');
+      if (sec.classList.contains('open')) {
+        btn.textContent = 'Hide past flights';
+      } else {
+        btn.textContent = 'Show past flights ({{ past_count }})';
+      }
+    }
+
     document.getElementById('share-btn').addEventListener('click', async function() {
       const code = document.getElementById('share-code').textContent.trim();
       const url = window.location.origin + '/login';

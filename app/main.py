@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import datetime, date, timedelta, time as dtime
 from zoneinfo import ZoneInfo
 from typing import Optional
+import calendar as cal_module
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from .schedule import import_from_text, load_schedule, get_current_info, delete_leg, save_schedule
@@ -607,6 +608,79 @@ async def viewer_settings_post(
 
 
 # ---------------------------------------------------------------------------
+# Calendar — pilot or viewer, same rules as the tracker page
+# ---------------------------------------------------------------------------
+
+@app.get("/calendar", response_class=HTMLResponse)
+async def calendar_page(request: Request, year: Optional[int] = None, month: Optional[int] = None):
+    pilot = current_pilot(request)
+    viewer_uid = None if pilot else current_viewer_user_id(request)
+    user_id = pilot["id"] if pilot else viewer_uid
+    if not user_id:
+        return RedirectResponse(url="/login", status_code=303)
+
+    settings = load_settings(user_id)
+    now = datetime.now(ZoneInfo("UTC"))
+    today = now.date()
+    year = year or today.year
+    month = month or today.month
+    # Clamp to a sane range so a stray/forged query param can't blow up date math
+    year = max(1970, min(2100, year))
+    month = max(1, min(12, month))
+
+    legs = load_schedule(user_id)
+    by_date = {}
+    for leg in legs:
+        by_date.setdefault(leg.date, []).append(leg)
+
+    cal = cal_module.Calendar(firstweekday=6)  # weeks start Sunday
+    weeks = []
+    week = []
+    for d in cal.itermonthdates(year, month):
+        day_legs = by_date.get(d, [])
+        week.append({
+            "date": d,
+            "iso": d.isoformat(),
+            "day": d.day,
+            "in_month": d.month == month,
+            "is_today": d == today,
+            "has_flights": bool(day_legs),
+            "has_dh": any(l.is_deadhead for l in day_legs),
+        })
+        if len(week) == 7:
+            weeks.append(week)
+            week = []
+
+    _, last_day = cal_module.monthrange(year, month)
+    agenda = []
+    for day_num in range(1, last_day + 1):
+        d = date(year, month, day_num)
+        day_legs = by_date.get(d, [])
+        agenda.append({
+            "iso": d.isoformat(),
+            "label": d.strftime("%A, %B %d").replace(" 0", " "),
+            "is_today": d == today,
+            "legs": [leg_view(l, now, settings.time_format) for l in day_legs],
+        })
+
+    prev_month, prev_year = (12, year - 1) if month == 1 else (month - 1, year)
+    next_month, next_year = (1, year + 1) if month == 12 else (month + 1, year)
+
+    template = jinja_env.get_template("calendar.html")
+    return HTMLResponse(template.render(
+        request=request,
+        weeks=weeks,
+        agenda=agenda,
+        month_label=date(year, month, 1).strftime("%B %Y"),
+        prev_year=prev_year, prev_month=prev_month,
+        next_year=next_year, next_month=next_month,
+        cur_year=year, cur_month=month,
+        settings=settings.model_dump(),
+        is_pilot=pilot is not None,
+    ))
+
+
+# ---------------------------------------------------------------------------
 # Admin (schedule) — pilot only
 # ---------------------------------------------------------------------------
 
@@ -617,24 +691,33 @@ async def admin(request: Request):
         return pilot
 
     settings = load_settings(pilot["id"])
-    legs = load_schedule(pilot["id"])
-    rows = []
-    for i, leg in enumerate(legs):
-        if leg.trip_start and i > 0:
-            rows.append({"divider": True})
-        rows.append({
-            "id": leg.id,
-            "date": str(leg.date),
-            "callsign": leg.callsign,
-            "route": f"{leg.origin} → {leg.destination}",
-            "dep": fmt_local(leg, "dep", settings.time_format),
-            "arr": fmt_local(leg, "arr", settings.time_format),
-            "is_deadhead": leg.is_deadhead,
-        })
+    info = get_current_info(pilot["id"])
+    upcoming_legs = ([info.current] if info.current else []) + list(info.upcoming)
+    past_legs = info.past
+
+    def build_rows(legs):
+        rows = []
+        for i, leg in enumerate(legs):
+            if leg.trip_start and i > 0:
+                rows.append({"divider": True})
+            rows.append({
+                "id": leg.id,
+                "date": str(leg.date),
+                "callsign": leg.callsign,
+                "route": f"{leg.origin} → {leg.destination}",
+                "dep": fmt_local(leg, "dep", settings.time_format),
+                "arr": fmt_local(leg, "arr", settings.time_format),
+                "is_deadhead": leg.is_deadhead,
+            })
+        return rows
+
+    upcoming_rows = build_rows(upcoming_legs)
+    past_rows = build_rows(past_legs)
     template = jinja_env.get_template("admin.html")
     return HTMLResponse(template.render(
-        request=request, rows=rows, count=len(legs), settings=settings.model_dump(),
-        share_code=pilot["share_code"],
+        request=request, upcoming_rows=upcoming_rows, past_rows=past_rows,
+        past_count=len(past_legs), count=len(upcoming_legs) + len(past_legs),
+        settings=settings.model_dump(), share_code=pilot["share_code"],
     ))
 
 
