@@ -150,5 +150,39 @@
 
     <button type="submit">Save settings</button>
   </form>
+
+  {% if is_admin %}
+  <div class="card">
+    <h2>Admin · Registered pilots</h2>
+    <table style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+      <thead>
+        <tr style="color:var(--muted); text-align:left; font-size:0.75rem; text-transform:uppercase;">
+          <th style="padding:0.4rem 0.3rem;">Username</th>
+          <th style="padding:0.4rem 0.3rem;">Email</th>
+          <th style="padding:0.4rem 0.3rem;">Created</th>
+          <th style="padding:0.4rem 0.3rem;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in all_users %}
+        <tr style="border-top:1px solid #2a3548;">
+          <td style="padding:0.5rem 0.3rem;">{{ u.username }}{% if u.is_admin %} <span style="color:var(--accent); font-size:0.75rem;">(admin)</span>{% endif %}</td>
+          <td style="padding:0.5rem 0.3rem; color:var(--muted);">{{ u.email or '—' }}</td>
+          <td style="padding:0.5rem 0.3rem; color:var(--muted); white-space:nowrap;">{{ u.created_at[:10] if u.created_at else '—' }}</td>
+          <td style="padding:0.5rem 0.3rem; text-align:right;">
+            {% if u.id != pilot_id %}
+            <form method="post" action="/settings/users/delete/{{ u.id }}" onsubmit="return confirm('Delete {{ u.username }}\'s account and all their flight data? This can\'t be undone.');" style="margin:0;">
+              <button type="submit" style="margin:0; padding:0.35rem 0.7rem; font-size:0.8rem; background:transparent; border:1px solid #334155; color:#ef4444;">Delete</button>
+            </form>
+            {% else %}
+            <span style="color:var(--muted); font-size:0.75rem;">you</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
 </body>
 </html>

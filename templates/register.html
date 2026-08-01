@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Pilot Tracker · Log in</title>
+  <title>Pilot Tracker · Register</title>
   <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
   <link rel="shortcut icon" href="/static/favicon.ico">
   <style>
@@ -27,16 +27,12 @@
       padding: max(1.5rem, env(safe-area-inset-top)) max(1.5rem, env(safe-area-inset-right)) max(1.5rem, env(safe-area-inset-bottom)) max(1.5rem, env(safe-area-inset-left));
     }
     .wrap { width: 100%; max-width: 380px; }
-    .brand { text-align: center; font-size: 1.15rem; font-weight: 700; letter-spacing: 0.02em; margin-bottom: 1.5rem; }
-    .card {
-      background: var(--card);
-      border-radius: 14px;
-      padding: 1.5rem;
-      margin-bottom: 1rem;
-    }
-    .card h2 { font-size: 0.95rem; font-weight: 600; margin-bottom: 1rem; color: var(--text); }
-    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.3rem; }
-    input[type="text"], input[type="password"] {
+    .brand { text-align: center; font-size: 1.15rem; font-weight: 700; letter-spacing: 0.02em; margin-bottom: 0.35rem; }
+    .sub { text-align: center; color: var(--muted); font-size: 0.85rem; margin-bottom: 1.5rem; }
+    .card { background: var(--card); border-radius: 14px; padding: 1.5rem; }
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.3rem; margin-top: 0.85rem; }
+    label:first-child { margin-top: 0; }
+    input[type="text"], input[type="password"], input[type="email"] {
       width: 100%;
       background: #0f1419;
       border: 1px solid var(--border);
@@ -44,16 +40,11 @@
       color: var(--text);
       padding: 0.65rem 0.75rem;
       font-size: 1rem;
-      margin-bottom: 0.85rem;
     }
-    input[name="code"] {
-      letter-spacing: 0.4em;
-      font-size: 1.4rem;
-      text-align: center;
-      font-variant-numeric: tabular-nums;
-    }
+    .hint { font-size: 0.75rem; color: var(--muted); margin-top: 0.3rem; }
     button {
       width: 100%;
+      margin-top: 1.25rem;
       padding: 0.7rem;
       background: var(--accent);
       color: white;
@@ -62,14 +53,6 @@
       font-weight: 600;
       font-size: 0.95rem;
       cursor: pointer;
-    }
-    .divider {
-      text-align: center;
-      color: var(--muted);
-      font-size: 0.8rem;
-      margin: 1.25rem 0;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
     }
     .error {
       background: rgba(239,68,68,0.12);
@@ -84,31 +67,28 @@
 <body>
   <div class="wrap">
     <div class="brand">Pilot Tracker</div>
+    <div class="sub">Create your pilot account</div>
     {% if error %}<div class="error">{{ error }}</div>{% endif %}
-
     <div class="card">
-      <h2>Pilot login</h2>
-      <form method="post" action="/login/pilot">
+      <form method="post" action="/register">
         <label for="username">Username</label>
-        <input type="text" id="username" name="username" autocomplete="username" required>
+        <input type="text" id="username" name="username" autocomplete="username" required minlength="3">
+
         <label for="password">Password</label>
-        <input type="password" id="password" name="password" autocomplete="current-password" required>
-        <button type="submit">Log in</button>
+        <input type="password" id="password" name="password" autocomplete="new-password" required minlength="8">
+        <div class="hint">At least 8 characters.</div>
+
+        <label for="confirm_password">Confirm password</label>
+        <input type="password" id="confirm_password" name="confirm_password" autocomplete="new-password" required minlength="8">
+
+        <label for="email">Email (optional, for later)</label>
+        <input type="email" id="email" name="email" autocomplete="email">
+
+        <button type="submit">Create account</button>
       </form>
       <p style="text-align:center; font-size:0.8rem; color:var(--muted); margin-top:0.85rem;">
-        New pilot? <a href="/register" style="color:var(--accent);">Register</a>
+        Already have an account? <a href="/login" style="color:var(--accent);">Log in</a>
       </p>
-    </div>
-
-    <div class="divider">or</div>
-
-    <div class="card">
-      <h2>Viewer access</h2>
-      <form method="post" action="/login/code">
-        <label for="code">5-digit tracking code</label>
-        <input type="text" id="code" name="code" inputmode="numeric" pattern="[0-9]*" maxlength="5" autocomplete="off" required>
-        <button type="submit">View flights</button>
-      </form>
     </div>
   </div>
 </body>

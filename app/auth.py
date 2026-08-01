@@ -74,16 +74,17 @@ def count_users() -> int:
 
 
 def create_user(username: str, password: str, email: str = "") -> int:
+    is_first = count_users() == 0
     conn = get_connection()
     try:
         share_code = _generate_unique_share_code(conn)
         cur = conn.execute(
             """
-            INSERT INTO users (username, password_hash, email, share_code, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO users (username, password_hash, email, share_code, is_admin, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (username.strip(), hash_password(password), email.strip(), share_code,
-             datetime.utcnow().isoformat() + "Z"),
+             1 if is_first else 0, datetime.utcnow().isoformat() + "Z"),
         )
         conn.commit()
         user_id = cur.lastrowid
@@ -91,6 +92,30 @@ def create_user(username: str, password: str, email: str = "") -> int:
         conn.close()
     claim_orphaned_data(user_id)
     return user_id
+
+
+def list_all_users() -> list:
+    """For the admin panel in Settings — every registered account."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, username, email, share_code, is_admin, created_at FROM users ORDER BY id ASC"
+        ).fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def delete_user(user_id: int) -> None:
+    """Removes an account and everything it owns (schedule, positions)."""
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM legs WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM positions WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def claim_orphaned_data(user_id: int) -> None:

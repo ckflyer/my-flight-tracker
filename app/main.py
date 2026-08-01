@@ -20,6 +20,7 @@ from .track import (
 from .auth import (
     get_or_create_secret_key, count_users, create_user, get_user_by_username,
     get_user_by_id, get_user_by_share_code, verify_password, regenerate_share_code,
+    list_all_users, delete_user,
 )
 
 BASE = Path(__file__).resolve().parent.parent
@@ -175,6 +176,42 @@ async def login_get(request: Request):
         return RedirectResponse(url="/setup", status_code=303)
     template = jinja_env.get_template("login.html")
     return HTMLResponse(template.render(request=request, error=None))
+
+
+@app.get("/register", response_class=HTMLResponse)
+async def register_get(request: Request):
+    template = jinja_env.get_template("register.html")
+    return HTMLResponse(template.render(request=request, error=None))
+
+
+@app.post("/register", response_class=HTMLResponse)
+async def register_post(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    confirm_password: str = Form(...),
+    email: str = Form(""),
+):
+    username = username.strip()
+    error = None
+    if len(username) < 3:
+        error = "Username must be at least 3 characters."
+    elif len(password) < 8:
+        error = "Password must be at least 8 characters."
+    elif password != confirm_password:
+        error = "Passwords don't match."
+    elif get_user_by_username(username):
+        error = "That username is already taken."
+
+    if error:
+        template = jinja_env.get_template("register.html")
+        return HTMLResponse(template.render(request=request, error=error))
+
+    user_id = create_user(username, password, email)
+    request.session["user_id"] = user_id
+    request.session.pop("viewer_user_id", None)
+    request.session.pop("viewer_code", None)
+    return RedirectResponse(url="/admin", status_code=303)
 
 
 @app.post("/login/pilot", response_class=HTMLResponse)
@@ -334,7 +371,10 @@ async def settings_page(request: Request):
         return pilot
     s = load_settings(pilot["id"])
     template = jinja_env.get_template("settings.html")
-    return HTMLResponse(template.render(request=request, s=s, saved=False))
+    ctx = {"request": request, "s": s, "saved": False, "is_admin": bool(pilot["is_admin"]), "pilot_id": pilot["id"]}
+    if pilot["is_admin"]:
+        ctx["all_users"] = list_all_users()
+    return HTMLResponse(template.render(**ctx))
 
 
 @app.post("/settings")
@@ -363,7 +403,25 @@ async def settings_save(
     save_settings(pilot["id"], s)
     apply_opensky_env(s)
     template = jinja_env.get_template("settings.html")
-    return HTMLResponse(template.render(request=request, s=s, saved=True))
+    ctx = {"request": request, "s": s, "saved": True, "is_admin": bool(pilot["is_admin"]), "pilot_id": pilot["id"]}
+    if pilot["is_admin"]:
+        ctx["all_users"] = list_all_users()
+    return HTMLResponse(template.render(**ctx))
+
+
+@app.post("/settings/users/delete/{user_id}")
+async def settings_delete_user(request: Request, user_id: int):
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    if not pilot["is_admin"]:
+        return RedirectResponse(url="/settings", status_code=303)
+    if user_id == pilot["id"]:
+        # Refuse to let an admin delete their own account from this panel —
+        # avoids locking yourself out with no one left to fix it.
+        return RedirectResponse(url="/settings", status_code=303)
+    delete_user(user_id)
+    return RedirectResponse(url="/settings", status_code=303)
 
 
 # ---------------------------------------------------------------------------

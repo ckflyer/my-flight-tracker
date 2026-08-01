@@ -36,6 +36,7 @@ def init_db() -> None:
                 poll_seconds INTEGER DEFAULT 45,
                 show_flightaware INTEGER DEFAULT 1,
                 show_fr24 INTEGER DEFAULT 1,
+                is_admin INTEGER DEFAULT 0,
                 created_at TEXT
             )
             """
@@ -103,6 +104,14 @@ def init_db() -> None:
         pos_cols = [r["name"] for r in conn.execute("PRAGMA table_info(positions)").fetchall()]
         if "user_id" not in pos_cols:
             conn.execute("ALTER TABLE positions ADD COLUMN user_id INTEGER")
+
+        # Migration: admin flag for basic account-management tools in Settings.
+        user_cols = [r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
+        if "is_admin" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
+            # Whoever already exists (the original single pilot, pre-multi-user)
+            # becomes admin automatically on upgrade.
+            conn.execute("UPDATE users SET is_admin = 1 WHERE id = (SELECT MIN(id) FROM users)")
         conn.commit()
     finally:
         conn.close()
