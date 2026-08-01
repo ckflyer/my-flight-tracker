@@ -439,16 +439,21 @@ async def viewer(request: Request):
     now = datetime.now(ZoneInfo("UTC"))
     tf = settings.time_format
     display_theme = settings.theme
+    show_fa = settings.show_flightaware
+    show_fr24 = settings.show_fr24
     if not pilot:
-        # Viewers can override theme/time-format for themselves via a
-        # cookie set from /viewer-settings — never touches the pilot's
-        # actual account settings.
+        # Viewers can override display prefs for themselves via cookies set
+        # from /viewer-settings — never touches the pilot's actual account.
         cookie_tf = request.cookies.get("pt_viewer_tf")
         if cookie_tf in ("12", "24"):
             tf = cookie_tf
         cookie_theme = request.cookies.get("pt_viewer_theme")
         if cookie_theme in ("dark", "light"):
             display_theme = cookie_theme
+        if "pt_viewer_show_fa" in request.cookies:
+            show_fa = request.cookies.get("pt_viewer_show_fa") == "1"
+        if "pt_viewer_show_fr24" in request.cookies:
+            show_fr24 = request.cookies.get("pt_viewer_show_fr24") == "1"
     current = leg_view(info.current, now, tf)
     live = None
     if info.current:
@@ -480,6 +485,8 @@ async def viewer(request: Request):
             current["status"] = compute_phase(info.current, live, history, now, settings.poll_seconds)
     settings_dict = settings.model_dump()
     settings_dict["theme"] = display_theme
+    settings_dict["show_flightaware"] = show_fa
+    settings_dict["show_fr24"] = show_fr24
     day_numbers = _assign_trip_day_numbers(info.all_legs)
     ctx = {
         "request": request,
@@ -508,8 +515,10 @@ async def viewer_settings_get(request: Request):
         theme = "dark"
     if tf not in ("12", "24"):
         tf = "24"
+    show_fa = request.cookies.get("pt_viewer_show_fa", "1") == "1"
+    show_fr24 = request.cookies.get("pt_viewer_show_fr24", "1") == "1"
     template = jinja_env.get_template("viewer_settings.html")
-    return HTMLResponse(template.render(request=request, theme=theme, tf=tf))
+    return HTMLResponse(template.render(request=request, theme=theme, tf=tf, show_fa=show_fa, show_fr24=show_fr24))
 
 
 @app.post("/viewer-settings")
@@ -517,6 +526,8 @@ async def viewer_settings_post(
     request: Request,
     theme: str = Form("dark"),
     time_format: str = Form("24"),
+    show_fa: Optional[str] = Form(None),
+    show_fr24: Optional[str] = Form(None),
 ):
     pilot = current_pilot(request)
     viewer_uid = None if pilot else current_viewer_user_id(request)
@@ -525,6 +536,8 @@ async def viewer_settings_post(
     resp = RedirectResponse(url="/", status_code=303)
     resp.set_cookie("pt_viewer_theme", "light" if theme == "light" else "dark", max_age=60 * 60 * 24 * 365)
     resp.set_cookie("pt_viewer_tf", "12" if time_format == "12" else "24", max_age=60 * 60 * 24 * 365)
+    resp.set_cookie("pt_viewer_show_fa", "1" if show_fa is not None else "0", max_age=60 * 60 * 24 * 365)
+    resp.set_cookie("pt_viewer_show_fr24", "1" if show_fr24 is not None else "0", max_age=60 * 60 * 24 * 365)
     return resp
 
 
@@ -551,6 +564,7 @@ async def admin(request: Request):
             "route": f"{leg.origin} → {leg.destination}",
             "dep": fmt_local(leg, "dep", settings.time_format),
             "arr": fmt_local(leg, "arr", settings.time_format),
+            "is_deadhead": leg.is_deadhead,
         })
     template = jinja_env.get_template("admin.html")
     return HTMLResponse(template.render(

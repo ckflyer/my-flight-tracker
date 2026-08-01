@@ -39,6 +39,8 @@
       border: none; border-radius: 8px; font-weight: 600; font-size: 0.95rem; cursor: pointer;
     }
     .hint { font-size: 0.78rem; color: var(--muted); margin-top: 1rem; line-height: 1.5; }
+    .check-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem; }
+    .check-row input { width: auto; margin: 0; }
   </style>
 </head>
 <body>
@@ -62,6 +64,16 @@
         <option value="24" {% if tf == '24' %}selected{% endif %}>24-hour</option>
         <option value="12" {% if tf == '12' %}selected{% endif %}>12-hour</option>
       </select>
+
+      <label style="margin-top:0.85rem;">Tracking links</label>
+      <div class="check-row">
+        <input type="checkbox" id="show_fa" name="show_fa" {% if show_fa %}checked{% endif %}>
+        <label for="show_fa" style="display:inline; margin:0; color:var(--text);">Show FlightAware</label>
+      </div>
+      <div class="check-row">
+        <input type="checkbox" id="show_fr24" name="show_fr24" {% if show_fr24 %}checked{% endif %}>
+        <label for="show_fr24" style="display:inline; margin:0; color:var(--text);">Show FlightRadar24</label>
+      </div>
 
       <button type="submit">Save</button>
     </form>

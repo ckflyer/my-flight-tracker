@@ -222,8 +222,9 @@ def compute_ete(leg: FlightLeg, live: Optional[Dict[str, Any]], now: datetime) -
     if remaining_minutes is None:
         return None
     remaining_minutes = max(0, remaining_minutes)
-    hours = int(remaining_minutes // 60)
-    minutes = int(round(remaining_minutes % 60))
+    total_minutes = int(round(remaining_minutes))
+    hours = total_minutes // 60
+    minutes = total_minutes % 60
     if hours > 0:
         return f"{hours}h {minutes:02d}m"
     return f"{minutes} min"
