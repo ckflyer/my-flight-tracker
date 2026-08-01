@@ -98,6 +98,23 @@ the tracker view whenever that aircraft is live.
 
 No authentication is built in — put it behind Tailscale, your reverse proxy, or a VPN if exposing beyond your LAN.
 
+## Updating
+
+Dockge's Deploy/Update button won't rebuild the image just because the code
+changed — it's a known limitation when a stack uses `build: .` instead of a
+pre-built `image:`. Use `update.sh` instead, from the stack's directory on
+the TrueNAS host:
+
+```bash
+bash update.sh
+```
+
+This does `git pull` + `docker compose up -d --build` in one step and tails
+the logs so you can confirm it started cleanly. (First run: `chmod +x
+update.sh` if you want to run it as `./update.sh` instead — GitHub's browser
+uploader doesn't preserve the executable bit, so `bash update.sh` is the
+safe way to invoke it either way.)
+
 ## Notes
 
 - All times shown are **local to the airport** + timezone abbreviation.

@@ -226,13 +226,28 @@
   <button class="toggle" id="past-toggle" onclick="togglePast()">Show past flights ({{ past|length }})</button>
   <div id="past-section" class="card">
     {% for leg in past %}
-    <div class="list-item">
-      <div>
-        <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
-        {{ leg.origin }} → {{ leg.destination }}
-        <div class="meta">{{ leg.date }} · {{ leg.dep }} – {{ leg.arr }}</div>
+    <div class="upcoming-item">
+      <div class="list-item">
+        <div>
+          <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
+          {{ leg.origin }} → {{ leg.destination }}
+          <div class="meta">{{ leg.date }} · {{ leg.dep }} – {{ leg.arr }}</div>
+        </div>
+        <div style="text-align:right">
+          <span class="status {{ leg.status }}">{{ leg.status }}</span>
+          {% if leg.origin_lat is not none or leg.dest_lat is not none %}
+          <div style="margin-top:0.5rem">
+            <a href="#" data-preview-toggle="past-prev-{{ loop.index }}" style="color:var(--muted);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">Map</a>
+          </div>
+          {% endif %}
+        </div>
       </div>
-      <span class="status {{ leg.status }}">{{ leg.status }}</span>
+      {% if leg.origin_lat is not none or leg.dest_lat is not none %}
+      <div class="preview-map" id="past-prev-{{ loop.index }}"
+           data-origin-lat="{{ leg.origin_lat }}" data-origin-lon="{{ leg.origin_lon }}"
+           data-dest-lat="{{ leg.dest_lat }}" data-dest-lon="{{ leg.dest_lon }}"
+           data-origin="{{ leg.origin }}" data-dest="{{ leg.destination }}"></div>
+      {% endif %}
     </div>
     {% endfor %}
   </div>
