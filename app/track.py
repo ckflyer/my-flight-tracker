@@ -17,49 +17,51 @@ STILL_WINDOW_SECONDS = 240      # how long position must stay put before calling
 MIN_SIGNAL_LOST_SECONDS = 90    # how long ADS-B can go quiet after a landing before we just call it Arrived
 
 
-def record_position(leg_id: str, lat: float, lon: float, ts: datetime, on_ground: Optional[bool] = None) -> None:
-    """Append a live position for the current leg. Clears breadcrumbs from any
-    other leg so the table stays small and always reflects the active flight."""
+def record_position(user_id: int, leg_id: str, lat: float, lon: float, ts: datetime, on_ground: Optional[bool] = None) -> None:
+    """Append a live position for the current leg. Clears breadcrumbs from
+    any other leg *belonging to this same user* so the table stays small —
+    scoped to user_id so two pilots flying at the same time never touch
+    each other's position history."""
     conn = get_connection()
     try:
-        conn.execute("DELETE FROM positions WHERE leg_id != ?", (leg_id,))
+        conn.execute("DELETE FROM positions WHERE user_id = ? AND leg_id != ?", (user_id, leg_id))
         conn.execute(
-            "INSERT INTO positions (leg_id, ts, lat, lon, on_ground) VALUES (?, ?, ?, ?, ?)",
-            (leg_id, ts.isoformat(), lat, lon, None if on_ground is None else int(on_ground)),
+            "INSERT INTO positions (leg_id, user_id, ts, lat, lon, on_ground) VALUES (?, ?, ?, ?, ?, ?)",
+            (leg_id, user_id, ts.isoformat(), lat, lon, None if on_ground is None else int(on_ground)),
         )
         conn.execute(
             """
-            DELETE FROM positions WHERE leg_id = ? AND rowid NOT IN (
-                SELECT rowid FROM positions WHERE leg_id = ? ORDER BY ts DESC LIMIT ?
+            DELETE FROM positions WHERE leg_id = ? AND user_id = ? AND rowid NOT IN (
+                SELECT rowid FROM positions WHERE leg_id = ? AND user_id = ? ORDER BY ts DESC LIMIT ?
             )
             """,
-            (leg_id, leg_id, MAX_BREADCRUMB_POINTS),
+            (leg_id, user_id, leg_id, user_id, MAX_BREADCRUMB_POINTS),
         )
         conn.commit()
     finally:
         conn.close()
 
 
-def get_breadcrumb(leg_id: str) -> List[List[float]]:
+def get_breadcrumb(user_id: int, leg_id: str) -> List[List[float]]:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT lat, lon FROM positions WHERE leg_id = ? ORDER BY ts ASC",
-            (leg_id,),
+            "SELECT lat, lon FROM positions WHERE leg_id = ? AND user_id = ? ORDER BY ts ASC",
+            (leg_id, user_id),
         ).fetchall()
     finally:
         conn.close()
     return [[r["lat"], r["lon"]] for r in rows]
 
 
-def get_position_history(leg_id: str) -> List[Dict[str, Any]]:
+def get_position_history(user_id: int, leg_id: str) -> List[Dict[str, Any]]:
     """Chronological position history for this leg, including ground/air state.
     Used for phase detection (taxi-out/in, arrived) — not just map drawing."""
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT ts, lat, lon, on_ground FROM positions WHERE leg_id = ? ORDER BY ts ASC",
-            (leg_id,),
+            "SELECT ts, lat, lon, on_ground FROM positions WHERE leg_id = ? AND user_id = ? ORDER BY ts ASC",
+            (leg_id, user_id),
         ).fetchall()
     finally:
         conn.close()

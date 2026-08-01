@@ -12,21 +12,23 @@ from .db import get_connection, init_db
 init_db()
 
 
-def save_schedule(legs: List[FlightLeg]) -> None:
-    """Persist the full leg list to SQLite, replacing whatever was there before."""
+def save_schedule(user_id: int, legs: List[FlightLeg]) -> None:
+    """Persist this user's full leg list to SQLite, replacing whatever of
+    theirs was there before (other users' legs are untouched)."""
     conn = get_connection()
     try:
-        conn.execute("DELETE FROM legs")
+        conn.execute("DELETE FROM legs WHERE user_id = ?", (user_id,))
         for idx, leg in enumerate(legs):
             conn.execute(
                 """
                 INSERT OR REPLACE INTO legs
-                    (id, sort_index, date, flight_number, origin, destination,
+                    (id, user_id, sort_index, date, flight_number, origin, destination,
                      dep_time_local, arr_time_local, is_deadhead)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     leg.id,
+                    user_id,
                     idx,
                     leg.date.isoformat(),
                     leg.flight_number,
@@ -42,11 +44,12 @@ def save_schedule(legs: List[FlightLeg]) -> None:
         conn.close()
 
 
-def load_schedule() -> List[FlightLeg]:
+def load_schedule(user_id: int) -> List[FlightLeg]:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT * FROM legs ORDER BY sort_index ASC"
+            "SELECT * FROM legs WHERE user_id = ? ORDER BY sort_index ASC",
+            (user_id,),
         ).fetchall()
     except Exception:
         return []
@@ -73,39 +76,41 @@ def load_schedule() -> List[FlightLeg]:
     return legs
 
 
-def delete_leg(leg_id: str) -> None:
+def delete_leg(user_id: int, leg_id: str) -> None:
     """Remove a single leg from the schedule (used by the 'x' delete button
-    on the admin page). Sort order of the remaining legs is unaffected —
-    sort_index values don't need to be contiguous."""
+    on the admin page). Scoped to user_id so one account can never delete
+    another's leg even by guessing/forging an id. Sort order of the
+    remaining legs is unaffected — sort_index values don't need to be
+    contiguous."""
     conn = get_connection()
     try:
-        conn.execute("DELETE FROM legs WHERE id = ?", (leg_id,))
+        conn.execute("DELETE FROM legs WHERE id = ? AND user_id = ?", (leg_id, user_id))
         conn.commit()
     finally:
         conn.close()
 
 
-def import_from_text(text: str, replace: bool = True) -> List[FlightLeg]:
+def import_from_text(user_id: int, text: str, replace: bool = True) -> List[FlightLeg]:
     new_legs = parse_schedule_text(text)
     if replace:
-        save_schedule(new_legs)
+        save_schedule(user_id, new_legs)
         return new_legs
     else:
-        existing = load_schedule()
+        existing = load_schedule(user_id)
         # merge by id
         by_id = {leg.id: leg for leg in existing}
         for leg in new_legs:
             by_id[leg.id] = leg
         merged = list(by_id.values())
         merged.sort(key=lambda l: l.dep_datetime_utc() or datetime.combine(l.date, l.dep_time_local))
-        save_schedule(merged)
+        save_schedule(user_id, merged)
         return merged
 
 
-def get_current_info(now: Optional[datetime] = None) -> CurrentFlightInfo:
+def get_current_info(user_id: int, now: Optional[datetime] = None) -> CurrentFlightInfo:
     """
-    Split schedule into past / current / upcoming based on schedule times.
-    now should be timezone-aware (preferably UTC).
+    Split this user's schedule into past / current / upcoming based on
+    schedule times. now should be timezone-aware (preferably UTC).
 
     The "current" window intentionally extends 3 hours past the scheduled
     arrival time (not just until the clock says it should have landed).
@@ -119,7 +124,7 @@ def get_current_info(now: Optional[datetime] = None) -> CurrentFlightInfo:
     if now.tzinfo is None:
         now = now.replace(tzinfo=ZoneInfo("UTC"))
 
-    legs = load_schedule()
+    legs = load_schedule(user_id)
     if not legs:
         return CurrentFlightInfo()
 

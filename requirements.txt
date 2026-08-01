@@ -6,3 +6,4 @@ pydantic>=2
 jinja2
 tzdata
 requests
+itsdangerous

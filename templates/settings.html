@@ -68,16 +68,34 @@
     }
     .topnav a:hover { color: var(--text); }
     .topnav a.active { background: var(--accent); color: #fff; }
+    .topbar-right { display: flex; align-items: center; gap: 0.5rem; }
+    .logout-btn {
+      margin: 0;
+      padding: 0.5rem 0.85rem;
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid #334155;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .logout-btn:hover { color: var(--text); border-color: var(--muted); }
   </style>
 </head>
 <body>
   <div class="topbar">
     <div class="brand">Pilot Tracker</div>
-    <nav class="topnav">
-      <a href="/">Tracker</a>
-      <a href="/admin">Schedule</a>
-      <a href="/settings" class="active">Settings</a>
-    </nav>
+    <div class="topbar-right">
+      <nav class="topnav">
+        <a href="/">Tracker</a>
+        <a href="/admin">Schedule</a>
+        <a href="/settings" class="active">Settings</a>
+      </nav>
+      <form method="post" action="/logout" style="margin:0;">
+        <button type="submit" class="logout-btn">Log out</button>
+      </form>
+    </div>
   </div>
   <h1>Settings</h1>
 
@@ -92,7 +110,7 @@
       <input type="text" name="opensky_client_id" value="{{ s.opensky_client_id }}" autocomplete="off">
       <label>Client Secret</label>
       <input type="password" name="opensky_client_secret" value="{{ s.opensky_client_secret }}" autocomplete="off">
-      <p class="hint">Stored only on this server in data/settings.json. No need to set env vars each time.</p>
+      <p class="hint">Stored on this server, tied to your account. No need to set env vars each time.</p>
     </div>
 
     <div class="card">

@@ -76,6 +76,19 @@
     }
     .topnav a:hover { color: var(--text); }
     .topnav a.active { background: var(--accent); color: #fff; }
+    .topbar-right { display: flex; align-items: center; gap: 0.5rem; }
+    .logout-btn {
+      margin: 0;
+      padding: 0.5rem 0.85rem;
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .logout-btn:hover { color: var(--text); }
     .card {
       background: var(--card);
       border-radius: 16px;
@@ -245,11 +258,18 @@
 <body>
   <div class="topbar">
     <div class="brand">Pilot Tracker</div>
-    <nav class="topnav">
-      <a href="/" class="active">Tracker</a>
-      <a href="/admin">Schedule</a>
-      <a href="/settings">Settings</a>
-    </nav>
+    <div class="topbar-right">
+      <nav class="topnav">
+        <a href="/" class="active">Tracker</a>
+        {% if is_pilot %}
+        <a href="/admin">Schedule</a>
+        <a href="/settings">Settings</a>
+        {% endif %}
+      </nav>
+      <form method="post" action="/logout" style="margin:0;">
+        <button type="submit" class="logout-btn">Log out</button>
+      </form>
+    </div>
   </div>
 
   {% if past %}

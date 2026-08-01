@@ -20,25 +20,25 @@ _token: Optional[str] = None
 _token_expires: float = 0
 _last_state_cache: Dict[str, Any] = {}
 _last_fetch_time: float = 0
+
+
 def _min_interval() -> int:
+    """Minimum seconds between real OpenSky fetches (self-protective rate
+    limit cache). Settings are per-user now, so this no longer reads a
+    (single, wrong) global settings file — callers set OPENSKY poll cadence
+    via how often they call live_summary(); this is just a floor."""
     try:
-        from .settings import load_settings
-        return max(20, int(load_settings().poll_seconds))
+        return max(20, int(os.environ.get("OPENSKY_MIN_POLL_SECONDS", "45")))
     except Exception:
         return 45
 
 
 def _get_credentials() -> tuple[str, str]:
+    """Reads whatever's currently in process env. main.py calls
+    settings.apply_opensky_env(user_settings) before any of this, which is
+    the actual source of truth per-request."""
     cid = os.environ.get("OPENSKY_CLIENT_ID", "").strip()
     secret = os.environ.get("OPENSKY_CLIENT_SECRET", "").strip()
-    if not cid or not secret:
-        try:
-            from .settings import load_settings
-            s = load_settings()
-            cid = cid or (s.opensky_client_id or "").strip()
-            secret = secret or (s.opensky_client_secret or "").strip()
-        except Exception:
-            pass
     return cid, secret
 
 

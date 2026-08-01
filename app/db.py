@@ -23,8 +23,28 @@ def init_db() -> None:
     try:
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                email TEXT,
+                share_code TEXT UNIQUE,
+                opensky_client_id TEXT DEFAULT '',
+                opensky_client_secret TEXT DEFAULT '',
+                time_format TEXT DEFAULT '24',
+                theme TEXT DEFAULT 'dark',
+                poll_seconds INTEGER DEFAULT 45,
+                show_flightaware INTEGER DEFAULT 1,
+                show_fr24 INTEGER DEFAULT 1,
+                created_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS legs (
                 id TEXT PRIMARY KEY,
+                user_id INTEGER,
                 sort_index INTEGER NOT NULL,
                 date TEXT NOT NULL,
                 flight_number TEXT NOT NULL,
@@ -73,6 +93,16 @@ def init_db() -> None:
         for col in ("manufacturer", "model", "typecode", "lookup_attempted_at"):
             if col not in ac_cols:
                 conn.execute(f"ALTER TABLE aircraft ADD COLUMN {col} TEXT")
+
+        # Migration: multi-user groundwork. Legs/positions predate the users
+        # table, so existing rows have no owner yet — they get attached to
+        # the first account created (see auth.claim_orphaned_data).
+        leg_cols = [r["name"] for r in conn.execute("PRAGMA table_info(legs)").fetchall()]
+        if "user_id" not in leg_cols:
+            conn.execute("ALTER TABLE legs ADD COLUMN user_id INTEGER")
+        pos_cols = [r["name"] for r in conn.execute("PRAGMA table_info(positions)").fetchall()]
+        if "user_id" not in pos_cols:
+            conn.execute("ALTER TABLE positions ADD COLUMN user_id INTEGER")
         conn.commit()
     finally:
         conn.close()

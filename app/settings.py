@@ -1,22 +1,12 @@
-"""Persistent app settings stored in data/settings.json."""
+"""Per-user app settings, stored on the users table (not a shared JSON file
+— that was a single-tenant assumption that doesn't hold once each pilot has
+their own OpenSky credentials and preferences)."""
 from __future__ import annotations
 
-import json
-from pathlib import Path
-from typing import Any, Dict
-from pydantic import BaseModel, Field
+import os
+from pydantic import BaseModel
 
-DATA_FILE = Path(__file__).resolve().parent.parent / "data" / "settings.json"
-
-DEFAULTS: Dict[str, Any] = {
-    "opensky_client_id": "",
-    "opensky_client_secret": "",
-    "time_format": "24",          # "12" or "24"
-    "show_flightaware": True,
-    "show_fr24": True,
-    "theme": "dark",              # "dark" or "light"
-    "poll_seconds": 45,
-}
+from .db import get_connection
 
 
 class AppSettings(BaseModel):
@@ -29,28 +19,63 @@ class AppSettings(BaseModel):
     poll_seconds: int = 45
 
 
-def load_settings() -> AppSettings:
-    if not DATA_FILE.exists():
-        return AppSettings()
+def load_settings(user_id: int) -> AppSettings:
+    conn = get_connection()
     try:
-        data = json.loads(DATA_FILE.read_text(encoding="utf-8"))
-        return AppSettings(**{**DEFAULTS, **data})
-    except Exception:
+        row = conn.execute(
+            """
+            SELECT opensky_client_id, opensky_client_secret, time_format,
+                   theme, poll_seconds, show_flightaware, show_fr24
+            FROM users WHERE id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
         return AppSettings()
-
-
-def save_settings(s: AppSettings) -> None:
-    DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    DATA_FILE.write_text(
-        json.dumps(s.model_dump(), indent=2),
-        encoding="utf-8",
+    return AppSettings(
+        opensky_client_id=row["opensky_client_id"] or "",
+        opensky_client_secret=row["opensky_client_secret"] or "",
+        time_format=row["time_format"] or "24",
+        theme=row["theme"] or "dark",
+        poll_seconds=row["poll_seconds"] or 45,
+        show_flightaware=bool(row["show_flightaware"]),
+        show_fr24=bool(row["show_fr24"]),
     )
 
 
-def apply_opensky_env(s: AppSettings | None = None) -> None:
-    """Push stored credentials into process env so opensky module picks them up."""
-    import os
-    s = s or load_settings()
+def save_settings(user_id: int, s: AppSettings) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            UPDATE users SET
+                opensky_client_id = ?, opensky_client_secret = ?, time_format = ?,
+                theme = ?, poll_seconds = ?, show_flightaware = ?, show_fr24 = ?
+            WHERE id = ?
+            """,
+            (
+                s.opensky_client_id, s.opensky_client_secret, s.time_format,
+                s.theme, s.poll_seconds, int(s.show_flightaware), int(s.show_fr24),
+                user_id,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def apply_opensky_env(s: AppSettings) -> None:
+    """Push this user's credentials into process env so the opensky module
+    picks them up for this request.
+
+    Known limitation: this is process-wide, so if multiple pilots' requests
+    ever land concurrently with different OpenSky credentials, the last one
+    to call this wins for that instant. Harmless with today's single active
+    pilot; worth revisiting (passing credentials through explicitly instead
+    of env vars) if/when concurrent multi-pilot polling becomes real.
+    """
     if s.opensky_client_id:
         os.environ["OPENSKY_CLIENT_ID"] = s.opensky_client_id
     if s.opensky_client_secret:
