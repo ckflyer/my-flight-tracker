@@ -40,13 +40,45 @@
       border-radius: 8px; margin-bottom: 1rem; font-size: 0.9rem;
     }
     .hint { font-size: 0.8rem; color: var(--muted); margin-top: -0.5rem; margin-bottom: 0.85rem; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 1.25rem;
+    }
+    .brand { font-size: 0.95rem; font-weight: 700; letter-spacing: 0.02em; }
+    .topnav {
+      display: flex;
+      gap: 0.2rem;
+      background: rgba(255,255,255,0.05);
+      padding: 0.25rem;
+      border-radius: 999px;
+    }
+    .topnav a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.4rem 0.85rem;
+      border-radius: 999px;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+    .topnav a:hover { color: var(--text); }
+    .topnav a.active { background: var(--accent); color: #fff; }
   </style>
 </head>
 <body>
+  <div class="topbar">
+    <div class="brand">Pilot Tracker</div>
+    <nav class="topnav">
+      <a href="/">Tracker</a>
+      <a href="/admin">Schedule</a>
+      <a href="/settings" class="active">Settings</a>
+    </nav>
+  </div>
   <h1>Settings</h1>
-  <p class="sub">
-    <a href="/">Tracker</a> · <a href="/admin">Schedule</a>
-  </p>
 
   {% if saved %}
   <div class="saved">Settings saved.</div>

@@ -59,12 +59,46 @@
     th, td { text-align: left; padding: 0.5rem 0.4rem; border-bottom: 1px solid #2a3548; }
     th { color: var(--muted); font-weight: 500; font-size: 0.75rem; text-transform: uppercase; }
     .count { color: var(--muted); margin-bottom: 0.75rem; }
-    a.view { color: var(--accent); }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 1.25rem;
+    }
+    .brand { font-size: 0.95rem; font-weight: 700; letter-spacing: 0.02em; }
+    .topnav {
+      display: flex;
+      gap: 0.2rem;
+      background: rgba(255,255,255,0.05);
+      padding: 0.25rem;
+      border-radius: 999px;
+    }
+    .topnav a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.4rem 0.85rem;
+      border-radius: 999px;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+    .topnav a:hover { color: var(--text); }
+    .topnav a.active { background: var(--accent); color: #fff; }
   </style>
 </head>
 <body>
+  <div class="topbar">
+    <div class="brand">Pilot Tracker</div>
+    <nav class="topnav">
+      <a href="/">Tracker</a>
+      <a href="/admin" class="active">Schedule</a>
+      <a href="/settings">Settings</a>
+    </nav>
+  </div>
   <h1>Schedule</h1>
-  <p class="sub">Paste your trip schedule below. <a class="view" href="/">Tracker</a> · <a class="view" href="/settings">Settings</a></p>
+  <p class="sub">Paste your trip schedule below.</p>
 
   <div class="card">
     <form method="post" action="/admin/import">

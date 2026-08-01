@@ -48,8 +48,34 @@
       line-height: 1.4;
     }
     h1 { font-size: 1.25rem; font-weight: 600; margin-bottom: 0.35rem; color: var(--muted); }
-    .nav { font-size: 0.85rem; margin-bottom: 1rem; }
-    .nav a { color: var(--accent); text-decoration: none; margin-right: 0.75rem; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 1.25rem;
+    }
+    .brand { font-size: 0.95rem; font-weight: 700; letter-spacing: 0.02em; }
+    .topnav {
+      display: flex;
+      gap: 0.2rem;
+      background: rgba(255,255,255,0.05);
+      padding: 0.25rem;
+      border-radius: 999px;
+    }
+    [data-theme="light"] .topnav { background: rgba(15,23,42,0.06); }
+    .topnav a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.4rem 0.85rem;
+      border-radius: 999px;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+    .topnav a:hover { color: var(--text); }
+    .topnav a.active { background: var(--accent); color: #fff; }
     .card {
       background: var(--card);
       border-radius: 16px;
@@ -217,10 +243,13 @@
   </style>
 </head>
 <body>
-  <h1>Pilot Tracker</h1>
-  <div class="nav">
-    <a href="/admin">Schedule</a>
-    <a href="/settings">Settings</a>
+  <div class="topbar">
+    <div class="brand">Pilot Tracker</div>
+    <nav class="topnav">
+      <a href="/" class="active">Tracker</a>
+      <a href="/admin">Schedule</a>
+      <a href="/settings">Settings</a>
+    </nav>
   </div>
 
   {% if past %}
@@ -463,21 +492,17 @@
         attribution: '&copy; OpenStreetMap'
       }).addTo(map);
 
-      // Weather radar overlay (current flight's map only) — RainViewer's
-      // public API, no key required. Fails silently if unreachable.
-      fetch('https://api.rainviewer.com/public/weather-maps.json')
-        .then(r => r.json())
-        .then(data => {
-          const frames = data && data.radar && data.radar.past;
-          if (!frames || !frames.length) return;
-          const latest = frames[frames.length - 1];
-          L.tileLayer(data.host + latest.path + '/256/{z}/{x}/{y}/2/1_1.png', {
-            opacity: 0.55,
-            maxNativeZoom: 7,
-            attribution: 'Radar &copy; RainViewer'
-          }).addTo(map);
-        })
-        .catch(() => {});
+      // Weather radar overlay (current flight's map only) — Iowa Environmental
+      // Mesonet's free public NEXRAD composite, no key required. This is the
+      // classic green/yellow/orange/red/purple reflectivity scale, and it's
+      // US-only (CONUS), which covers every route in this schedule.
+      L.tileLayer.wms('https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/n0q.cgi', {
+        layers: 'nexrad-n0q',
+        format: 'image/png',
+        transparent: true,
+        opacity: 0.55,
+        attribution: 'Radar &copy; IEM NEXRAD'
+      }).addTo(map);
 
       const pts = [[live.lat, live.lon]];
 
