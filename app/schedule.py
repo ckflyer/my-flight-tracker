@@ -23,8 +23,8 @@ def save_schedule(user_id: int, legs: List[FlightLeg]) -> None:
                 """
                 INSERT OR REPLACE INTO legs
                     (id, user_id, sort_index, date, flight_number, origin, destination,
-                     dep_time_local, arr_time_local, is_deadhead)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     dep_time_local, arr_time_local, is_deadhead, trip_start)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     leg.id,
@@ -37,6 +37,7 @@ def save_schedule(user_id: int, legs: List[FlightLeg]) -> None:
                     leg.dep_time_local.isoformat(),
                     leg.arr_time_local.isoformat(),
                     1 if leg.is_deadhead else 0,
+                    1 if leg.trip_start else 0,
                 ),
             )
         conn.commit()
@@ -68,6 +69,7 @@ def load_schedule(user_id: int) -> List[FlightLeg]:
                 dep_time_local=datetime.strptime(row["dep_time_local"], "%H:%M:%S").time(),
                 arr_time_local=datetime.strptime(row["arr_time_local"], "%H:%M:%S").time(),
                 is_deadhead=bool(row["is_deadhead"]),
+                trip_start=bool(row["trip_start"]) if "trip_start" in row.keys() else False,
             )
             enrich_leg(leg)
             legs.append(leg)

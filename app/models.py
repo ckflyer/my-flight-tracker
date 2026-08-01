@@ -24,6 +24,7 @@ class FlightLeg(BaseModel):
     dep_time_local: time  # local to origin
     arr_time_local: time  # local to destination
     is_deadhead: bool = False
+    trip_start: bool = False  # True if a blank line in the pasted FFDO preceded this leg (new trip)
     # resolved later
     origin_info: Optional[AirportInfo] = None
     dest_info: Optional[AirportInfo] = None

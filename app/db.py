@@ -53,7 +53,8 @@ def init_db() -> None:
                 destination TEXT NOT NULL,
                 dep_time_local TEXT NOT NULL,
                 arr_time_local TEXT NOT NULL,
-                is_deadhead INTEGER NOT NULL DEFAULT 0
+                is_deadhead INTEGER NOT NULL DEFAULT 0,
+                trip_start INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -101,6 +102,8 @@ def init_db() -> None:
         leg_cols = [r["name"] for r in conn.execute("PRAGMA table_info(legs)").fetchall()]
         if "user_id" not in leg_cols:
             conn.execute("ALTER TABLE legs ADD COLUMN user_id INTEGER")
+        if "trip_start" not in leg_cols:
+            conn.execute("ALTER TABLE legs ADD COLUMN trip_start INTEGER NOT NULL DEFAULT 0")
         pos_cols = [r["name"] for r in conn.execute("PRAGMA table_info(positions)").fetchall()]
         if "user_id" not in pos_cols:
             conn.execute("ALTER TABLE positions ADD COLUMN user_id INTEGER")

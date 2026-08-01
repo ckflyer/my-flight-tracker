@@ -130,15 +130,48 @@ def leg_view(leg: Optional[FlightLeg], now: datetime, time_format: str = "24") -
     }
 
 
-def group_legs_by_day(legs: list, now: datetime, time_format: str = "24") -> list:
-    """Groups legs by calendar date (labeled e.g. 'March 27' — no relative
-    'Day 1/2/3' numbering, since that breaks down whenever multiple trips
-    are imported at once or trips run back-to-back with a short turnaround).
+def _assign_trip_day_numbers(all_legs: list) -> dict:
+    """Walks the FULL chronological schedule once and assigns each calendar
+    date a trip-relative day number, resetting at trip boundaries. Computed
+    over the whole schedule (not separately per past/upcoming) so a trip
+    that's partly flown and partly still ahead numbers continuously across
+    that split instead of incorrectly resetting to Day 1 mid-trip."""
+    numbers = {}
+    current_date = None
+    day_trip_start = False
+    trip_day_num = 0
+    for leg in all_legs:
+        if leg.date != current_date:
+            if current_date is not None:
+                trip_day_num = 1 if day_trip_start else trip_day_num + 1
+                numbers[current_date] = trip_day_num
+            current_date = leg.date
+            day_trip_start = leg.trip_start
+        elif leg.trip_start:
+            day_trip_start = True
+    if current_date is not None:
+        trip_day_num = 1 if day_trip_start else trip_day_num + 1
+        numbers[current_date] = trip_day_num
+    return numbers
 
-    Between each pair of consecutive day-groups, computes the overnight
-    duration and destination city using the duty-day definition: duty ends
-    15 minutes after block-in, starts 45 minutes before block-out. Deadhead
-    legs count the same as flying legs for this — they're still duty time.
+
+def group_legs_by_day(legs: list, day_numbers: dict, now: datetime, time_format: str = "24") -> list:
+    """Groups legs by calendar date, labeled 'Day N - March 27' where N
+    resets to 1 at each trip boundary (a blank line in the pasted FFDO —
+    see parser.py). Trip boundaries are explicit and pilot-controlled, not
+    guessed from gap length, so a real 30+ hour layover mid-trip still
+    shows correctly while a multi-day gap *between* two separate trips
+    (e.g. days off at home) doesn't get mislabeled as one.
+
+    Between consecutive day-groups within the same trip, computes the
+    overnight duration and destination city using the duty-day definition:
+    duty ends 15 minutes after block-in, starts 45 minutes before
+    block-out. No overnight is shown across a trip boundary — that gap is
+    just time off, not a layover.
+
+    day_numbers should come from _assign_trip_day_numbers(info.all_legs) —
+    computed once over the whole schedule, not per past/upcoming list, so
+    numbering stays continuous across a trip that's partly already flown.
     """
     if not legs:
         return []
@@ -146,37 +179,44 @@ def group_legs_by_day(legs: list, now: datetime, time_format: str = "24") -> lis
     day_buckets = []
     current_date = None
     for leg in legs:
-        if leg.date != current_date:
-            day_buckets.append({"date": leg.date, "legs": [leg]})
+        starts_new_day = leg.date != current_date
+        if starts_new_day:
+            day_buckets.append({"date": leg.date, "legs": [leg], "trip_start": leg.trip_start})
             current_date = leg.date
         else:
             day_buckets[-1]["legs"].append(leg)
+            if leg.trip_start:
+                day_buckets[-1]["trip_start"] = True
 
     groups = []
     for i, bucket in enumerate(day_buckets):
         day_legs = bucket["legs"]
+        trip_day_num = day_numbers.get(bucket["date"], 1)
+        date_label = bucket["date"].strftime("%B %d").replace(" 0", " ")
         group = {
-            "date_label": bucket["date"].strftime("%B %d").replace(" 0", " "),
+            "date_label": f"Day {trip_day_num} - {date_label}",
             "legs": [leg_view(l, now, time_format) for l in day_legs],
             "overnight": None,
         }
         if i < len(day_buckets) - 1:
-            last_leg = day_legs[-1]
-            next_leg = day_buckets[i + 1]["legs"][0]
-            last_arr_utc = last_leg.arr_datetime_utc()
-            next_dep_utc = next_leg.dep_datetime_utc()
-            if last_arr_utc and next_dep_utc:
-                duty_ends = last_arr_utc + timedelta(minutes=15)
-                duty_starts = next_dep_utc - timedelta(minutes=45)
-                gap_seconds = (duty_starts - duty_ends).total_seconds()
-                if gap_seconds > 0:
-                    hours = int(gap_seconds // 3600)
-                    minutes = int((gap_seconds % 3600) // 60)
-                    city = (last_leg.dest_info.city if last_leg.dest_info else last_leg.destination)
-                    group["overnight"] = {
-                        "duration": f"{hours}h {minutes:02d}m",
-                        "city": city,
-                    }
+            next_bucket = day_buckets[i + 1]
+            if not next_bucket["trip_start"]:
+                last_leg = day_legs[-1]
+                next_leg = next_bucket["legs"][0]
+                last_arr_utc = last_leg.arr_datetime_utc()
+                next_dep_utc = next_leg.dep_datetime_utc()
+                if last_arr_utc and next_dep_utc:
+                    duty_ends = last_arr_utc + timedelta(minutes=15)
+                    duty_starts = next_dep_utc - timedelta(minutes=45)
+                    gap_seconds = (duty_starts - duty_ends).total_seconds()
+                    if gap_seconds > 0:
+                        hours = int(gap_seconds // 3600)
+                        minutes = int((gap_seconds % 3600) // 60)
+                        city = (last_leg.dest_info.city if last_leg.dest_info else last_leg.destination)
+                        group["overnight"] = {
+                            "duration": f"{hours}h {minutes:02d}m",
+                            "city": city,
+                        }
         groups.append(group)
     return groups
 
@@ -426,12 +466,13 @@ async def viewer(request: Request):
                 current["aircraft"] = get_aircraft_info(live.get("icao24"))
                 history = get_position_history(user_id, info.current.id)  # include the point just recorded
             current["status"] = compute_phase(info.current, live, history, now, settings.poll_seconds)
+    day_numbers = _assign_trip_day_numbers(info.all_legs)
     ctx = {
         "request": request,
         "current": current,
         "live": live,
-        "upcoming_groups": group_legs_by_day(info.upcoming, now, tf),
-        "past_groups": group_legs_by_day(info.past, now, tf),
+        "upcoming_groups": group_legs_by_day(info.upcoming, day_numbers, now, tf),
+        "past_groups": group_legs_by_day(info.past, day_numbers, now, tf),
         "past_count": len(info.past),
         "settings": settings.model_dump(),
         "poll_ms": max(20, settings.poll_seconds) * 1000,

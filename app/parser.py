@@ -43,11 +43,18 @@ def parse_schedule_text(text: str) -> List[FlightLeg]:
     """
     Parse a multi-line FFDO schedule block into FlightLeg objects.
     Supports optional (D) deadhead marker before the flight number.
+
+    A blank line between legs marks a trip boundary — the day-grouping/
+    overnight display uses this to know not to treat a multi-day gap
+    between two separate trips as a layover. Within a trip (no blank line),
+    a gap of any length — even 30+ hours — is treated as a real overnight.
     """
     legs: List[FlightLeg] = []
+    saw_blank = True  # the very first leg always starts a "trip"
     for raw in text.splitlines():
         line = raw.strip()
         if not line:
+            saw_blank = True
             continue
         m = LINE_RE.match(line)
         if not m:
@@ -74,9 +81,11 @@ def parse_schedule_text(text: str) -> List[FlightLeg]:
                 dep_time_local=dep,
                 arr_time_local=arr,
                 is_deadhead=is_deadhead,
+                trip_start=saw_blank,
             )
             enrich_leg(leg)
             legs.append(leg)
+            saw_blank = False
         except Exception:
             continue
 
