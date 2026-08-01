@@ -261,22 +261,21 @@
     .upcoming-item { border-bottom: 1px solid var(--border); }
     .upcoming-item:last-child { border-bottom: none; }
     .upcoming-item .list-item { border-bottom: none; }
+    .day-card { margin-bottom: 1rem; }
     .day-label {
       font-size: 0.75rem;
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.04em;
       color: var(--muted);
-      padding: 0.85rem 0 0.35rem;
+      padding-bottom: 0.35rem;
     }
-    .day-label:first-child { padding-top: 0; }
-    .overnight-divider {
-      font-size: 0.8rem;
-      color: var(--accent);
-      background: rgba(59,130,246,0.08);
-      border-radius: 8px;
-      padding: 0.5rem 0.7rem;
-      margin: 0.6rem 0;
+    .overnight-label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin: -0.4rem 0.1rem 1rem;
     }
     .preview-map {
       display: none;
@@ -299,7 +298,7 @@
         {% endif %}
       </nav>
       {% if not is_pilot %}
-      <button type="button" id="theme-toggle-btn" class="logout-btn" title="Switch theme (just for you, on this device)">🌓</button>
+      <button type="button" id="theme-toggle-btn" class="logout-btn" title="Switch theme (just for you, on this device)">Theme</button>
       {% endif %}
       <form method="post" action="/logout" style="margin:0;">
         <button type="submit" class="logout-btn">Log out</button>
@@ -309,25 +308,26 @@
 
   {% if past_groups %}
   <button class="toggle" id="past-toggle" onclick="togglePast()">Show past flights ({{ past_count }})</button>
-  <div id="past-section" class="card">
+  <div id="past-section">
     {% for group in past_groups %}
-    <div class="day-label">{{ group.date_label }}</div>
-    {% for leg in group.legs %}
-    <div class="upcoming-item">
-      <div class="list-item">
-        <div>
-          <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
-          {{ leg.origin }} → {{ leg.destination }}
-          <div class="meta">{{ leg.dep }} – {{ leg.arr }}</div>
-        </div>
-        <div style="text-align:right">
-          <span class="status {{ leg.status|lower|replace(' ', '-') }}">{{ leg.status }}</span>
-          {% if leg.origin_lat is not none or leg.dest_lat is not none %}
-          <div style="margin-top:0.5rem">
-            <a href="#" data-preview-toggle="past-prev-{{ leg.id }}" style="color:var(--muted);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">Map</a>
+    <div class="card day-card">
+      <div class="day-label">{{ group.date_label }}</div>
+      {% for leg in group.legs %}
+      <div class="upcoming-item">
+        <div class="list-item">
+          <div>
+            <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
+            {{ leg.origin }} → {{ leg.destination }}
+            <div class="meta">{{ leg.dep }} – {{ leg.arr }}</div>
           </div>
-          {% endif %}
-        </div>
+          <div style="text-align:right">
+            <span class="status {{ leg.status|lower|replace(' ', '-') }}">{{ leg.status }}</span>
+            {% if leg.origin_lat is not none or leg.dest_lat is not none %}
+            <div style="margin-top:0.5rem">
+              <a href="#" data-preview-toggle="past-prev-{{ leg.id }}" style="color:var(--muted);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">Map</a>
+            </div>
+            {% endif %}
+          </div>
       </div>
       {% if leg.origin_lat is not none or leg.dest_lat is not none %}
       <div class="preview-map" id="past-prev-{{ leg.id }}"
@@ -337,8 +337,9 @@
       {% endif %}
     </div>
     {% endfor %}
+    </div>
     {% if group.overnight %}
-    <div class="overnight-divider">🌙 Overnight in {{ group.overnight.city }} — {{ group.overnight.duration }}</div>
+    <div class="overnight-label">Overnight in {{ group.overnight.city }} — {{ group.overnight.duration }}</div>
     {% endif %}
     {% endfor %}
   </div>
@@ -419,8 +420,8 @@
 
   {% if upcoming_groups %}
   <div class="section-label">Upcoming</div>
-  <div class="card">
-    {% for group in upcoming_groups %}
+  {% for group in upcoming_groups %}
+  <div class="card day-card">
     <div class="day-label">{{ group.date_label }}</div>
     {% for leg in group.legs %}
     <div class="upcoming-item">
@@ -457,14 +458,14 @@
       {% endif %}
     </div>
     {% endfor %}
-    {% if group.overnight %}
-    <div class="overnight-divider">🌙 Overnight in {{ group.overnight.city }} — {{ group.overnight.duration }}</div>
-    {% endif %}
-    {% endfor %}
   </div>
+  {% if group.overnight %}
+  <div class="overnight-label">Overnight in {{ group.overnight.city }} — {{ group.overnight.duration }}</div>
+  {% endif %}
+  {% endfor %}
   {% endif %}
 
-  {% if not current and not upcoming and not past %}
+  {% if not current and not upcoming_groups and not past_groups %}
   <div class="card empty">
     No flights in the schedule.<br>
     <span style="font-size:0.85rem">Import a schedule on the admin page.</span>
