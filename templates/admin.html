@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Schedule</title>
+  <title>Pilot Tracker · Schedule</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+  <link rel="shortcut icon" href="/static/favicon.ico">
   <style>
     :root {
       --bg: #0f1419;
@@ -105,6 +107,43 @@
     </table>
     {% else %}
     <p style="color:var(--muted)">No flights loaded yet.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="count">Aircraft seen via live tracking</div>
+    {% if aircraft_rows %}
+    <table>
+      <thead>
+        <tr>
+          <th>ICAO24</th>
+          <th>Registration</th>
+          <th>Type</th>
+          <th>Notes</th>
+          <th>Last seen (UTC)</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ac in aircraft_rows %}
+        <tr>
+          <td><code>{{ ac.icao24 }}</code></td>
+          <td><input type="text" name="registration" form="acform{{ loop.index }}" value="{{ ac.registration or '' }}" style="width:100%;background:#0f1419;border:1px solid #334155;border-radius:6px;color:var(--text);padding:0.3rem 0.4rem;"></td>
+          <td><input type="text" name="aircraft_type" form="acform{{ loop.index }}" value="{{ ac.aircraft_type or '' }}" style="width:100%;background:#0f1419;border:1px solid #334155;border-radius:6px;color:var(--text);padding:0.3rem 0.4rem;"></td>
+          <td><input type="text" name="notes" form="acform{{ loop.index }}" value="{{ ac.notes or '' }}" style="width:100%;background:#0f1419;border:1px solid #334155;border-radius:6px;color:var(--text);padding:0.3rem 0.4rem;"></td>
+          <td style="white-space:nowrap;color:var(--muted);font-size:0.8rem;">{{ ac.last_seen or '' }}</td>
+          <td><button type="submit" form="acform{{ loop.index }}" style="margin:0;padding:0.4rem 0.75rem;font-size:0.8rem;">Save</button></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% for ac in aircraft_rows %}
+    <form id="acform{{ loop.index }}" method="post" action="/admin/aircraft">
+      <input type="hidden" name="icao24" value="{{ ac.icao24 }}">
+    </form>
+    {% endfor %}
+    {% else %}
+    <p style="color:var(--muted)">No aircraft seen yet — this fills in automatically once a flight is tracked live.</p>
     {% endif %}
   </div>
 </body>

@@ -11,6 +11,8 @@ from .schedule import import_from_text, load_schedule, get_current_info
 from .opensky import live_summary
 from .models import FlightLeg
 from .settings import load_settings, save_settings, apply_opensky_env, AppSettings
+from .aircraft import note_aircraft_seen, get_aircraft_info, list_aircraft, update_aircraft
+from .track import record_position, get_breadcrumb, compute_progress, compute_eta
 
 BASE = Path(__file__).resolve().parent.parent
 jinja_env = Environment(
@@ -55,6 +57,7 @@ def tracking_links(leg: FlightLeg) -> dict:
 def leg_view(leg: Optional[FlightLeg], now: datetime, time_format: str = "24") -> Optional[dict]:
     if not leg:
         return None
+    oi, di = leg.origin_info, leg.dest_info
     return {
         "id": leg.id,
         "callsign": leg.callsign,
@@ -66,6 +69,10 @@ def leg_view(leg: Optional[FlightLeg], now: datetime, time_format: str = "24") -
         "links": tracking_links(leg),
         "date": str(leg.date),
         "is_deadhead": leg.is_deadhead,
+        "origin_lat": oi.lat if oi else None,
+        "origin_lon": oi.lon if oi else None,
+        "dest_lat": di.lat if di else None,
+        "dest_lon": di.lon if di else None,
     }
 
 
@@ -83,12 +90,15 @@ async def viewer(request: Request):
         if status in ("Departing", "In Air"):
             live = live_summary(info.current.callsign)
         if current:
-            oi = info.current.origin_info
-            di = info.current.dest_info
-            current["origin_lat"] = oi.lat if oi else None
-            current["origin_lon"] = oi.lon if oi else None
-            current["dest_lat"] = di.lat if di else None
-            current["dest_lon"] = di.lon if di else None
+            current["progress_pct"] = compute_progress(info.current, live, now)
+            current["eta"] = compute_eta(info.current, live, now, tf)
+            current["breadcrumb"] = []
+            current["aircraft"] = None
+            if live and live.get("lat") is not None and live.get("lon") is not None:
+                note_aircraft_seen(live.get("icao24"))
+                record_position(info.current.id, live["lat"], live["lon"], now)
+                current["breadcrumb"] = get_breadcrumb(info.current.id)
+                current["aircraft"] = get_aircraft_info(live.get("icao24"))
     ctx = {
         "request": request,
         "current": current,
@@ -117,13 +127,25 @@ async def admin(request: Request):
         })
     template = jinja_env.get_template("admin.html")
     return HTMLResponse(template.render(
-        request=request, rows=rows, count=len(legs), settings=settings.model_dump()
+        request=request, rows=rows, count=len(legs), settings=settings.model_dump(),
+        aircraft_rows=list_aircraft(),
     ))
 
 
 @app.post("/admin/import")
 async def admin_import(text: str = Form(...)):
     import_from_text(text, replace=True)
+    return RedirectResponse(url="/admin", status_code=303)
+
+
+@app.post("/admin/aircraft")
+async def admin_aircraft_update(
+    icao24: str = Form(...),
+    registration: str = Form(""),
+    aircraft_type: str = Form(""),
+    notes: str = Form(""),
+):
+    update_aircraft(icao24, registration, aircraft_type, notes)
     return RedirectResponse(url="/admin", status_code=303)
 
 

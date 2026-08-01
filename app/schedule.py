@@ -5,39 +5,72 @@ from zoneinfo import ZoneInfo
 from .models import FlightLeg, Schedule, CurrentFlightInfo
 from .parser import parse_schedule_text
 from .airports import enrich_leg
-import json
-from pathlib import Path
+from .db import get_connection, init_db
 
-
-DATA_FILE = Path(__file__).resolve().parent.parent / "data" / "schedule.json"
+# Ensure tables exist (and legacy data/schedule.json is imported once) as soon
+# as this module loads.
+init_db()
 
 
 def save_schedule(legs: List[FlightLeg]) -> None:
-    DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "updated_at": datetime.utcnow().isoformat() + "Z",
-        "legs": [leg.model_dump(mode="json") for leg in legs],
-    }
-    DATA_FILE.write_text(json.dumps(payload, indent=2, default=str))
+    """Persist the full leg list to SQLite, replacing whatever was there before."""
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM legs")
+        for idx, leg in enumerate(legs):
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO legs
+                    (id, sort_index, date, flight_number, origin, destination,
+                     dep_time_local, arr_time_local, is_deadhead)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    leg.id,
+                    idx,
+                    leg.date.isoformat(),
+                    leg.flight_number,
+                    leg.origin,
+                    leg.destination,
+                    leg.dep_time_local.isoformat(),
+                    leg.arr_time_local.isoformat(),
+                    1 if leg.is_deadhead else 0,
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def load_schedule() -> List[FlightLeg]:
-    if not DATA_FILE.exists():
-        return []
+    conn = get_connection()
     try:
-        data = json.loads(DATA_FILE.read_text())
-        legs = []
-        for item in data.get("legs", []):
-            # reconstruct date/time objects
-            item["date"] = date.fromisoformat(item["date"])
-            item["dep_time_local"] = datetime.strptime(item["dep_time_local"], "%H:%M:%S").time()
-            item["arr_time_local"] = datetime.strptime(item["arr_time_local"], "%H:%M:%S").time()
-            leg = FlightLeg(**item)
-            enrich_leg(leg)
-            legs.append(leg)
-        return legs
+        rows = conn.execute(
+            "SELECT * FROM legs ORDER BY sort_index ASC"
+        ).fetchall()
     except Exception:
         return []
+    finally:
+        conn.close()
+
+    legs = []
+    for row in rows:
+        try:
+            leg = FlightLeg(
+                id=row["id"],
+                date=date.fromisoformat(row["date"]),
+                flight_number=row["flight_number"],
+                origin=row["origin"],
+                destination=row["destination"],
+                dep_time_local=datetime.strptime(row["dep_time_local"], "%H:%M:%S").time(),
+                arr_time_local=datetime.strptime(row["arr_time_local"], "%H:%M:%S").time(),
+                is_deadhead=bool(row["is_deadhead"]),
+            )
+            enrich_leg(leg)
+            legs.append(leg)
+        except Exception:
+            continue
+    return legs
 
 
 def import_from_text(text: str, replace: bool = True) -> List[FlightLeg]:

@@ -4,7 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <title>Flight Tracker</title>
+  <meta name="apple-mobile-web-app-title" content="Pilot Tracker">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#1e3a8a">
+  <title>Pilot Tracker</title>
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
+  <link rel="shortcut icon" href="/static/favicon.ico">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
@@ -159,6 +167,27 @@
     .live-val { font-size: 1.15rem; font-weight: 700; }
     .live-unit { font-size: 0.75rem; color: var(--muted); }
     .live-meta { font-size: 0.75rem; color: var(--muted); margin-top: 0.4rem; }
+    .progress-wrap { margin-top: 0.85rem; }
+    .progress-track {
+      background: var(--border);
+      height: 8px;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .progress-fill {
+      background: var(--accent);
+      height: 100%;
+      border-radius: 999px;
+      transition: width 0.4s ease;
+    }
+    .progress-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-top: 0.3rem;
+    }
+    .aircraft-line { font-size: 0.75rem; color: var(--muted); margin-top: 0.3rem; }
     #flight-map {
       height: 240px;
       border-radius: 12px;
@@ -174,10 +203,20 @@
       display: block;
       overflow: visible;
     }
+    .upcoming-item { border-bottom: 1px solid var(--border); }
+    .upcoming-item:last-child { border-bottom: none; }
+    .upcoming-item .list-item { border-bottom: none; }
+    .preview-map {
+      display: none;
+      height: 160px;
+      border-radius: 10px;
+      margin: 0 0 0.85rem;
+      border: 1px solid var(--map-border);
+    }
   </style>
 </head>
 <body>
-  <h1>Where are you?</h1>
+  <h1>Pilot Tracker</h1>
   <div class="nav">
     <a href="/admin">Schedule</a>
     <a href="/settings">Settings</a>
@@ -239,6 +278,11 @@
       {% if live.icao24 %}
       <div class="live-meta">ICAO {{ live.icao24 }}{% if live.callsign %} · {{ live.callsign }}{% endif %}</div>
       {% endif %}
+      {% if current.aircraft and (current.aircraft.registration or current.aircraft.aircraft_type) %}
+      <div class="aircraft-line">
+        {{ current.aircraft.registration or '' }}{% if current.aircraft.registration and current.aircraft.aircraft_type %} · {% endif %}{{ current.aircraft.aircraft_type or '' }}
+      </div>
+      {% endif %}
     </div>
     {% if live.lat is not none and live.lon is not none %}
     <div id="flight-map"></div>
@@ -246,12 +290,21 @@
     {% else %}
     <div class="live-box muted-live">No live ADS-B position right now</div>
     {% endif %}
+    {% if current.progress_pct is not none %}
+    <div class="progress-wrap">
+      <div class="progress-track"><div class="progress-fill" style="width: {{ current.progress_pct }}%"></div></div>
+      <div class="progress-label">
+        <span>{{ current.progress_pct }}% en route</span>
+        {% if current.eta %}<span>ETA {{ current.eta }}</span>{% endif %}
+      </div>
+    </div>
+    {% endif %}
     <div class="buttons">
       {% if settings.show_flightaware %}
-      <a class="btn" href="{{ current.links.flightaware }}" target="_blank" rel="noopener">FlightAware</a>
+      <a class="btn" data-fa-link href="{{ current.links.flightaware }}" target="_blank" rel="noopener">FlightAware</a>
       {% endif %}
       {% if settings.show_fr24 %}
-      <a class="btn {% if settings.show_flightaware %}secondary{% endif %}" href="{{ current.links.fr24 }}" target="_blank" rel="noopener">FlightRadar24</a>
+      <a class="btn {% if settings.show_flightaware %}secondary{% endif %}" data-fr24-link href="{{ current.links.fr24 }}" target="_blank" rel="noopener">FlightRadar24</a>
       {% endif %}
     </div>
   </div>
@@ -261,26 +314,38 @@
   <div class="section-label">Upcoming</div>
   <div class="card">
     {% for leg in upcoming %}
-    <div class="list-item">
-      <div>
-        <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
-        {{ leg.origin }} → {{ leg.destination }}
-        <div class="meta">{{ leg.date }} · {{ leg.dep }} – {{ leg.arr }}</div>
-      </div>
-      <div style="text-align:right">
-        <span class="status {{ leg.status }}">{{ leg.status }}</span>
-        <div style="margin-top:0.5rem">
-          {% if settings.show_flightaware %}
-          <a href="{{ leg.links.flightaware }}" target="_blank" rel="noopener" style="color:var(--accent);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">FlightAware</a>
-          {% endif %}
-          {% if settings.show_flightaware and settings.show_fr24 %}
-          <span style="color:var(--muted)">·</span>
-          {% endif %}
-          {% if settings.show_fr24 %}
-          <a href="{{ leg.links.fr24 }}" target="_blank" rel="noopener" style="color:var(--muted);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">FR24</a>
-          {% endif %}
+    <div class="upcoming-item">
+      <div class="list-item">
+        <div>
+          <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
+          {{ leg.origin }} → {{ leg.destination }}
+          <div class="meta">{{ leg.date }} · {{ leg.dep }} – {{ leg.arr }}</div>
+        </div>
+        <div style="text-align:right">
+          <span class="status {{ leg.status }}">{{ leg.status }}</span>
+          <div style="margin-top:0.5rem">
+            {% if settings.show_flightaware %}
+            <a data-fa-link href="{{ leg.links.flightaware }}" target="_blank" rel="noopener" style="color:var(--accent);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">FlightAware</a>
+            {% endif %}
+            {% if settings.show_flightaware and settings.show_fr24 %}
+            <span style="color:var(--muted)">·</span>
+            {% endif %}
+            {% if settings.show_fr24 %}
+            <a data-fr24-link href="{{ leg.links.fr24 }}" target="_blank" rel="noopener" style="color:var(--muted);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">FR24</a>
+            {% endif %}
+            {% if leg.origin_lat is not none or leg.dest_lat is not none %}
+            <span style="color:var(--muted)">·</span>
+            <a href="#" data-preview-toggle="prev-{{ loop.index }}" style="color:var(--muted);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">Map</a>
+            {% endif %}
+          </div>
         </div>
       </div>
+      {% if leg.origin_lat is not none or leg.dest_lat is not none %}
+      <div class="preview-map" id="prev-{{ loop.index }}"
+           data-origin-lat="{{ leg.origin_lat }}" data-origin-lon="{{ leg.origin_lon }}"
+           data-dest-lat="{{ leg.dest_lat }}" data-dest-lon="{{ leg.dest_lon }}"
+           data-origin="{{ leg.origin }}" data-dest="{{ leg.destination }}"></div>
+      {% endif %}
     </div>
     {% endfor %}
   </div>
@@ -298,6 +363,65 @@
   </div>
 
   <script>
+    // On Android, prefer opening the FlightAware / FlightRadar24 app if it's
+    // installed; otherwise Chrome falls back to the normal web link.
+    (function() {
+      if (!/Android/i.test(navigator.userAgent)) return;
+      function toIntent(url, pkg) {
+        var stripped = url.replace(/^https?:\/\//, '');
+        return 'intent://' + stripped + '#Intent;scheme=https;package=' + pkg +
+               ';S.browser_fallback_url=' + encodeURIComponent(url) + ';end';
+      }
+      document.querySelectorAll('a[data-fr24-link]').forEach(function(a) {
+        a.href = toIntent(a.href, 'com.flightradar24free');
+      });
+      document.querySelectorAll('a[data-fa-link]').forEach(function(a) {
+        a.href = toIntent(a.href, 'com.flightaware.android.liveFlightTracker');
+      });
+    })();
+
+    // Collapsible origin/destination preview map for upcoming flights
+    document.querySelectorAll('[data-preview-toggle]').forEach(function(link) {
+      link.addEventListener('click', function(e) {
+        e.preventDefault();
+        var el = document.getElementById(link.getAttribute('data-preview-toggle'));
+        if (!el) return;
+        var isOpen = el.style.display === 'block';
+        if (isOpen) {
+          el.style.display = 'none';
+          return;
+        }
+        el.style.display = 'block';
+        if (!el._leafletMap) {
+          var oLat = parseFloat(el.dataset.originLat), oLon = parseFloat(el.dataset.originLon);
+          var dLat = parseFloat(el.dataset.destLat), dLon = parseFloat(el.dataset.destLon);
+          var map = L.map(el, { zoomControl: false });
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 10, attribution: '&copy; OpenStreetMap'
+          }).addTo(map);
+          var pts = [];
+          if (!isNaN(oLat) && !isNaN(oLon)) {
+            L.circleMarker([oLat, oLon], { radius: 6, color: '#22c55e', fillColor: '#22c55e', fillOpacity: 0.95, weight: 2 })
+              .addTo(map).bindPopup('Origin: ' + el.dataset.origin);
+            pts.push([oLat, oLon]);
+          }
+          if (!isNaN(dLat) && !isNaN(dLon)) {
+            L.circleMarker([dLat, dLon], { radius: 6, color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.95, weight: 2 })
+              .addTo(map).bindPopup('Destination: ' + el.dataset.dest);
+            pts.push([dLat, dLon]);
+          }
+          if (pts.length === 2) {
+            L.polyline(pts, { color: '#94a3b8', weight: 2, opacity: 0.85, dashArray: '4 6' }).addTo(map);
+            map.fitBounds(pts, { padding: [28, 28], maxZoom: 8 });
+          } else if (pts.length === 1) {
+            map.setView(pts[0], 6);
+          }
+          el._leafletMap = map;
+        }
+        setTimeout(function() { el._leafletMap.invalidateSize(); }, 30);
+      });
+    });
+
     function togglePast() {
       const sec = document.getElementById('past-section');
       const btn = document.getElementById('past-toggle');
@@ -352,6 +476,12 @@
           [[live.lat, live.lon], [current.dest_lat, current.dest_lon]],
           { color: '#3b82f6', weight: 3, opacity: 0.85, dashArray: '6 8' }
         ).addTo(map);
+      }
+
+      // Breadcrumb trail of recent live positions
+      const breadcrumb = current && current.breadcrumb ? current.breadcrumb : [];
+      if (breadcrumb.length > 1) {
+        L.polyline(breadcrumb, { color: '#94a3b8', weight: 2, opacity: 0.7, dashArray: '2 6' }).addTo(map);
       }
 
       // Plane silhouette – nose points along track (0° = north)
