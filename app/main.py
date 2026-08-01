@@ -3,14 +3,16 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from pathlib import Path
-from datetime import datetime, timedelta, time as dtime
+from datetime import datetime, date, timedelta, time as dtime
 from zoneinfo import ZoneInfo
 from typing import Optional
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from .schedule import import_from_text, load_schedule, get_current_info, delete_leg
+from .schedule import import_from_text, load_schedule, get_current_info, delete_leg, save_schedule
 from .opensky import live_summary
 from .models import FlightLeg
+from .parser import parse_schedule_text
+from .airports import enrich_leg
 from .settings import load_settings, save_settings, apply_opensky_env, AppSettings
 from .aircraft import note_aircraft_seen, get_aircraft_info
 from .track import (
@@ -219,6 +221,72 @@ def group_legs_by_day(legs: list, day_numbers: dict, now: datetime, time_format:
                             "city": city,
                         }
         groups.append(group)
+    return groups
+
+
+GAP_TRIP_THRESHOLD_HOURS = 35.0
+
+
+def apply_gap_trip_starts(legs: list, threshold_hours: float = GAP_TRIP_THRESHOLD_HOURS) -> None:
+    """Mutates legs in place: suggests trip_start=True on the first leg of
+    any flying day where the duty-day gap since the previous flying day is
+    >= threshold_hours. This is only ever a starting guess shown on the
+    import review page — the pilot confirms or adjusts every suggestion
+    before anything is saved. Explicit blank-line trip_start values from
+    the parser are left as-is (this only ever adds suggestions, never
+    removes one the pilot's paste already marked)."""
+    day_buckets = []
+    current_date = None
+    for leg in legs:
+        if leg.date != current_date:
+            day_buckets.append([leg])
+            current_date = leg.date
+        else:
+            day_buckets[-1].append(leg)
+
+    for i in range(1, len(day_buckets)):
+        prev_last = day_buckets[i - 1][-1]
+        this_first = day_buckets[i][0]
+        last_arr = prev_last.arr_datetime_utc()
+        this_dep = this_first.dep_datetime_utc()
+        if not last_arr or not this_dep:
+            continue
+        duty_ends = last_arr + timedelta(minutes=15)
+        duty_starts = this_dep - timedelta(minutes=45)
+        gap_hours = (duty_starts - duty_ends).total_seconds() / 3600
+        if gap_hours >= threshold_hours:
+            this_first.trip_start = True
+
+
+def build_review_groups(legs: list, time_format: str = "24") -> list:
+    """Day-grouped view of a freshly-parsed (not yet saved) schedule, for
+    the import review/confirmation page. Each leg carries its raw fields
+    as hidden-input-ready strings so the confirm step can rebuild the
+    FlightLeg objects without re-parsing the original text."""
+    groups = []
+    current_date = None
+    for leg in legs:
+        if leg.date != current_date:
+            groups.append({
+                "date_label": leg.date.strftime("%B %d").replace(" 0", " "),
+                "suggested_break": leg.trip_start,
+                "legs": [],
+            })
+            current_date = leg.date
+        groups[-1]["legs"].append({
+            "raw_date": leg.date.isoformat(),
+            "raw_flight": leg.flight_number,
+            "raw_origin": leg.origin,
+            "raw_dest": leg.destination,
+            "raw_dep": leg.dep_time_local.isoformat(),
+            "raw_arr": leg.arr_time_local.isoformat(),
+            "raw_dh": "1" if leg.is_deadhead else "0",
+            "callsign": leg.callsign,
+            "route": f"{leg.origin} → {leg.destination}",
+            "dep": fmt_local(leg, "dep", time_format),
+            "arr": fmt_local(leg, "arr", time_format),
+            "is_deadhead": leg.is_deadhead,
+        })
     return groups
 
 
@@ -578,7 +646,57 @@ async def admin_import(request: Request, text: str = Form(...)):
     pilot = require_pilot(request)
     if isinstance(pilot, RedirectResponse):
         return pilot
-    import_from_text(pilot["id"], text, replace=True)
+    legs = parse_schedule_text(text)
+    if not legs:
+        # Nothing valid parsed — nothing to review, just go back.
+        return RedirectResponse(url="/admin", status_code=303)
+    apply_gap_trip_starts(legs)
+    settings = load_settings(pilot["id"])
+    groups = build_review_groups(legs, settings.time_format)
+    template = jinja_env.get_template("import_review.html")
+    return HTMLResponse(template.render(request=request, groups=groups, settings=settings.model_dump()))
+
+
+@app.post("/admin/import/confirm")
+async def admin_import_confirm(request: Request):
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    form = await request.form()
+    dates = form.getlist("leg_date")
+    flights = form.getlist("leg_flight")
+    origins = form.getlist("leg_origin")
+    dests = form.getlist("leg_dest")
+    deps = form.getlist("leg_dep")
+    arrs = form.getlist("leg_arr")
+    dhs = form.getlist("leg_dh")
+    day_idxs = form.getlist("leg_day_idx")
+
+    legs = []
+    for i in range(len(dates)):
+        is_first_leg_of_day = (i == 0) or (day_idxs[i] != day_idxs[i - 1])
+        trip_start = False
+        if is_first_leg_of_day:
+            trip_start = (day_idxs[i] == "0") or (form.get(f"day_break_{day_idxs[i]}") is not None)
+        is_dh = dhs[i] == "1"
+        leg_id = f"{dates[i]}-{flights[i]}-{origins[i]}-{dests[i]}"
+        if is_dh:
+            leg_id += "-DH"
+        leg = FlightLeg(
+            id=leg_id,
+            date=date.fromisoformat(dates[i]),
+            flight_number=flights[i],
+            origin=origins[i],
+            destination=dests[i],
+            dep_time_local=dtime.fromisoformat(deps[i]),
+            arr_time_local=dtime.fromisoformat(arrs[i]),
+            is_deadhead=is_dh,
+            trip_start=trip_start,
+        )
+        enrich_leg(leg)
+        legs.append(leg)
+
+    save_schedule(pilot["id"], legs)
     return RedirectResponse(url="/admin", status_code=303)
 
 

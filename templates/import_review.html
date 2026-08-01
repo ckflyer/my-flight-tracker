@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="{{ settings.theme }}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pilot Tracker · Review import</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+  <link rel="shortcut icon" href="/static/favicon.ico">
+  <style>
+    :root, [data-theme="dark"] {
+      --bg: #0f1419; --card: #1a2332; --accent: #3b82f6;
+      --text: #e7ecf3; --muted: #8b9bb4; --border: #334155; --warn: #f59e0b;
+    }
+    [data-theme="light"] {
+      --bg: #f1f5f9; --card: #ffffff; --accent: #2563eb;
+      --text: #0f172a; --muted: #64748b; --border: #e2e8f0; --warn: #d97706;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text); min-height: 100vh;
+      padding: max(1.5rem, env(safe-area-inset-top)) max(1.5rem, env(safe-area-inset-right)) max(1.5rem, env(safe-area-inset-bottom)) max(1.5rem, env(safe-area-inset-left));
+      max-width: 640px; margin: 0 auto;
+    }
+    .brand { font-size: 0.95rem; font-weight: 700; margin-bottom: 0.35rem; }
+    h1 { font-size: 1.3rem; margin-bottom: 0.35rem; }
+    .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 1.5rem; line-height: 1.5; }
+    .day-card { background: var(--card); border-radius: 12px; padding: 1rem 1.25rem; margin-bottom: 0.85rem; }
+    .day-label { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 0.6rem; }
+    .leg-row { display: flex; justify-content: space-between; align-items: baseline; padding: 0.35rem 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+    .leg-row:last-child { border-bottom: none; }
+    .leg-row .meta { color: var(--muted); font-size: 0.82rem; }
+    .dh {
+      display: inline-block; padding: 0.1rem 0.4rem; border-radius: 6px;
+      font-size: 0.65rem; font-weight: 600; background: rgba(245,158,11,0.2);
+      color: var(--warn); margin-left: 0.35rem; vertical-align: middle;
+    }
+    .break-toggle {
+      display: flex; align-items: center; gap: 0.6rem;
+      background: rgba(59,130,246,0.08);
+      border: 1px dashed var(--accent);
+      border-radius: 10px;
+      padding: 0.65rem 0.9rem;
+      margin: 0.85rem 0;
+      font-size: 0.85rem;
+    }
+    .break-toggle input { width: auto; margin: 0; }
+    .break-toggle label { margin: 0; color: var(--text); cursor: pointer; }
+    .actions { display: flex; gap: 0.6rem; margin-top: 1.5rem; }
+    .actions a, .actions button {
+      flex: 1; text-align: center; padding: 0.75rem; border-radius: 8px;
+      font-weight: 600; font-size: 0.95rem; cursor: pointer; text-decoration: none; border: none;
+    }
+    .btn-cancel { background: transparent; border: 1px solid var(--border) !important; color: var(--text); }
+    .btn-confirm { background: var(--accent); color: white; }
+  </style>
+</head>
+<body>
+  <div class="brand">Pilot Tracker</div>
+  <h1>Review before importing</h1>
+  <p class="sub">
+    Trip breaks 35+ hours apart were guessed automatically — check the ones
+    below, uncheck any that are wrong, and add one anywhere else a trip
+    should split. Nothing is saved until you confirm.
+  </p>
+
+  <form method="post" action="/admin/import/confirm">
+    {% for group in groups %}
+      {% set group_idx = loop.index0 %}
+      {% if not loop.first %}
+      <div class="break-toggle">
+        <input type="checkbox" id="break_{{ group_idx }}" name="day_break_{{ group_idx }}" {% if group.suggested_break %}checked{% endif %}>
+        <label for="break_{{ group_idx }}">New trip starts here ({{ group.date_label }})</label>
+      </div>
+      {% endif %}
+      <div class="day-card">
+        <div class="day-label">{{ group.date_label }}</div>
+        {% for leg in group.legs %}
+        <div class="leg-row">
+          <div>
+            <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
+            {{ leg.route }}
+          </div>
+          <div class="meta">{{ leg.dep }} – {{ leg.arr }}</div>
+        </div>
+        <input type="hidden" name="leg_date" value="{{ leg.raw_date }}">
+        <input type="hidden" name="leg_flight" value="{{ leg.raw_flight }}">
+        <input type="hidden" name="leg_origin" value="{{ leg.raw_origin }}">
+        <input type="hidden" name="leg_dest" value="{{ leg.raw_dest }}">
+        <input type="hidden" name="leg_dep" value="{{ leg.raw_dep }}">
+        <input type="hidden" name="leg_arr" value="{{ leg.raw_arr }}">
+        <input type="hidden" name="leg_dh" value="{{ leg.raw_dh }}">
+        <input type="hidden" name="leg_day_idx" value="{{ group_idx }}">
+        {% endfor %}
+      </div>
+    {% endfor %}
+
+    <div class="actions">
+      <a href="/admin" class="btn-cancel">Cancel</a>
+      <button type="submit" class="btn-confirm">Confirm &amp; Import</button>
+    </div>
+  </form>
+</body>
+</html>
