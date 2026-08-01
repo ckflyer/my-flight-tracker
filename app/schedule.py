@@ -73,6 +73,18 @@ def load_schedule() -> List[FlightLeg]:
     return legs
 
 
+def delete_leg(leg_id: str) -> None:
+    """Remove a single leg from the schedule (used by the 'x' delete button
+    on the admin page). Sort order of the remaining legs is unaffected —
+    sort_index values don't need to be contiguous."""
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM legs WHERE id = ?", (leg_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def import_from_text(text: str, replace: bool = True) -> List[FlightLeg]:
     new_legs = parse_schedule_text(text)
     if replace:

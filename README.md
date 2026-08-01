@@ -109,11 +109,22 @@ the TrueNAS host:
 bash update.sh
 ```
 
-This does `git pull` + `docker compose up -d --build` in one step and tails
-the logs so you can confirm it started cleanly. (First run: `chmod +x
-update.sh` if you want to run it as `./update.sh` instead — GitHub's browser
-uploader doesn't preserve the executable bit, so `bash update.sh` is the
-safe way to invoke it either way.)
+This resets the working copy to match GitHub exactly (`git fetch` +
+`git reset --hard origin/main`, not a plain `git pull`), then rebuilds and
+restarts the container, tailing the logs so you can confirm it started
+cleanly. Using `reset --hard` instead of `pull` means it can never fail
+with a "divergent branches" error, even if something was committed locally
+on the host and never pushed.
+
+**Heads up:** `data/schedule.json` is untracked, so your pasted schedule
+survives every update. `data/settings.json` is still tracked at the
+moment, so an update *can* reset your OpenSky Client ID/Secret back to
+blank — if live tracking stops working right after an update, that's the
+first thing to check on `/settings`.
+
+(First run: `chmod +x update.sh` if you want to run it as `./update.sh`
+instead — GitHub's browser uploader doesn't preserve the executable bit,
+so `bash update.sh` is the safe way to invoke it either way.)
 
 ## Notes
 

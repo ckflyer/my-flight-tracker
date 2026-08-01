@@ -7,12 +7,15 @@ from zoneinfo import ZoneInfo
 from typing import Optional
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from .schedule import import_from_text, load_schedule, get_current_info
+from .schedule import import_from_text, load_schedule, get_current_info, delete_leg
 from .opensky import live_summary
 from .models import FlightLeg
 from .settings import load_settings, save_settings, apply_opensky_env, AppSettings
-from .aircraft import note_aircraft_seen, get_aircraft_info, list_aircraft, update_aircraft
-from .track import record_position, get_breadcrumb, compute_progress, compute_eta, get_position_history, compute_phase
+from .aircraft import note_aircraft_seen, get_aircraft_info
+from .track import (
+    record_position, get_breadcrumb, compute_progress, compute_ete,
+    compute_distance_remaining_nm, get_position_history, compute_phase,
+)
 
 BASE = Path(__file__).resolve().parent.parent
 jinja_env = Environment(
@@ -101,7 +104,8 @@ async def viewer(request: Request):
         if current:
             history = get_position_history(info.current.id)
             current["progress_pct"] = compute_progress(info.current, live, now)
-            current["eta"] = compute_eta(info.current, live, now, tf)
+            current["ete"] = compute_ete(info.current, live, now)
+            current["distance_nm"] = compute_distance_remaining_nm(info.current, live)
             current["breadcrumb"] = []
             current["aircraft"] = None
             if live and live.get("lat") is not None and live.get("lon") is not None:
@@ -131,6 +135,7 @@ async def admin(request: Request):
     rows = []
     for leg in legs:
         rows.append({
+            "id": leg.id,
             "date": str(leg.date),
             "callsign": leg.callsign,
             "route": f"{leg.origin} → {leg.destination}",
@@ -140,7 +145,6 @@ async def admin(request: Request):
     template = jinja_env.get_template("admin.html")
     return HTMLResponse(template.render(
         request=request, rows=rows, count=len(legs), settings=settings.model_dump(),
-        aircraft_rows=list_aircraft(),
     ))
 
 
@@ -150,14 +154,9 @@ async def admin_import(text: str = Form(...)):
     return RedirectResponse(url="/admin", status_code=303)
 
 
-@app.post("/admin/aircraft")
-async def admin_aircraft_update(
-    icao24: str = Form(...),
-    registration: str = Form(""),
-    aircraft_type: str = Form(""),
-    notes: str = Form(""),
-):
-    update_aircraft(icao24, registration, aircraft_type, notes)
+@app.post("/admin/delete/{leg_id}")
+async def admin_delete(leg_id: str):
+    delete_leg(leg_id)
     return RedirectResponse(url="/admin", status_code=303)
 
 

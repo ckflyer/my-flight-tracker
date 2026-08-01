@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
-from zoneinfo import ZoneInfo
 
 from .db import get_connection
 from .geo import haversine_nm
@@ -185,14 +184,25 @@ def compute_progress(leg: FlightLeg, live: Optional[Dict[str, Any]], now: dateti
     return round(max(0.0, min(100.0, pct)), 1)
 
 
-def compute_eta(leg: FlightLeg, live: Optional[Dict[str, Any]], now: datetime, time_format: str = "24") -> Optional[str]:
-    """Local-time-at-destination ETA string. Uses live position + groundspeed
-    when available, otherwise falls back to the scheduled arrival time."""
+def compute_distance_remaining_nm(leg: FlightLeg, live: Optional[Dict[str, Any]]) -> Optional[float]:
+    """Straight-line distance from the current live position to the
+    destination. Only meaningful with an actual live position — there's no
+    sensible non-live fallback for "how far away is it right now"."""
     dest_info = leg.dest_info
-    if not dest_info:
+    if not dest_info or dest_info.lat is None:
         return None
+    if not live or live.get("lat") is None or live.get("lon") is None:
+        return None
+    return round(haversine_nm(live["lat"], live["lon"], dest_info.lat, dest_info.lon), 1)
 
-    eta_utc = leg.arr_datetime_utc()
+
+def compute_ete(leg: FlightLeg, live: Optional[Dict[str, Any]], now: datetime) -> Optional[str]:
+    """Time remaining (ETE), not a clock time. Uses live position +
+    groundspeed when available, otherwise falls back to scheduled-arrival
+    minus now — same fallback philosophy as everything else here."""
+    dest_info = leg.dest_info
+    arr_utc = leg.arr_datetime_utc()
+    remaining_minutes = None
 
     if (
         live
@@ -200,17 +210,18 @@ def compute_eta(leg: FlightLeg, live: Optional[Dict[str, Any]], now: datetime, t
         and live.get("lon") is not None
         and live.get("speed_kts")
         and live["speed_kts"] > MIN_SPEED_KTS_FOR_ETA
-        and dest_info.lat is not None
+        and dest_info and dest_info.lat is not None
     ):
         remaining_nm = haversine_nm(live["lat"], live["lon"], dest_info.lat, dest_info.lon)
-        hours = remaining_nm / live["speed_kts"]
-        eta_utc = now + timedelta(hours=hours)
+        remaining_minutes = (remaining_nm / live["speed_kts"]) * 60
+    elif arr_utc:
+        remaining_minutes = (arr_utc - now).total_seconds() / 60
 
-    if not eta_utc:
+    if remaining_minutes is None:
         return None
-
-    tz = ZoneInfo(dest_info.timezone)
-    local = eta_utc.astimezone(tz)
-    if time_format == "12":
-        return local.strftime("%I:%M %p").lstrip("0")
-    return local.strftime("%H:%M")
+    remaining_minutes = max(0, remaining_minutes)
+    hours = int(remaining_minutes // 60)
+    minutes = int(round(remaining_minutes % 60))
+    if hours > 0:
+        return f"{hours}h {minutes:02d}m"
+    return f"{minutes} min"

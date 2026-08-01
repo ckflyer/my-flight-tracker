@@ -44,7 +44,7 @@
       background: var(--bg);
       color: var(--text);
       min-height: 100vh;
-      padding: 1rem;
+      padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
       line-height: 1.4;
     }
     h1 { font-size: 1.25rem; font-weight: 600; margin-bottom: 0.35rem; color: var(--muted); }
@@ -70,7 +70,7 @@
       text-decoration: none;
       font-size: 0.8rem;
       font-weight: 600;
-      padding: 0.4rem 0.85rem;
+      padding: 0.55rem 0.9rem;
       border-radius: 999px;
       transition: background 0.15s ease, color 0.15s ease;
     }
@@ -323,9 +323,9 @@
       {% if live.icao24 %}
       <div class="live-meta">ICAO {{ live.icao24 }}{% if live.callsign %} · {{ live.callsign }}{% endif %}</div>
       {% endif %}
-      {% if current.aircraft and (current.aircraft.registration or current.aircraft.aircraft_type) %}
+      {% if current.aircraft and (current.aircraft.registration or current.aircraft.display_type) %}
       <div class="aircraft-line">
-        {{ current.aircraft.registration or '' }}{% if current.aircraft.registration and current.aircraft.aircraft_type %} · {% endif %}{{ current.aircraft.aircraft_type or '' }}
+        {{ current.aircraft.registration or '' }}{% if current.aircraft.registration and current.aircraft.display_type %} · {% endif %}{{ current.aircraft.display_type or '' }}
       </div>
       {% endif %}
     </div>
@@ -340,7 +340,8 @@
       <div class="progress-track"><div class="progress-fill" style="width: {{ current.progress_pct }}%"></div></div>
       <div class="progress-label">
         <span>{{ current.progress_pct }}% en route</span>
-        {% if current.eta %}<span>ETA {{ current.eta }}</span>{% endif %}
+        {% if current.distance_nm is not none %}<span>{{ current.distance_nm }} nm to go</span>{% endif %}
+        {% if current.ete %}<span>ETE {{ current.ete }}</span>{% endif %}
       </div>
     </div>
     {% endif %}

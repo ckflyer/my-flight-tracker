@@ -66,6 +66,13 @@ def init_db() -> None:
         cols = [r["name"] for r in conn.execute("PRAGMA table_info(positions)").fetchall()]
         if "on_ground" not in cols:
             conn.execute("ALTER TABLE positions ADD COLUMN on_ground INTEGER")
+
+        # Migration: aircraft metadata is now looked up automatically from
+        # OpenSky's public aircraft database instead of hand-entered.
+        ac_cols = [r["name"] for r in conn.execute("PRAGMA table_info(aircraft)").fetchall()]
+        for col in ("manufacturer", "model", "typecode", "lookup_attempted_at"):
+            if col not in ac_cols:
+                conn.execute(f"ALTER TABLE aircraft ADD COLUMN {col} TEXT")
         conn.commit()
     finally:
         conn.close()
