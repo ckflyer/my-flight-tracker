@@ -197,6 +197,7 @@ def group_legs_by_day(legs: list, day_numbers: dict, now: datetime, time_format:
             "date_label": f"Day {trip_day_num} - {date_label}",
             "legs": [leg_view(l, now, time_format) for l in day_legs],
             "overnight": None,
+            "trip_start": bucket["trip_start"],
         }
         if i < len(day_buckets) - 1:
             next_bucket = day_buckets[i + 1]
@@ -437,6 +438,17 @@ async def viewer(request: Request):
     info = get_current_info(user_id)
     now = datetime.now(ZoneInfo("UTC"))
     tf = settings.time_format
+    display_theme = settings.theme
+    if not pilot:
+        # Viewers can override theme/time-format for themselves via a
+        # cookie set from /viewer-settings — never touches the pilot's
+        # actual account settings.
+        cookie_tf = request.cookies.get("pt_viewer_tf")
+        if cookie_tf in ("12", "24"):
+            tf = cookie_tf
+        cookie_theme = request.cookies.get("pt_viewer_theme")
+        if cookie_theme in ("dark", "light"):
+            display_theme = cookie_theme
     current = leg_view(info.current, now, tf)
     live = None
     if info.current:
@@ -466,6 +478,8 @@ async def viewer(request: Request):
                 current["aircraft"] = get_aircraft_info(live.get("icao24"))
                 history = get_position_history(user_id, info.current.id)  # include the point just recorded
             current["status"] = compute_phase(info.current, live, history, now, settings.poll_seconds)
+    settings_dict = settings.model_dump()
+    settings_dict["theme"] = display_theme
     day_numbers = _assign_trip_day_numbers(info.all_legs)
     ctx = {
         "request": request,
@@ -474,12 +488,44 @@ async def viewer(request: Request):
         "upcoming_groups": group_legs_by_day(info.upcoming, day_numbers, now, tf),
         "past_groups": group_legs_by_day(info.past, day_numbers, now, tf),
         "past_count": len(info.past),
-        "settings": settings.model_dump(),
+        "settings": settings_dict,
         "poll_ms": max(20, settings.poll_seconds) * 1000,
         "is_pilot": pilot is not None,
     }
     template = jinja_env.get_template("viewer.html")
     return HTMLResponse(template.render(**ctx))
+
+
+@app.get("/viewer-settings", response_class=HTMLResponse)
+async def viewer_settings_get(request: Request):
+    pilot = current_pilot(request)
+    viewer_uid = None if pilot else current_viewer_user_id(request)
+    if not pilot and not viewer_uid:
+        return RedirectResponse(url="/login", status_code=303)
+    theme = request.cookies.get("pt_viewer_theme", "dark")
+    tf = request.cookies.get("pt_viewer_tf", "24")
+    if theme not in ("dark", "light"):
+        theme = "dark"
+    if tf not in ("12", "24"):
+        tf = "24"
+    template = jinja_env.get_template("viewer_settings.html")
+    return HTMLResponse(template.render(request=request, theme=theme, tf=tf))
+
+
+@app.post("/viewer-settings")
+async def viewer_settings_post(
+    request: Request,
+    theme: str = Form("dark"),
+    time_format: str = Form("24"),
+):
+    pilot = current_pilot(request)
+    viewer_uid = None if pilot else current_viewer_user_id(request)
+    if not pilot and not viewer_uid:
+        return RedirectResponse(url="/login", status_code=303)
+    resp = RedirectResponse(url="/", status_code=303)
+    resp.set_cookie("pt_viewer_theme", "light" if theme == "light" else "dark", max_age=60 * 60 * 24 * 365)
+    resp.set_cookie("pt_viewer_tf", "12" if time_format == "12" else "24", max_age=60 * 60 * 24 * 365)
+    return resp
 
 
 # ---------------------------------------------------------------------------
@@ -495,7 +541,9 @@ async def admin(request: Request):
     settings = load_settings(pilot["id"])
     legs = load_schedule(pilot["id"])
     rows = []
-    for leg in legs:
+    for i, leg in enumerate(legs):
+        if leg.trip_start and i > 0:
+            rows.append({"divider": True})
         rows.append({
             "id": leg.id,
             "date": str(leg.date),

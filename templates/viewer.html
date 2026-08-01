@@ -2,21 +2,6 @@
 <html lang="en" data-theme="{{ settings.theme }}">
 <head>
   <meta charset="UTF-8">
-  {% if not is_pilot %}
-  <script>
-    // Viewers can set their own theme preference locally (localStorage),
-    // independent of the pilot's server-side setting — runs before the
-    // stylesheet below so there's no flash of the wrong theme.
-    (function() {
-      try {
-        var t = localStorage.getItem('pt_viewer_theme');
-        if (t === 'dark' || t === 'light') {
-          document.documentElement.setAttribute('data-theme', t);
-        }
-      } catch (e) {}
-    })();
-  </script>
-  {% endif %}
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="Pilot Tracker">
@@ -277,6 +262,10 @@
       color: var(--muted);
       margin: -0.4rem 0.1rem 1rem;
     }
+    .trip-divider {
+      border-top: 2px dashed var(--border);
+      margin: 0.5rem 0 1.5rem;
+    }
     .preview-map {
       display: none;
       height: 160px;
@@ -295,11 +284,10 @@
         {% if is_pilot %}
         <a href="/admin">Schedule</a>
         <a href="/settings">Settings</a>
+        {% else %}
+        <a href="/viewer-settings">Settings</a>
         {% endif %}
       </nav>
-      {% if not is_pilot %}
-      <button type="button" id="theme-toggle-btn" class="logout-btn" title="Switch theme (just for you, on this device)">Theme</button>
-      {% endif %}
       <form method="post" action="/logout" style="margin:0;">
         <button type="submit" class="logout-btn">Log out</button>
       </form>
@@ -310,6 +298,9 @@
   <button class="toggle" id="past-toggle" onclick="togglePast()">Show past flights ({{ past_count }})</button>
   <div id="past-section">
     {% for group in past_groups %}
+    {% if group.trip_start and not loop.first %}
+    <div class="trip-divider"></div>
+    {% endif %}
     <div class="card day-card">
       <div class="day-label">{{ group.date_label }}</div>
       {% for leg in group.legs %}
@@ -421,6 +412,9 @@
   {% if upcoming_groups %}
   <div class="section-label">Upcoming</div>
   {% for group in upcoming_groups %}
+  {% if group.trip_start and not loop.first %}
+  <div class="trip-divider"></div>
+  {% endif %}
   <div class="card day-card">
     <div class="day-label">{{ group.date_label }}</div>
     {% for leg in group.legs %}
@@ -477,18 +471,6 @@
   </div>
 
   <script>
-    // Viewer-only local theme toggle — saved to this browser, never touches
-    // the pilot's server-side setting.
-    var themeToggleBtn = document.getElementById('theme-toggle-btn');
-    if (themeToggleBtn) {
-      themeToggleBtn.addEventListener('click', function() {
-        var current = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
-        var next = current === 'light' ? 'dark' : 'light';
-        document.documentElement.setAttribute('data-theme', next);
-        try { localStorage.setItem('pt_viewer_theme', next); } catch (e) {}
-      });
-    }
-
     // On Android, prefer opening the FlightAware / FlightRadar24 app if it's
     // installed; otherwise Chrome falls back to the normal web link.
     (function() {
