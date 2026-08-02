@@ -8,11 +8,11 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#1e3a8a">
   <title>Pilot Tracker</title>
-  <link rel="manifest" href="/static/manifest.json">
-  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
-  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
-  <link rel="shortcut icon" href="/static/favicon.ico">
-  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+  <link rel="manifest" href="/static/manifest.json?v={{ version }}">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png?v={{ version }}">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png?v={{ version }}">
+  <link rel="shortcut icon" href="/static/favicon.ico?v={{ version }}">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png?v={{ version }}">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
@@ -122,18 +122,28 @@
       margin: 1rem 0 0.5rem;
     }
     .flight-num { font-size: 1.5rem; font-weight: 700; }
-    .route {
-      font-size: 1.75rem;
-      font-weight: 600;
-      margin: 0.5rem 0;
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
+    .city-route {
+      font-size: 1.4rem;
+      font-weight: 700;
+      margin: 0.35rem 0 0.85rem;
+      color: var(--text);
     }
-    .times { display: flex; justify-content: space-between; margin-top: 0.75rem; }
-    .time-block { text-align: left; }
-    .time-block.arr { text-align: right; }
-    .time { font-size: 1.25rem; font-weight: 600; }
+    .city-route .to-word {
+      font-weight: 400;
+      color: var(--muted);
+      font-size: 1.1rem;
+      margin: 0 0.15rem;
+    }
+    .times-row { display: flex; gap: 1.5rem; }
+    .time-chip { display: flex; align-items: center; gap: 0.45rem; }
+    .chip-icon {
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .chip-code { color: var(--muted); font-size: 1rem; font-weight: 600; }
+    .chip-time { font-size: 1.1rem; font-weight: 700; }
     .status {
       display: inline-block;
       padding: 0.2rem 0.6rem;
@@ -239,10 +249,13 @@
     }
     .aircraft-line { font-size: 0.75rem; color: var(--muted); margin-top: 0.3rem; }
     #flight-map {
-      height: 240px;
-      border-radius: 12px;
-      margin-top: 0.75rem;
-      border: 1px solid var(--map-border);
+      height: 320px;
+      margin: 0.85rem 0;
+      margin-left: calc(-1 * max(1rem, env(safe-area-inset-left)));
+      margin-right: calc(-1 * max(1rem, env(safe-area-inset-right)));
+      width: calc(100% + max(1rem, env(safe-area-inset-left)) + max(1rem, env(safe-area-inset-right)));
+      border: none;
+      border-radius: 0;
       z-index: 1;
     }
     .plane-icon {
@@ -351,19 +364,27 @@
   <div class="card current">
     <div class="label">Currently on</div>
     <div class="flight-num">{{ current.callsign }}{% if current.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
-    <div class="route">
-      <span>{{ current.origin }}</span>
-      <span style="color:var(--muted);font-size:1rem">→</span>
-      <span>{{ current.destination }}</span>
-    </div>
-    <div class="times">
-      <div class="time-block">
-        <div class="label">Depart</div>
-        <div class="time">{{ current.dep }}</div>
+    <div class="city-route">{{ current.origin_city }} <span class="to-word">to</span> {{ current.dest_city }}</div>
+    <div class="times-row">
+      <div class="time-chip">
+        <span class="chip-icon">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="7" y1="17" x2="17" y2="7"></line>
+            <polyline points="7 7 17 7 17 17"></polyline>
+          </svg>
+        </span>
+        <span class="chip-code">{{ current.origin }}</span>
+        <span class="chip-time">{{ current.dep }}</span>
       </div>
-      <div class="time-block arr">
-        <div class="label">Arrive</div>
-        <div class="time">{{ current.arr }}</div>
+      <div class="time-chip">
+        <span class="chip-icon">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="7" y1="7" x2="17" y2="17"></line>
+            <polyline points="17 7 17 17 7 17"></polyline>
+          </svg>
+        </span>
+        <span class="chip-code">{{ current.destination }}</span>
+        <span class="chip-time">{{ current.arr }}</span>
       </div>
     </div>
     <span class="status {{ current.status|lower|replace(' ', '-') }}">{{ current.status }}</span>
@@ -393,12 +414,16 @@
       </div>
       {% endif %}
     </div>
-    {% if live.lat is not none and live.lon is not none %}
-    <div id="flight-map"></div>
-    {% endif %}
     {% else %}
     <div class="live-box muted-live">No live ADS-B position right now</div>
     {% endif %}
+  </div>
+
+  {% if live and live.lat is not none and live.lon is not none %}
+  <div id="flight-map"></div>
+  {% endif %}
+
+  <div class="card current">
     {% if current.progress_pct is not none %}
     <div class="progress-wrap">
       <div class="progress-track"><div class="progress-fill" style="width: {{ current.progress_pct }}%"></div></div>
@@ -595,24 +620,23 @@
         pts.push([current.dest_lat, current.dest_lon]);
       }
 
-      // Route: origin → plane → destination (solid segments)
-      if (current && current.origin_lat != null) {
+      // Full planned route: origin straight to destination, muted/dashed —
+      // shows the whole path regardless of how far along the flight is.
+      if (current && current.origin_lat != null && current.dest_lat != null) {
         L.polyline(
-          [[current.origin_lat, current.origin_lon], [live.lat, live.lon]],
-          { color: '#22c55e', weight: 3, opacity: 0.85 }
-        ).addTo(map);
-      }
-      if (current && current.dest_lat != null) {
-        L.polyline(
-          [[live.lat, live.lon], [current.dest_lat, current.dest_lon]],
-          { color: '#3b82f6', weight: 3, opacity: 0.85, dashArray: '6 8' }
+          [[current.origin_lat, current.origin_lon], [current.dest_lat, current.dest_lon]],
+          { color: '#94a3b8', weight: 2, opacity: 0.55, dashArray: '4 8' }
         ).addTo(map);
       }
 
-      // Breadcrumb trail of recent live positions
+      // Actual flown-so-far trail, solid and prominent, drawn on top of the
+      // muted planned line so progress along the route is obvious at a glance.
       const breadcrumb = current && current.breadcrumb ? current.breadcrumb : [];
-      if (breadcrumb.length > 1) {
-        L.polyline(breadcrumb, { color: '#94a3b8', weight: 2, opacity: 0.7, dashArray: '2 6' }).addTo(map);
+      const flownTrail = breadcrumb.length > 1 ? breadcrumb : (
+        current && current.origin_lat != null ? [[current.origin_lat, current.origin_lon], [live.lat, live.lon]] : []
+      );
+      if (flownTrail.length > 1) {
+        L.polyline(flownTrail, { color: '#3b82f6', weight: 3.5, opacity: 0.9 }).addTo(map);
       }
 
       // Plane silhouette – nose points along track (0° = north)

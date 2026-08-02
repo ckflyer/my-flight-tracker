@@ -4,11 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Pilot Tracker · Calendar</title>
-  <link rel="manifest" href="/static/manifest.json">
-  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
-  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
-  <link rel="shortcut icon" href="/static/favicon.ico">
-  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+  <link rel="manifest" href="/static/manifest.json?v={{ version }}">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png?v={{ version }}">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png?v={{ version }}">
+  <link rel="shortcut icon" href="/static/favicon.ico?v={{ version }}">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png?v={{ version }}">
   <style>
     :root, [data-theme="dark"] {
       --bg: #0f1419; --card: #1a2332; --accent: #3b82f6;
@@ -55,10 +55,11 @@
     .weekday-row div { text-align: center; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; color: var(--muted); letter-spacing: 0.03em; }
     .week-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0; margin-bottom: 3px; }
     .day-cell {
-      min-height: 64px;
+      height: 62px;
       display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
       text-decoration: none; color: var(--text); font-size: 0.8rem; position: relative;
       padding: 0.3rem 0.15rem;
+      overflow: hidden;
     }
     .day-cell.out-month { color: var(--muted); opacity: 0.35; }
     .day-cell.is-today .day-num { border: 2px solid var(--accent); border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; }
@@ -123,9 +124,9 @@
           <span class="day-num">{{ day.day }}</span>
           {% if day.start_time %}<div class="time-label">{{ day.start_time }}</div>{% endif %}
           {% if day.finish_time %}<div class="time-label">{{ day.finish_time }}</div>{% endif %}
-          {% for dl in day.day_legs %}
-          <div class="meta-line">{{ dl.route }}{% if dl.is_deadhead %} DH{% endif %}</div>
-          {% endfor %}
+          {% if day.leg_count %}
+          <div class="meta-line">{{ day.leg_count }} leg{{ 's' if day.leg_count != 1 else '' }}</div>
+          {% endif %}
         </a>
         {% else %}
         <div class="day-cell {{ classes|join(' ') }}">

@@ -132,6 +132,8 @@ def leg_view(leg: Optional[FlightLeg], now: datetime, time_format: str = "24") -
         "origin_lon": oi.lon if oi else None,
         "dest_lat": di.lat if di else None,
         "dest_lon": di.lon if di else None,
+        "origin_city": oi.city if oi else leg.origin,
+        "dest_city": di.city if di else leg.destination,
     }
 
 
@@ -693,10 +695,7 @@ async def calendar_page(request: Request):
                 "round_right": bool(trip and (d == trip["end_date"] or is_last_col)),
                 "start_time": trip["start_time"] if trip and d == trip["start_date"] else None,
                 "finish_time": trip["finish_time"] if trip and d == trip["end_date"] else None,
-                "day_legs": [
-                    {"route": f"{l.origin}\u2192{l.destination}", "is_deadhead": l.is_deadhead}
-                    for l in day_legs
-                ],
+                "leg_count": len(day_legs),
             })
             if len(week) == 7:
                 weeks.append(week)
