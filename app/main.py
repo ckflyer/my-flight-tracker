@@ -524,7 +524,7 @@ async def logout(request: Request):
 # ---------------------------------------------------------------------------
 
 @app.get("/", response_class=HTMLResponse)
-async def viewer(request: Request):
+async def viewer(request: Request, leg: Optional[str] = None):
     pilot = current_pilot(request)
     viewer_uid = None if pilot else current_viewer_user_id(request)
     user_id = pilot["id"] if pilot else viewer_uid
@@ -552,11 +552,23 @@ async def viewer(request: Request):
             show_fa = request.cookies.get("pt_viewer_show_fa") == "1"
         if "pt_viewer_show_fr24" in request.cookies:
             show_fr24 = request.cookies.get("pt_viewer_show_fr24") == "1"
-    current = leg_view(info.current, now, tf)
+
+    # Which flight is the map/collapsed card showing? Default: the genuinely
+    # active flight if there is one, else the next upcoming one, else the
+    # most recent past one. A ?leg= param (from tapping a flight in the
+    # list) overrides that, as long as it's a real leg on this schedule.
+    selected_leg = info.current or (info.upcoming[0] if info.upcoming else None) or (info.past[-1] if info.past else None)
+    if leg:
+        match = next((l for l in info.all_legs if l.id == leg), None)
+        if match:
+            selected_leg = match
+    is_selected_live = bool(selected_leg and info.current and selected_leg.id == info.current.id)
+
+    selected = leg_view(selected_leg, now, tf)
     live = None
-    if info.current:
-        dep_utc = info.current.dep_datetime_utc()
-        arr_utc = info.current.arr_datetime_utc()
+    if is_selected_live:
+        dep_utc = selected_leg.dep_datetime_utc()
+        arr_utc = selected_leg.arr_datetime_utc()
         # Poll from 20 min before scheduled departure through 3 hours past
         # scheduled arrival — wide enough to catch taxi-out early and keep
         # tracking through a real delay, capped so we don't poll forever.
@@ -566,21 +578,21 @@ async def viewer(request: Request):
             and now <= arr_utc + timedelta(hours=3)
         )
         if should_poll:
-            live = live_summary(info.current.callsign)
-        if current:
-            history = get_position_history(user_id, info.current.id)
-            current["progress_pct"] = compute_progress(info.current, live, now)
-            current["ete"] = compute_ete(info.current, live, now)
-            current["distance_nm"] = compute_distance_remaining_nm(info.current, live)
-            current["breadcrumb"] = []
-            current["aircraft"] = None
+            live = live_summary(selected_leg.callsign)
+        if selected:
+            history = get_position_history(user_id, selected_leg.id)
+            selected["progress_pct"] = compute_progress(selected_leg, live, now)
+            selected["ete"] = compute_ete(selected_leg, live, now)
+            selected["distance_nm"] = compute_distance_remaining_nm(selected_leg, live)
+            selected["breadcrumb"] = []
+            selected["aircraft"] = None
             if live and live.get("lat") is not None and live.get("lon") is not None:
                 note_aircraft_seen(live.get("icao24"))
-                record_position(user_id, info.current.id, live["lat"], live["lon"], now, live.get("on_ground"))
-                current["breadcrumb"] = get_breadcrumb(user_id, info.current.id)
-                current["aircraft"] = get_aircraft_info(live.get("icao24"))
-                history = get_position_history(user_id, info.current.id)  # include the point just recorded
-            current["status"] = compute_phase(info.current, live, history, now, settings.poll_seconds)
+                record_position(user_id, selected_leg.id, live["lat"], live["lon"], now, live.get("on_ground"))
+                selected["breadcrumb"] = get_breadcrumb(user_id, selected_leg.id)
+                selected["aircraft"] = get_aircraft_info(live.get("icao24"))
+                history = get_position_history(user_id, selected_leg.id)  # include the point just recorded
+            selected["status"] = compute_phase(selected_leg, live, history, now, settings.poll_seconds)
     settings_dict = settings.model_dump()
     settings_dict["theme"] = display_theme
     settings_dict["show_flightaware"] = show_fa
@@ -588,8 +600,10 @@ async def viewer(request: Request):
     day_numbers = _assign_trip_day_numbers(info.all_legs)
     ctx = {
         "request": request,
-        "current": current,
+        "current": selected,
+        "is_selected_live": is_selected_live,
         "live": live,
+        "selected_id": selected_leg.id if selected_leg else None,
         "upcoming_groups": group_legs_by_day(info.upcoming, day_numbers, now, tf),
         "past_groups": group_legs_by_day(info.past, day_numbers, now, tf),
         "past_count": len(info.past),

@@ -127,6 +127,9 @@
       font-weight: 700;
       margin: 0.35rem 0 0.85rem;
       color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .city-route .to-word {
       font-weight: 400;
@@ -135,15 +138,16 @@
       margin: 0 0.15rem;
     }
     .times-row { display: flex; gap: 1.5rem; }
-    .time-chip { display: flex; align-items: center; gap: 0.45rem; }
+    .time-chip { display: flex; align-items: center; gap: 0.4rem; }
     .chip-icon {
-      width: 22px; height: 22px; border-radius: 50%;
-      background: var(--accent);
+      width: 19px; height: 19px; border-radius: 50%;
+      background: var(--muted);
+      opacity: 0.85;
       display: flex; align-items: center; justify-content: center;
       flex-shrink: 0;
     }
-    .chip-code { color: var(--muted); font-size: 1rem; font-weight: 600; }
-    .chip-time { font-size: 1.1rem; font-weight: 700; }
+    .chip-code { color: var(--muted); font-size: 0.92rem; font-weight: 500; }
+    .chip-time { font-size: 0.98rem; font-weight: 600; color: var(--text); }
     .status {
       display: inline-block;
       padding: 0.2rem 0.6rem;
@@ -296,6 +300,102 @@
       margin: 0 0 0.85rem;
       border: 1px solid var(--map-border);
     }
+
+    /* --- Full-bleed map + overlay + collapsed/expand redesign --- */
+    .map-wrap {
+      position: relative;
+      height: 380px;
+      margin: 0 0 0.85rem;
+      margin-left: calc(-1 * max(1rem, env(safe-area-inset-left)));
+      margin-right: calc(-1 * max(1rem, env(safe-area-inset-right)));
+      width: calc(100% + max(1rem, env(safe-area-inset-left)) + max(1rem, env(safe-area-inset-right)));
+    }
+    #flight-map { height: 100%; width: 100%; z-index: 1; }
+    .map-overlay-stats {
+      position: absolute;
+      top: 0.75rem;
+      left: 0.75rem;
+      z-index: 500;
+      background: rgba(15,20,25,0.72);
+      backdrop-filter: blur(6px);
+      border-radius: 10px;
+      padding: 0.5rem 0.75rem;
+      display: flex;
+      gap: 0.9rem;
+      font-size: 0.8rem;
+      color: #fff;
+      font-weight: 600;
+    }
+    .map-overlay-stats .stat-unit { font-weight: 400; opacity: 0.75; font-size: 0.72rem; }
+    .map-controls { position: absolute; top: 0.75rem; right: 0.75rem; z-index: 500; }
+    .map-icon-btn {
+      width: 34px; height: 34px; border-radius: 50%;
+      background: rgba(15,20,25,0.72);
+      backdrop-filter: blur(6px);
+      border: none; color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer;
+    }
+    .map-settings-panel {
+      display: none;
+      position: absolute;
+      top: 40px;
+      right: 0;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.65rem 0.85rem;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+      white-space: nowrap;
+    }
+    .map-settings-panel.open { display: block; }
+    .map-settings-panel label {
+      display: flex; align-items: center; gap: 0.5rem;
+      font-size: 0.82rem; color: var(--text); margin: 0.3rem 0; cursor: pointer;
+    }
+    .map-settings-panel input { width: auto; margin: 0; }
+
+    .collapsed-card {
+      background: var(--card);
+      border-radius: 16px;
+      padding: 1.1rem 1.25rem;
+      margin-bottom: 0.85rem;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+      border: 2px solid var(--accent);
+      cursor: pointer;
+    }
+    .collapsed-card .flight-num { font-size: 1.3rem; }
+    .collapsed-card .city-route {
+      font-size: 1.25rem;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .collapsed-card .chip-icon { width: 18px; height: 18px; }
+    .collapsed-card .chip-code { font-size: 0.88rem; color: var(--muted); font-weight: 500; }
+    .collapsed-card .chip-time { font-size: 0.95rem; font-weight: 600; }
+    .expand-hint {
+      text-align: center;
+      font-size: 0.72rem;
+      color: var(--muted);
+      margin-top: 0.6rem;
+    }
+    .expand-wrap { display: none; }
+    .expand-wrap.open { display: block; }
+
+    .row-flight-num { font-size: 0.95rem; font-weight: 700; }
+    .row-city-route { font-size: 0.85rem; font-weight: 600; margin: 0.15rem 0 0.4rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .row-times-row { display: flex; gap: 1rem; }
+    .row-chip { display: flex; align-items: center; gap: 0.3rem; }
+    .row-chip-icon {
+      width: 16px; height: 16px; border-radius: 50%;
+      background: var(--muted);
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .row-chip-code { color: var(--muted); font-size: 0.78rem; font-weight: 600; }
+    .row-chip-time { font-size: 0.82rem; font-weight: 600; color: var(--muted); }
+    a.flight-row-link { text-decoration: none; color: inherit; display: block; }
   </style>
 </head>
 <body>
@@ -318,57 +418,39 @@
     </div>
   </div>
 
-  {% if past_groups %}
-  <button class="toggle" id="past-toggle" onclick="togglePast()">Show past flights ({{ past_count }})</button>
-  <div id="past-section">
-    {% for group in past_groups %}
-    {% if group.trip_start and not loop.first %}
-    <div class="trip-divider"></div>
-    {% endif %}
-    <div class="card day-card">
-      <div class="day-label">{{ group.date_label }}</div>
-      {% for leg in group.legs %}
-      <div class="upcoming-item">
-        <div class="list-item">
-          <div>
-            <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
-            {{ leg.origin }} → {{ leg.destination }}
-            <div class="meta">{{ leg.dep }} – {{ leg.arr }}</div>
-          </div>
-          <div style="text-align:right">
-            <span class="status {{ leg.status|lower|replace(' ', '-') }}">{{ leg.status }}</span>
-            {% if leg.origin_lat is not none or leg.dest_lat is not none %}
-            <div style="margin-top:0.5rem">
-              <a href="#" data-preview-toggle="past-prev-{{ leg.id }}" style="color:var(--muted);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">Map</a>
-            </div>
-            {% endif %}
-          </div>
-      </div>
-      {% if leg.origin_lat is not none or leg.dest_lat is not none %}
-      <div class="preview-map" id="past-prev-{{ leg.id }}"
-           data-origin-lat="{{ leg.origin_lat }}" data-origin-lon="{{ leg.origin_lon }}"
-           data-dest-lat="{{ leg.dest_lat }}" data-dest-lon="{{ leg.dest_lon }}"
-           data-origin="{{ leg.origin }}" data-dest="{{ leg.destination }}"></div>
-      {% endif %}
-    </div>
-    {% endfor %}
-    </div>
-    {% if group.overnight %}
-    <div class="overnight-label">Overnight in {{ group.overnight.city }} — {{ group.overnight.duration }}</div>
-    {% endif %}
-    {% endfor %}
-  </div>
-  {% endif %}
-
   {% if current %}
-  <div class="card current">
-    <div class="label">Currently on</div>
+  <div class="map-wrap">
+    <div id="flight-map"></div>
+    {% if is_selected_live and live %}
+    <div class="map-overlay-stats" id="map-overlay-stats">
+      {% if live.altitude_ft is not none %}<div>{{ live.altitude_ft }}<span class="stat-unit"> ft</span></div>{% endif %}
+      {% if live.speed_kts is not none %}<div>{{ live.speed_kts }}<span class="stat-unit"> kts</span></div>{% endif %}
+      {% if current.progress_pct is not none %}<div>{{ current.progress_pct }}<span class="stat-unit">%</span></div>{% endif %}
+    </div>
+    {% endif %}
+    <div class="map-controls">
+      <button type="button" class="map-icon-btn" id="map-settings-btn" title="Map layers" aria-label="Map layers">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+      <div class="map-settings-panel" id="map-settings-panel">
+        {% if is_selected_live and live %}
+        <label><input type="checkbox" id="toggle-overlay" checked> Live data overlay</label>
+        {% endif %}
+        <label><input type="checkbox" id="toggle-radar" checked> Weather radar</label>
+      </div>
+    </div>
+  </div>
+
+  <div class="collapsed-card" id="collapsed-card">
     <div class="flight-num">{{ current.callsign }}{% if current.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
     <div class="city-route">{{ current.origin_city }} <span class="to-word">to</span> {{ current.dest_city }}</div>
     <div class="times-row">
       <div class="time-chip">
         <span class="chip-icon">
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <line x1="7" y1="17" x2="17" y2="7"></line>
             <polyline points="7 7 17 7 17 17"></polyline>
           </svg>
@@ -378,7 +460,7 @@
       </div>
       <div class="time-chip">
         <span class="chip-icon">
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <line x1="7" y1="7" x2="17" y2="17"></line>
             <polyline points="17 7 17 17 7 17"></polyline>
           </svg>
@@ -387,115 +469,164 @@
         <span class="chip-time">{{ current.arr }}</span>
       </div>
     </div>
-    <span class="status {{ current.status|lower|replace(' ', '-') }}">{{ current.status }}</span>
-    {% if live %}
-    <div class="live-box">
-      <div class="label">Live ADS-B</div>
-      <div class="live-grid">
-        {% if live.altitude_ft is not none %}
-        <div><span class="live-val">{{ live.altitude_ft }}</span> <span class="live-unit">ft</span></div>
-        {% endif %}
-        {% if live.speed_kts is not none %}
-        <div><span class="live-val">{{ live.speed_kts }}</span> <span class="live-unit">kts</span></div>
-        {% endif %}
-        {% if live.track is not none %}
-        <div><span class="live-val">{{ live.track|int }}°</span> <span class="live-unit">trk</span></div>
-        {% endif %}
-        {% if live.on_ground %}
-        <div><span class="live-val">On ground</span></div>
-        {% endif %}
-      </div>
-      {% if live.icao24 %}
-      <div class="live-meta">ICAO {{ live.icao24 }}{% if live.callsign %} · {{ live.callsign }}{% endif %}</div>
-      {% endif %}
-      {% if current.aircraft and (current.aircraft.registration or current.aircraft.display_type) %}
-      <div class="aircraft-line">
-        {{ current.aircraft.registration or '' }}{% if current.aircraft.registration and current.aircraft.display_type %} · {% endif %}{{ current.aircraft.display_type or '' }}
-      </div>
-      {% endif %}
-    </div>
-    {% else %}
-    <div class="live-box muted-live">No live ADS-B position right now</div>
-    {% endif %}
+    <div class="expand-hint" id="expand-hint">Tap for details &#9662;</div>
   </div>
 
-  {% if live and live.lat is not none and live.lon is not none %}
-  <div id="flight-map"></div>
-  {% endif %}
-
-  <div class="card current">
-    {% if current.progress_pct is not none %}
-    <div class="progress-wrap">
-      <div class="progress-track"><div class="progress-fill" style="width: {{ current.progress_pct }}%"></div></div>
-      <div class="progress-label">
-        <span>{{ current.progress_pct }}% en route</span>
-        {% if current.distance_nm is not none %}<span>{{ current.distance_nm }} nm to go</span>{% endif %}
-        {% if current.ete %}<span>ETE {{ current.ete }}</span>{% endif %}
-      </div>
-    </div>
-    {% endif %}
-    <div class="buttons">
-      {% if settings.show_flightaware %}
-      <a class="btn" data-fa-link href="{{ current.links.flightaware }}" target="_blank" rel="noopener">FlightAware</a>
-      {% endif %}
-      {% if settings.show_fr24 %}
-      <a class="btn {% if settings.show_flightaware %}secondary{% endif %}" data-fr24-link href="{{ current.links.fr24 }}" target="_blank" rel="noopener">FlightRadar24</a>
-      {% endif %}
-    </div>
-  </div>
-  {% endif %}
-
-  {% if upcoming_groups %}
-  <div class="section-label">Upcoming</div>
-  {% for group in upcoming_groups %}
-  {% if group.trip_start and not loop.first %}
-  <div class="trip-divider"></div>
-  {% endif %}
-  <div class="card day-card">
-    <div class="day-label">{{ group.date_label }}</div>
-    {% for leg in group.legs %}
-    <div class="upcoming-item">
-      <div class="list-item">
-        <div>
-          <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
-          {{ leg.origin }} → {{ leg.destination }}
-          <div class="meta">{{ leg.dep }} – {{ leg.arr }}</div>
-        </div>
-        <div style="text-align:right">
-          <span class="status {{ leg.status|lower|replace(' ', '-') }}">{{ leg.status }}</span>
-          <div style="margin-top:0.5rem">
-            {% if settings.show_flightaware %}
-            <a data-fa-link href="{{ leg.links.flightaware }}" target="_blank" rel="noopener" style="color:var(--accent);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">FlightAware</a>
+  <div class="expand-wrap" id="expand-wrap">
+    <div class="card current">
+      <span class="status {{ current.status|lower|replace(' ', '-') }}">{{ current.status }}</span>
+      {% if is_selected_live %}
+        {% if live %}
+        <div class="live-box">
+          <div class="label">Live ADS-B</div>
+          <div class="live-grid">
+            {% if live.altitude_ft is not none %}
+            <div><span class="live-val">{{ live.altitude_ft }}</span> <span class="live-unit">ft</span></div>
             {% endif %}
-            {% if settings.show_flightaware and settings.show_fr24 %}
-            <span style="color:var(--muted)">·</span>
+            {% if live.speed_kts is not none %}
+            <div><span class="live-val">{{ live.speed_kts }}</span> <span class="live-unit">kts</span></div>
             {% endif %}
-            {% if settings.show_fr24 %}
-            <a data-fr24-link href="{{ leg.links.fr24 }}" target="_blank" rel="noopener" style="color:var(--muted);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">FR24</a>
+            {% if live.track is not none %}
+            <div><span class="live-val">{{ live.track|int }}°</span> <span class="live-unit">trk</span></div>
             {% endif %}
-            {% if leg.origin_lat is not none or leg.dest_lat is not none %}
-            <span style="color:var(--muted)">·</span>
-            <a href="#" data-preview-toggle="prev-{{ leg.id }}" style="color:var(--muted);font-size:0.95rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">Map</a>
+            {% if live.on_ground %}
+            <div><span class="live-val">On ground</span></div>
             {% endif %}
           </div>
+          {% if live.icao24 %}
+          <div class="live-meta">ICAO {{ live.icao24 }}{% if live.callsign %} · {{ live.callsign }}{% endif %}</div>
+          {% endif %}
+          {% if current.aircraft and (current.aircraft.registration or current.aircraft.display_type) %}
+          <div class="aircraft-line">
+            {{ current.aircraft.registration or '' }}{% if current.aircraft.registration and current.aircraft.display_type %} · {% endif %}{{ current.aircraft.display_type or '' }}
+          </div>
+          {% endif %}
+        </div>
+        {% else %}
+        <div class="live-box muted-live">No live ADS-B position right now</div>
+        {% endif %}
+      {% endif %}
+      {% if current.progress_pct is not none %}
+      <div class="progress-wrap">
+        <div class="progress-track"><div class="progress-fill" style="width: {{ current.progress_pct }}%"></div></div>
+        <div class="progress-label">
+          <span>{{ current.progress_pct }}% en route</span>
+          {% if current.distance_nm is not none %}<span>{{ current.distance_nm }} nm to go</span>{% endif %}
+          {% if current.ete %}<span>ETE {{ current.ete }}</span>{% endif %}
         </div>
       </div>
-      {% if leg.origin_lat is not none or leg.dest_lat is not none %}
-      <div class="preview-map" id="prev-{{ leg.id }}"
-           data-origin-lat="{{ leg.origin_lat }}" data-origin-lon="{{ leg.origin_lon }}"
-           data-dest-lat="{{ leg.dest_lat }}" data-dest-lon="{{ leg.dest_lon }}"
-           data-origin="{{ leg.origin }}" data-dest="{{ leg.destination }}"></div>
       {% endif %}
+      <div class="buttons">
+        {% if settings.show_flightaware %}
+        <a class="btn" data-fa-link href="{{ current.links.flightaware }}" target="_blank" rel="noopener">FlightAware</a>
+        {% endif %}
+        {% if settings.show_fr24 %}
+        <a class="btn {% if settings.show_flightaware %}secondary{% endif %}" data-fr24-link href="{{ current.links.fr24 }}" target="_blank" rel="noopener">FlightRadar24</a>
+        {% endif %}
+      </div>
     </div>
+
+    {% if upcoming_groups %}
+    <div class="section-label">Upcoming</div>
+    {% for group in upcoming_groups %}
+    {% if group.trip_start and not loop.first %}
+    <div class="trip-divider"></div>
+    {% endif %}
+    <div class="card day-card">
+      <div class="day-label">{{ group.date_label }}</div>
+      {% for leg in group.legs %}
+      <div class="upcoming-item {% if leg.id == selected_id %}selected-row{% endif %}">
+        <div class="list-item">
+          <a class="flight-row-link" href="/?leg={{ leg.id }}">
+            <div class="row-flight-num">{{ leg.callsign }}{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
+            <div class="row-city-route">{{ leg.origin }} → {{ leg.destination }}</div>
+            <div class="row-times-row">
+              <div class="row-chip"><span class="row-chip-icon"></span><span class="row-chip-time">{{ leg.dep }}</span></div>
+              <div class="row-chip"><span class="row-chip-icon"></span><span class="row-chip-time">{{ leg.arr }}</span></div>
+            </div>
+          </a>
+          <div style="text-align:right">
+            <span class="status {{ leg.status|lower|replace(' ', '-') }}">{{ leg.status }}</span>
+            <div style="margin-top:0.5rem">
+              {% if settings.show_flightaware %}
+              <a data-fa-link href="{{ leg.links.flightaware }}" target="_blank" rel="noopener" style="color:var(--accent);font-size:0.85rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">FlightAware</a>
+              {% endif %}
+              {% if settings.show_flightaware and settings.show_fr24 %}
+              <span style="color:var(--muted)">·</span>
+              {% endif %}
+              {% if settings.show_fr24 %}
+              <a data-fr24-link href="{{ leg.links.fr24 }}" target="_blank" rel="noopener" style="color:var(--muted);font-size:0.85rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">FR24</a>
+              {% endif %}
+              {% if leg.origin_lat is not none or leg.dest_lat is not none %}
+              <span style="color:var(--muted)">·</span>
+              <a href="#" data-preview-toggle="prev-{{ leg.id }}" style="color:var(--muted);font-size:0.85rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">Map</a>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        {% if leg.origin_lat is not none or leg.dest_lat is not none %}
+        <div class="preview-map" id="prev-{{ leg.id }}"
+             data-origin-lat="{{ leg.origin_lat }}" data-origin-lon="{{ leg.origin_lon }}"
+             data-dest-lat="{{ leg.dest_lat }}" data-dest-lon="{{ leg.dest_lon }}"
+             data-origin="{{ leg.origin }}" data-dest="{{ leg.destination }}"></div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% if group.overnight %}
+    <div class="overnight-label">Overnight in {{ group.overnight.city }} — {{ group.overnight.duration }}</div>
+    {% endif %}
     {% endfor %}
+    {% endif %}
+
+    {% if past_groups %}
+    <button class="toggle" id="past-toggle" onclick="togglePast()">Show past flights ({{ past_count }})</button>
+    <div id="past-section">
+      {% for group in past_groups %}
+      {% if group.trip_start and not loop.first %}
+      <div class="trip-divider"></div>
+      {% endif %}
+      <div class="card day-card">
+        <div class="day-label">{{ group.date_label }}</div>
+        {% for leg in group.legs %}
+        <div class="upcoming-item {% if leg.id == selected_id %}selected-row{% endif %}">
+          <div class="list-item">
+            <a class="flight-row-link" href="/?leg={{ leg.id }}">
+              <div class="row-flight-num">{{ leg.callsign }}{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
+              <div class="row-city-route">{{ leg.origin }} → {{ leg.destination }}</div>
+              <div class="row-times-row">
+                <div class="row-chip"><span class="row-chip-icon"></span><span class="row-chip-time">{{ leg.dep }}</span></div>
+                <div class="row-chip"><span class="row-chip-icon"></span><span class="row-chip-time">{{ leg.arr }}</span></div>
+              </div>
+            </a>
+            <div style="text-align:right">
+              <span class="status {{ leg.status|lower|replace(' ', '-') }}">{{ leg.status }}</span>
+              {% if leg.origin_lat is not none or leg.dest_lat is not none %}
+              <div style="margin-top:0.5rem">
+                <a href="#" data-preview-toggle="past-prev-{{ leg.id }}" style="color:var(--muted);font-size:0.85rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">Map</a>
+              </div>
+              {% endif %}
+            </div>
+          </div>
+          {% if leg.origin_lat is not none or leg.dest_lat is not none %}
+          <div class="preview-map" id="past-prev-{{ leg.id }}"
+               data-origin-lat="{{ leg.origin_lat }}" data-origin-lon="{{ leg.origin_lon }}"
+               data-dest-lat="{{ leg.dest_lat }}" data-dest-lon="{{ leg.dest_lon }}"
+               data-origin="{{ leg.origin }}" data-dest="{{ leg.destination }}"></div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% if group.overnight %}
+      <div class="overnight-label">Overnight in {{ group.overnight.city }} — {{ group.overnight.duration }}</div>
+      {% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
   </div>
-  {% if group.overnight %}
-  <div class="overnight-label">Overnight in {{ group.overnight.city }} — {{ group.overnight.duration }}</div>
-  {% endif %}
-  {% endfor %}
   {% endif %}
 
-  {% if not current and not upcoming_groups and not past_groups %}
+  {% if not current %}
   <div class="card empty">
     No flights in the schedule.<br>
     <span style="font-size:0.85rem">Import a schedule on the admin page.</span>
@@ -524,10 +655,11 @@
       });
     })();
 
-    // Collapsible origin/destination preview map for upcoming flights
+    // Collapsible origin/destination preview map for upcoming/past flights
     document.querySelectorAll('[data-preview-toggle]').forEach(function(link) {
       link.addEventListener('click', function(e) {
         e.preventDefault();
+        e.stopPropagation();
         var el = document.getElementById(link.getAttribute('data-preview-toggle'));
         if (!el) return;
         var isOpen = el.style.display === 'block';
@@ -540,8 +672,9 @@
           var oLat = parseFloat(el.dataset.originLat), oLon = parseFloat(el.dataset.originLon);
           var dLat = parseFloat(el.dataset.destLat), dLon = parseFloat(el.dataset.destLon);
           var map = L.map(el, { zoomControl: false });
-          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            maxZoom: 10, attribution: '&copy; OpenStreetMap'
+          var mapTheme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light_all' : 'dark_all';
+          L.tileLayer('https://{s}.basemaps.cartocdn.com/' + mapTheme + '/{z}/{x}/{y}{r}.png', {
+            maxZoom: 18, attribution: '&copy; OpenStreetMap &copy; CARTO'
           }).addTo(map);
           var pts = [];
           if (!isNaN(oLat) && !isNaN(oLon)) {
@@ -577,33 +710,96 @@
       }
     }
 
+    // Tap the collapsed card to reveal full details + the flight list
+    (function() {
+      var card = document.getElementById('collapsed-card');
+      var wrap = document.getElementById('expand-wrap');
+      var hint = document.getElementById('expand-hint');
+      if (!card || !wrap) return;
+      card.addEventListener('click', function() {
+        wrap.classList.toggle('open');
+        hint.innerHTML = wrap.classList.contains('open') ? 'Tap to collapse &#9652;' : 'Tap for details &#9662;';
+        if (wrap.classList.contains('open')) {
+          setTimeout(function() {
+            var mapEl = document.getElementById('flight-map');
+            if (mapEl && mapEl._leafletInstance) mapEl._leafletInstance.invalidateSize();
+          }, 50);
+        }
+      });
+    })();
+
+    // Map layer toggle popover (live overlay + radar), preferences kept in
+    // localStorage since this page auto-reloads periodically and the choice
+    // shouldn't reset every refresh.
+    (function() {
+      var btn = document.getElementById('map-settings-btn');
+      var panel = document.getElementById('map-settings-panel');
+      if (!btn || !panel) return;
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        panel.classList.toggle('open');
+      });
+      document.addEventListener('click', function(e) {
+        if (!panel.contains(e.target) && e.target !== btn) panel.classList.remove('open');
+      });
+
+      var overlayToggle = document.getElementById('toggle-overlay');
+      var radarToggle = document.getElementById('toggle-radar');
+      var overlayEl = document.getElementById('map-overlay-stats');
+
+      var overlayPref = localStorage.getItem('pt_map_overlay');
+      var radarPref = localStorage.getItem('pt_map_radar');
+      if (overlayToggle && overlayPref === '0') overlayToggle.checked = false;
+      if (radarToggle && radarPref === '0') radarToggle.checked = false;
+      if (overlayEl && overlayToggle && !overlayToggle.checked) overlayEl.style.display = 'none';
+
+      if (overlayToggle) {
+        overlayToggle.addEventListener('change', function() {
+          localStorage.setItem('pt_map_overlay', overlayToggle.checked ? '1' : '0');
+          if (overlayEl) overlayEl.style.display = overlayToggle.checked ? 'flex' : 'none';
+        });
+      }
+      if (radarToggle) {
+        radarToggle.addEventListener('change', function() {
+          localStorage.setItem('pt_map_radar', radarToggle.checked ? '1' : '0');
+          if (window._ptRadarLayer) {
+            if (radarToggle.checked) window._ptRadarLayer.setOpacity(0.55);
+            else window._ptRadarLayer.setOpacity(0);
+          }
+        });
+      }
+      window._ptRadarPrefOff = (radarPref === '0');
+    })();
+
     (function() {
       const mapEl = document.getElementById('flight-map');
       if (!mapEl) return;
 
       const live = {{ live | tojson if live else 'null' }};
       const current = {{ current | tojson if current else 'null' }};
-      if (!live || live.lat == null || live.lon == null) return;
+      const isSelectedLive = {{ 'true' if is_selected_live else 'false' }};
 
       const map = L.map('flight-map', { zoomControl: true });
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 12,
-        attribution: '&copy; OpenStreetMap'
+      mapEl._leafletInstance = map;
+      const mapTheme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light_all' : 'dark_all';
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/' + mapTheme + '/{z}/{x}/{y}{r}.png', {
+        maxZoom: 18,
+        attribution: '&copy; OpenStreetMap &copy; CARTO'
       }).addTo(map);
 
-      // Weather radar overlay (current flight's map only) — Iowa Environmental
-      // Mesonet's free public NEXRAD composite, no key required. This is the
-      // classic green/yellow/orange/red/purple reflectivity scale, and it's
-      // US-only (CONUS), which covers every route in this schedule.
-      L.tileLayer.wms('https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/n0q.cgi', {
+      // Weather radar overlay — Iowa Environmental Mesonet's free public
+      // NEXRAD composite, no key required. US-only (CONUS), which covers
+      // every route in this schedule. Respects the map-settings toggle.
+      const radarLayer = L.tileLayer.wms('https://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/n0q.cgi', {
         layers: 'nexrad-n0q',
         format: 'image/png',
         transparent: true,
-        opacity: 0.55,
+        opacity: window._ptRadarPrefOff ? 0 : 0.55,
         attribution: 'Radar &copy; IEM NEXRAD'
       }).addTo(map);
+      window._ptRadarLayer = radarLayer;
 
-      const pts = [[live.lat, live.lon]];
+      const pts = [];
 
       // Origin marker
       if (current && current.origin_lat != null) {
@@ -620,45 +816,54 @@
         pts.push([current.dest_lat, current.dest_lon]);
       }
 
-      // Full planned route: origin straight to destination, muted/dashed —
-      // shows the whole path regardless of how far along the flight is.
-      if (current && current.origin_lat != null && current.dest_lat != null) {
+      if (isSelectedLive && live && live.lat != null && live.lon != null) {
+        pts.push([live.lat, live.lon]);
+
+        // Remaining path: current position straight to destination, dashed.
+        if (current && current.dest_lat != null) {
+          L.polyline(
+            [[live.lat, live.lon], [current.dest_lat, current.dest_lon]],
+            { color: '#3b82f6', weight: 2.5, opacity: 0.7, dashArray: '6 8' }
+          ).addTo(map);
+        }
+
+        // Actual flown-so-far trail: solid and prominent, the real breadcrumb path.
+        const breadcrumb = current && current.breadcrumb ? current.breadcrumb : [];
+        const flownTrail = breadcrumb.length > 1 ? breadcrumb : (
+          current && current.origin_lat != null ? [[current.origin_lat, current.origin_lon], [live.lat, live.lon]] : []
+        );
+        if (flownTrail.length > 1) {
+          L.polyline(flownTrail, { color: '#3b82f6', weight: 3.5, opacity: 0.9 }).addTo(map);
+        }
+
+        // Plane silhouette – nose points along track (0° = north)
+        const track = (live.track != null) ? Number(live.track) : 0;
+        const svg = `
+          <svg width="40" height="40" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"
+               style="transform: rotate(${track}deg); transform-origin: 20px 20px; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.55));">
+            <path fill="#ffffff" stroke="#0f172a" stroke-width="1" stroke-linejoin="round"
+              d="M20 2 L23.5 14 L36 18 L36 21 L23.5 19.5 L22 30 L27 34 L27 36 L20 33 L13 36 L13 34 L18 30 L16.5 19.5 L4 21 L4 18 L16.5 14 Z"/>
+          </svg>`;
+        const planeIcon = L.divIcon({
+          className: 'plane-icon',
+          html: svg,
+          iconSize: [40, 40],
+          iconAnchor: [20, 20]
+        });
+        L.marker([live.lat, live.lon], { icon: planeIcon, zIndexOffset: 1000 })
+          .addTo(map)
+          .bindPopup('Live position');
+      } else if (current && current.origin_lat != null && current.dest_lat != null) {
+        // Not the live flight (or no live signal yet) — just show the plain
+        // planned route between origin and destination.
         L.polyline(
           [[current.origin_lat, current.origin_lon], [current.dest_lat, current.dest_lon]],
-          { color: '#94a3b8', weight: 2, opacity: 0.55, dashArray: '4 8' }
+          { color: '#94a3b8', weight: 2, opacity: 0.7, dashArray: '4 8' }
         ).addTo(map);
       }
 
-      // Actual flown-so-far trail, solid and prominent, drawn on top of the
-      // muted planned line so progress along the route is obvious at a glance.
-      const breadcrumb = current && current.breadcrumb ? current.breadcrumb : [];
-      const flownTrail = breadcrumb.length > 1 ? breadcrumb : (
-        current && current.origin_lat != null ? [[current.origin_lat, current.origin_lon], [live.lat, live.lon]] : []
-      );
-      if (flownTrail.length > 1) {
-        L.polyline(flownTrail, { color: '#3b82f6', weight: 3.5, opacity: 0.9 }).addTo(map);
-      }
-
-      // Plane silhouette – nose points along track (0° = north)
-      const track = (live.track != null) ? Number(live.track) : 0;
-      const svg = `
-        <svg width="40" height="40" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"
-             style="transform: rotate(${track}deg); transform-origin: 20px 20px; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.55));">
-          <path fill="#ffffff" stroke="#0f172a" stroke-width="1" stroke-linejoin="round"
-            d="M20 2 L23.5 14 L36 18 L36 21 L23.5 19.5 L22 30 L27 34 L27 36 L20 33 L13 36 L13 34 L18 30 L16.5 19.5 L4 21 L4 18 L16.5 14 Z"/>
-        </svg>`;
-      const planeIcon = L.divIcon({
-        className: 'plane-icon',
-        html: svg,
-        iconSize: [40, 40],
-        iconAnchor: [20, 20]
-      });
-      L.marker([live.lat, live.lon], { icon: planeIcon, zIndexOffset: 1000 })
-        .addTo(map)
-        .bindPopup('Live position');
-
       if (pts.length === 1) map.setView(pts[0], 7);
-      else map.fitBounds(pts, { padding: [36, 36], maxZoom: 8 });
+      else if (pts.length > 1) map.fitBounds(pts, { padding: [36, 36], maxZoom: 8 });
     })();
 
     setTimeout(() => location.reload(), {{ poll_ms }});
