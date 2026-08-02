@@ -523,6 +523,58 @@ async def logout(request: Request):
 # Tracker (viewer) — pilot or valid share-code session
 # ---------------------------------------------------------------------------
 
+def resolve_selected_leg(info, leg_id: Optional[str]):
+    """Which flight is the map/collapsed card showing? Default: the
+    genuinely active flight if there is one, else the next upcoming one,
+    else the most recent past one. A leg_id (from tapping a flight in the
+    list) overrides that, as long as it's a real leg on this schedule."""
+    selected_leg = info.current or (info.upcoming[0] if info.upcoming else None) or (info.past[-1] if info.past else None)
+    if leg_id:
+        match = next((l for l in info.all_legs if l.id == leg_id), None)
+        if match:
+            selected_leg = match
+    is_selected_live = bool(selected_leg and info.current and selected_leg.id == info.current.id)
+    return selected_leg, is_selected_live
+
+
+def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now: datetime, poll_seconds: int):
+    """Live ADS-B + progress/ETE/breadcrumb/aircraft/phase for the selected
+    leg, if it's genuinely the active one. Shared by the full page render
+    and the lightweight polling endpoint so the two never drift apart."""
+    live = None
+    extra = {"progress_pct": None, "ete": None, "distance_nm": None, "breadcrumb": [], "aircraft": None, "status": None}
+    if not selected_leg:
+        return live, extra
+    if not is_selected_live:
+        extra["status"] = selected_leg.status_at(now)
+        return live, extra
+
+    dep_utc = selected_leg.dep_datetime_utc()
+    arr_utc = selected_leg.arr_datetime_utc()
+    # Poll from 20 min before scheduled departure through 3 hours past
+    # scheduled arrival — wide enough to catch taxi-out early and keep
+    # tracking through a real delay, capped so we don't poll forever.
+    should_poll = (
+        dep_utc and arr_utc
+        and now >= dep_utc - timedelta(minutes=20)
+        and now <= arr_utc + timedelta(hours=3)
+    )
+    if should_poll:
+        live = live_summary(selected_leg.callsign)
+    history = get_position_history(user_id, selected_leg.id)
+    extra["progress_pct"] = compute_progress(selected_leg, live, now)
+    extra["ete"] = compute_ete(selected_leg, live, now)
+    extra["distance_nm"] = compute_distance_remaining_nm(selected_leg, live)
+    if live and live.get("lat") is not None and live.get("lon") is not None:
+        note_aircraft_seen(live.get("icao24"))
+        record_position(user_id, selected_leg.id, live["lat"], live["lon"], now, live.get("on_ground"))
+        extra["breadcrumb"] = get_breadcrumb(user_id, selected_leg.id)
+        extra["aircraft"] = get_aircraft_info(live.get("icao24"))
+        history = get_position_history(user_id, selected_leg.id)  # include the point just recorded
+    extra["status"] = compute_phase(selected_leg, live, history, now, poll_seconds)
+    return live, extra
+
+
 @app.get("/", response_class=HTMLResponse)
 async def viewer(request: Request, leg: Optional[str] = None):
     pilot = current_pilot(request)
@@ -553,46 +605,11 @@ async def viewer(request: Request, leg: Optional[str] = None):
         if "pt_viewer_show_fr24" in request.cookies:
             show_fr24 = request.cookies.get("pt_viewer_show_fr24") == "1"
 
-    # Which flight is the map/collapsed card showing? Default: the genuinely
-    # active flight if there is one, else the next upcoming one, else the
-    # most recent past one. A ?leg= param (from tapping a flight in the
-    # list) overrides that, as long as it's a real leg on this schedule.
-    selected_leg = info.current or (info.upcoming[0] if info.upcoming else None) or (info.past[-1] if info.past else None)
-    if leg:
-        match = next((l for l in info.all_legs if l.id == leg), None)
-        if match:
-            selected_leg = match
-    is_selected_live = bool(selected_leg and info.current and selected_leg.id == info.current.id)
-
+    selected_leg, is_selected_live = resolve_selected_leg(info, leg)
     selected = leg_view(selected_leg, now, tf)
-    live = None
-    if is_selected_live:
-        dep_utc = selected_leg.dep_datetime_utc()
-        arr_utc = selected_leg.arr_datetime_utc()
-        # Poll from 20 min before scheduled departure through 3 hours past
-        # scheduled arrival — wide enough to catch taxi-out early and keep
-        # tracking through a real delay, capped so we don't poll forever.
-        should_poll = (
-            dep_utc and arr_utc
-            and now >= dep_utc - timedelta(minutes=20)
-            and now <= arr_utc + timedelta(hours=3)
-        )
-        if should_poll:
-            live = live_summary(selected_leg.callsign)
-        if selected:
-            history = get_position_history(user_id, selected_leg.id)
-            selected["progress_pct"] = compute_progress(selected_leg, live, now)
-            selected["ete"] = compute_ete(selected_leg, live, now)
-            selected["distance_nm"] = compute_distance_remaining_nm(selected_leg, live)
-            selected["breadcrumb"] = []
-            selected["aircraft"] = None
-            if live and live.get("lat") is not None and live.get("lon") is not None:
-                note_aircraft_seen(live.get("icao24"))
-                record_position(user_id, selected_leg.id, live["lat"], live["lon"], now, live.get("on_ground"))
-                selected["breadcrumb"] = get_breadcrumb(user_id, selected_leg.id)
-                selected["aircraft"] = get_aircraft_info(live.get("icao24"))
-                history = get_position_history(user_id, selected_leg.id)  # include the point just recorded
-            selected["status"] = compute_phase(selected_leg, live, history, now, settings.poll_seconds)
+    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, settings.poll_seconds)
+    if selected:
+        selected.update(extra)
     settings_dict = settings.model_dump()
     settings_dict["theme"] = display_theme
     settings_dict["show_flightaware"] = show_fa
@@ -937,3 +954,38 @@ async def api_current(request: Request):
         return {"error": "not authenticated"}
     info = get_current_info(user_id)
     return info.model_dump(mode="json")
+
+
+@app.get("/api/selected")
+async def api_selected(request: Request, leg: Optional[str] = None):
+    """Lightweight polling endpoint: just the live/progress data for the
+    selected flight, as JSON. Used by the tracker page to refresh the map
+    and stats in place every poll cycle, instead of reloading the whole
+    page (which used to reset scroll position, collapse state, and any
+    manual map pan/zoom every single refresh)."""
+    pilot = current_pilot(request)
+    viewer_uid = None if pilot else current_viewer_user_id(request)
+    user_id = pilot["id"] if pilot else viewer_uid
+    if not user_id:
+        return {"error": "not authenticated"}
+
+    settings = load_settings(user_id)
+    apply_opensky_env(settings)
+    info = get_current_info(user_id)
+    now = datetime.now(ZoneInfo("UTC"))
+    selected_leg, is_selected_live = resolve_selected_leg(info, leg)
+    if not selected_leg:
+        return {"error": "no flight"}
+    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, settings.poll_seconds)
+    return {
+        "is_selected_live": is_selected_live,
+        "live": live,
+        "status": extra.get("status"),
+        "progress_pct": extra.get("progress_pct"),
+        "ete": extra.get("ete"),
+        "distance_nm": extra.get("distance_nm"),
+        "breadcrumb": extra.get("breadcrumb", []),
+        "aircraft": extra.get("aircraft"),
+        "origin": {"lat": selected_leg.origin_info.lat, "lon": selected_leg.origin_info.lon} if selected_leg.origin_info else None,
+        "destination": {"lat": selected_leg.dest_info.lat, "lon": selected_leg.dest_info.lon} if selected_leg.dest_info else None,
+    }
