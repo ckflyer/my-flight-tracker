@@ -359,8 +359,9 @@
       margin-bottom: 0.85rem;
       box-shadow: 0 4px 20px rgba(0,0,0,0.12);
       border: 2px solid var(--accent);
-      cursor: pointer;
     }
+    .expand-details { display: none; margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid var(--border); }
+    .expand-details.open { display: block; }
     .collapsed-card .flight-num { font-size: 1.3rem; }
     .collapsed-card .city-route {
       font-size: 1.25rem;
@@ -454,35 +455,34 @@
   </div>
 
   <div class="collapsed-card" id="collapsed-card">
-    <div class="flight-num">{{ current.callsign }}{% if current.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
-    <div class="city-route">{{ current.origin_city }} <span class="to-word">to</span> {{ current.dest_city }}</div>
-    <div class="times-row">
-      <div class="time-chip">
-        <span class="chip-icon">
-          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="7" y1="17" x2="17" y2="7"></line>
-            <polyline points="7 7 17 7 17 17"></polyline>
-          </svg>
-        </span>
-        <span class="chip-code">{{ current.origin }}</span>
-        <span class="chip-time">{{ current.dep }}</span>
-      </div>
-      <div class="time-chip">
-        <span class="chip-icon">
-          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="7" y1="7" x2="17" y2="17"></line>
-            <polyline points="17 7 17 17 7 17"></polyline>
-          </svg>
-        </span>
-        <span class="chip-code">{{ current.destination }}</span>
-        <span class="chip-time">{{ current.arr }}</span>
+    <div id="collapsed-card-header">
+      <div class="flight-num">{{ current.callsign }}{% if current.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
+      <div class="city-route">{{ current.origin_city }} <span class="to-word">to</span> {{ current.dest_city }}</div>
+      <div class="times-row">
+        <div class="time-chip">
+          <span class="chip-icon">
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="7" y1="17" x2="17" y2="7"></line>
+              <polyline points="7 7 17 7 17 17"></polyline>
+            </svg>
+          </span>
+          <span class="chip-code">{{ current.origin }}</span>
+          <span class="chip-time">{{ current.dep }}</span>
+        </div>
+        <div class="time-chip">
+          <span class="chip-icon">
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="7" y1="7" x2="17" y2="17"></line>
+              <polyline points="17 7 17 17 7 17"></polyline>
+            </svg>
+          </span>
+          <span class="chip-code">{{ current.destination }}</span>
+          <span class="chip-time">{{ current.arr }}</span>
+        </div>
       </div>
     </div>
-  </div>
-  <div class="expand-hint" id="expand-hint">Tap for more &#9662;</div>
 
-  <div class="expand-wrap" id="expand-wrap">
-    <div class="card current">
+    <div class="expand-details" id="expand-details">
       <span class="status {{ current.status|lower|replace(' ', '-') }}" id="status-badge">{{ current.status }}</span>
       {% if is_selected_live %}
       <div class="live-box {{ '' if live else 'muted-live' }}" id="live-box-el">
@@ -534,7 +534,10 @@
         {% endif %}
       </div>
     </div>
+  </div>
+  <div class="expand-hint" id="expand-hint">Tap for more &#9662;</div>
 
+  <div class="expand-wrap" id="expand-wrap">
     {% if past_groups %}
     <button class="toggle" id="past-toggle" onclick="togglePast()">Show past flights ({{ past_count }})</button>
     <div id="past-section">
@@ -562,6 +565,23 @@
                 <a href="#" data-preview-toggle="past-prev-{{ leg.id }}" style="color:var(--muted);font-size:0.85rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">Map</a>
               </div>
               {% endif %}
+            </div>
+          </div>
+          {% if leg.origin_lat is not none or leg.dest_lat is not none %}
+          <div class="preview-map" id="past-prev-{{ leg.id }}"
+               data-origin-lat="{{ leg.origin_lat }}" data-origin-lon="{{ leg.origin_lon }}"
+               data-dest-lat="{{ leg.dest_lat }}" data-dest-lon="{{ leg.dest_lon }}"
+               data-origin="{{ leg.origin }}" data-dest="{{ leg.destination }}"></div>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% if group.overnight %}
+      <div class="overnight-label">Overnight in {{ group.overnight.city }} — {{ group.overnight.duration }}</div>
+      {% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
 
     {% if upcoming_groups %}
     <div class="section-label">Upcoming</div>
@@ -614,24 +634,6 @@
     <div class="overnight-label">Overnight in {{ group.overnight.city }} — {{ group.overnight.duration }}</div>
     {% endif %}
     {% endfor %}
-    {% endif %}
-
-            </div>
-          </div>
-          {% if leg.origin_lat is not none or leg.dest_lat is not none %}
-          <div class="preview-map" id="past-prev-{{ leg.id }}"
-               data-origin-lat="{{ leg.origin_lat }}" data-origin-lon="{{ leg.origin_lon }}"
-               data-dest-lat="{{ leg.dest_lat }}" data-dest-lon="{{ leg.dest_lon }}"
-               data-origin="{{ leg.origin }}" data-dest="{{ leg.destination }}"></div>
-          {% endif %}
-        </div>
-        {% endfor %}
-      </div>
-      {% if group.overnight %}
-      <div class="overnight-label">Overnight in {{ group.overnight.city }} — {{ group.overnight.duration }}</div>
-      {% endif %}
-      {% endfor %}
-    </div>
     {% endif %}
   </div>
   {% endif %}
@@ -723,12 +725,14 @@
     // Tap the collapsed card (or the hint text below it) to reveal full
     // details + the flight list
     (function() {
-      var card = document.getElementById('collapsed-card');
+      var header = document.getElementById('collapsed-card-header');
+      var details = document.getElementById('expand-details');
       var wrap = document.getElementById('expand-wrap');
       var hint = document.getElementById('expand-hint');
-      if (!card || !wrap) return;
+      if (!header || !wrap) return;
       function toggle() {
         wrap.classList.toggle('open');
+        if (details) details.classList.toggle('open');
         hint.innerHTML = wrap.classList.contains('open') ? 'Tap to collapse &#9652;' : 'Tap for more &#9662;';
         if (wrap.classList.contains('open')) {
           setTimeout(function() {
@@ -737,7 +741,8 @@
           }, 50);
         }
       }
-      card.addEventListener('click', toggle);
+      header.style.cursor = 'pointer';
+      header.addEventListener('click', toggle);
       if (hint) hint.addEventListener('click', toggle);
     })();
 
@@ -985,7 +990,7 @@
       // Infrequent full-page safety net: picks up things a live-data-only
       // refresh can't (e.g. a different flight becoming the active one),
       // without disrupting the view on every normal poll cycle.
-      setInterval(function() { location.reload(); }, 15 * 60 * 1000);
+      setInterval(function() { location.reload(); }, 5 * 60 * 1000);
     })();
   </script>
 </body>
