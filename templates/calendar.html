@@ -34,27 +34,41 @@
     .topnav a { color: var(--muted); text-decoration: none; font-size: 0.8rem; font-weight: 600; padding: 0.55rem 0.9rem; border-radius: 999px; transition: background 0.15s ease, color 0.15s ease; }
     .topnav a:hover { color: var(--text); }
     .topnav a.active { background: var(--accent); color: #fff; }
-    .logout-btn { margin: 0; padding: 0.5rem 0.85rem; background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; font-size: 0.8rem; font-weight: 600; cursor: pointer; }
-    .logout-btn:hover { color: var(--text); }
+    .logout-btn {
+      margin: 0; width: 34px; height: 34px; padding: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: transparent; color: var(--muted); border: 1px solid var(--border);
+      border-radius: 999px; cursor: pointer; flex-shrink: 0;
+    }
+    .logout-btn:hover { color: var(--text); border-color: var(--muted); }
+    .topbar-right { flex-wrap: wrap; justify-content: flex-end; }
+    .topnav { flex-wrap: wrap; }
+    @media (max-width: 400px) {
+      .topnav a { padding: 0.5rem 0.7rem; font-size: 0.76rem; }
+    }
 
-    .month-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
-    .month-nav a { color: var(--muted); text-decoration: none; padding: 0.5rem 0.75rem; border-radius: 8px; font-weight: 600; }
-    .month-nav a:hover { background: var(--card); color: var(--text); }
-    .month-label { font-size: 1.1rem; font-weight: 700; }
+    .month-label { font-size: 1.1rem; font-weight: 700; margin: 1.25rem 0 0.75rem; }
+    .month-label:first-of-type { margin-top: 0; }
 
     .grid-card { background: var(--card); border-radius: 16px; padding: 1rem; margin-bottom: 1.5rem; box-shadow: 0 4px 20px rgba(0,0,0,0.12); }
     .weekday-row { display: grid; grid-template-columns: repeat(7, 1fr); margin-bottom: 0.4rem; }
     .weekday-row div { text-align: center; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; color: var(--muted); letter-spacing: 0.03em; }
-    .week-row { display: grid; grid-template-columns: repeat(7, 1fr); }
+    .week-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0; margin-bottom: 3px; }
     .day-cell {
-      aspect-ratio: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-      text-decoration: none; color: var(--text); border-radius: 10px; font-size: 0.85rem; position: relative;
+      min-height: 64px;
+      display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+      text-decoration: none; color: var(--text); font-size: 0.8rem; position: relative;
+      padding: 0.3rem 0.15rem;
     }
-    .day-cell.out-month { color: var(--muted); opacity: 0.45; }
-    .day-cell.is-today { border: 2px solid var(--accent); font-weight: 700; }
-    .day-cell:hover { background: rgba(127,127,127,0.08); }
-    .day-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); margin-top: 3px; }
-    .day-dot.has-dh { background: var(--warn); }
+    .day-cell.out-month { color: var(--muted); opacity: 0.35; }
+    .day-cell.is-today .day-num { border: 2px solid var(--accent); border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; }
+    .day-cell.is-today.in-trip .day-num { border-color: #fff; }
+    .day-cell.in-trip { background: var(--accent); color: #fff; }
+    .day-cell.in-trip.round-left { border-top-left-radius: 8px; border-bottom-left-radius: 8px; }
+    .day-cell.in-trip.round-right { border-top-right-radius: 8px; border-bottom-right-radius: 8px; }
+    .day-cell.in-trip .meta-line { color: rgba(255,255,255,0.85); }
+    .day-cell .time-label { font-size: 0.65rem; font-weight: 700; margin-top: 0.15rem; line-height: 1.15; text-align: center; }
+    .day-cell .meta-line { font-size: 0.6rem; color: var(--muted); margin-top: 0.15rem; line-height: 1.2; text-align: center; }
 
     .agenda-day { background: var(--card); border-radius: 12px; padding: 0.9rem 1.1rem; margin-bottom: 0.6rem; scroll-margin-top: 1rem; }
     .agenda-day.is-today { border: 1px solid var(--accent); }
@@ -84,41 +98,46 @@
         {% endif %}
       </nav>
       <form method="post" action="/logout" style="margin:0;">
-        <button type="submit" class="logout-btn">Log out</button>
+        <button type="submit" class="logout-btn" title="Log out" aria-label="Log out"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg></button>
       </form>
     </div>
   </div>
 
-  <div class="month-nav">
-    <a href="/calendar?year={{ prev_year }}&month={{ prev_month }}">&larr; Prev</a>
-    <div class="month-label">{{ month_label }}</div>
-    <a href="/calendar?year={{ next_year }}&month={{ next_month }}">Next &rarr;</a>
-  </div>
-
+  {% for block in month_blocks %}
+  <div class="month-label">{{ block.label }}</div>
   <div class="grid-card">
     <div class="weekday-row">
       <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
     </div>
-    {% for week in weeks %}
+    {% for week in block.weeks %}
     <div class="week-row">
       {% for day in week %}
+        {% set classes = [] %}
+        {% if not day.in_month %}{% set _ = classes.append('out-month') %}{% endif %}
+        {% if day.is_today %}{% set _ = classes.append('is-today') %}{% endif %}
+        {% if day.in_trip %}{% set _ = classes.append('in-trip') %}{% endif %}
+        {% if day.round_left %}{% set _ = classes.append('round-left') %}{% endif %}
+        {% if day.round_right %}{% set _ = classes.append('round-right') %}{% endif %}
         {% if day.in_month %}
-        <a href="#day-{{ day.iso }}" class="day-cell {% if day.is_today %}is-today{% endif %}">
-          <span>{{ day.day }}</span>
-          {% if day.has_flights %}<span class="day-dot {% if day.has_dh %}has-dh{% endif %}"></span>{% endif %}
+        <a href="#day-{{ day.iso }}" class="day-cell {{ classes|join(' ') }}">
+          <span class="day-num">{{ day.day }}</span>
+          {% if day.start_time %}<div class="time-label">{{ day.start_time }}</div>{% endif %}
+          {% if day.finish_time %}<div class="time-label">{{ day.finish_time }}</div>{% endif %}
+          {% for dl in day.day_legs %}
+          <div class="meta-line">{{ dl.route }}{% if dl.is_deadhead %} DH{% endif %}</div>
+          {% endfor %}
         </a>
         {% else %}
-        <a href="/calendar?year={{ day.date.year }}&month={{ day.date.month }}" class="day-cell out-month">
-          <span>{{ day.day }}</span>
-          {% if day.has_flights %}<span class="day-dot {% if day.has_dh %}has-dh{% endif %}"></span>{% endif %}
-        </a>
+        <div class="day-cell {{ classes|join(' ') }}">
+          <span class="day-num">{{ day.day }}</span>
+        </div>
         {% endif %}
       {% endfor %}
     </div>
     {% endfor %}
   </div>
 
-  {% for day in agenda %}
+  {% for day in block.agenda %}
   <div class="agenda-day {% if day.is_today %}is-today{% endif %}" id="day-{{ day.iso }}">
     <div class="agenda-label">{{ day.label }}</div>
     {% if day.legs %}
@@ -135,6 +154,7 @@
       <div class="agenda-empty">No flights scheduled</div>
     {% endif %}
   </div>
+  {% endfor %}
   {% endfor %}
 
   <div class="footer-version">v{{ version }}</div>

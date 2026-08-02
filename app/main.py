@@ -288,6 +288,36 @@ def build_review_legs(legs: list, time_format: str = "24") -> list:
     return out
 
 
+def build_trip_spans(legs: list, time_format: str = "24") -> list:
+    """Groups legs into trips (using the same trip_start boundaries as
+    everywhere else) and returns each trip's date range + start/finish
+    times, for the calendar's continuous working-day bar."""
+    trips = []
+    current = None
+    for leg in legs:
+        if current is None or leg.trip_start:
+            if current:
+                trips.append(current)
+            current = {"start_date": leg.date, "end_date": leg.date, "legs": [leg]}
+        else:
+            current["end_date"] = leg.date
+            current["legs"].append(leg)
+    if current:
+        trips.append(current)
+
+    out = []
+    for trip in trips:
+        first_leg = trip["legs"][0]
+        last_leg = trip["legs"][-1]
+        out.append({
+            "start_date": trip["start_date"],
+            "end_date": trip["end_date"],
+            "start_time": fmt_local(first_leg, "dep", time_format),
+            "finish_time": fmt_local(last_leg, "arr", time_format),
+        })
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Setup (first-run bootstrap) + login/logout
 # ---------------------------------------------------------------------------
@@ -612,7 +642,7 @@ async def viewer_settings_post(
 # ---------------------------------------------------------------------------
 
 @app.get("/calendar", response_class=HTMLResponse)
-async def calendar_page(request: Request, year: Optional[int] = None, month: Optional[int] = None):
+async def calendar_page(request: Request):
     pilot = current_pilot(request)
     viewer_uid = None if pilot else current_viewer_user_id(request)
     user_id = pilot["id"] if pilot else viewer_uid
@@ -622,59 +652,78 @@ async def calendar_page(request: Request, year: Optional[int] = None, month: Opt
     settings = load_settings(user_id)
     now = datetime.now(ZoneInfo("UTC"))
     today = now.date()
-    year = year or today.year
-    month = month or today.month
-    # Clamp to a sane range so a stray/forged query param can't blow up date math
-    year = max(1970, min(2100, year))
-    month = max(1, min(12, month))
 
     legs = load_schedule(user_id)
     by_date = {}
     for leg in legs:
         by_date.setdefault(leg.date, []).append(leg)
+    trips = build_trip_spans(legs, settings.time_format)
+
+    def trip_for_day(d):
+        for trip in trips:
+            if trip["start_date"] <= d <= trip["end_date"]:
+                return trip
+        return None
+
+    # Only the months that actually have at least one flight — no
+    # prev/next browsing needed since nothing else has anything to show.
+    months_with_data = sorted({(l.date.year, l.date.month) for l in legs})
+    if not months_with_data:
+        months_with_data = [(today.year, today.month)]
 
     cal = cal_module.Calendar(firstweekday=6)  # weeks start Sunday
-    weeks = []
-    week = []
-    for d in cal.itermonthdates(year, month):
-        day_legs = by_date.get(d, [])
-        week.append({
-            "date": d,
-            "iso": d.isoformat(),
-            "day": d.day,
-            "in_month": d.month == month,
-            "is_today": d == today,
-            "has_flights": bool(day_legs),
-            "has_dh": any(l.is_deadhead for l in day_legs),
-        })
-        if len(week) == 7:
-            weeks.append(week)
-            week = []
+    month_blocks = []
+    for year, month in months_with_data:
+        weeks = []
+        week = []
+        for d in cal.itermonthdates(year, month):
+            day_legs = by_date.get(d, [])
+            trip = trip_for_day(d)
+            weekday = d.weekday()  # Monday=0 ... Sunday=6
+            is_first_col = weekday == 6  # Sunday
+            is_last_col = weekday == 5   # Saturday
+            week.append({
+                "date": d,
+                "iso": d.isoformat(),
+                "day": d.day,
+                "in_month": d.month == month,
+                "is_today": d == today,
+                "in_trip": trip is not None,
+                "round_left": bool(trip and (d == trip["start_date"] or is_first_col)),
+                "round_right": bool(trip and (d == trip["end_date"] or is_last_col)),
+                "start_time": trip["start_time"] if trip and d == trip["start_date"] else None,
+                "finish_time": trip["finish_time"] if trip and d == trip["end_date"] else None,
+                "day_legs": [
+                    {"route": f"{l.origin}\u2192{l.destination}", "is_deadhead": l.is_deadhead}
+                    for l in day_legs
+                ],
+            })
+            if len(week) == 7:
+                weeks.append(week)
+                week = []
 
-    _, last_day = cal_module.monthrange(year, month)
-    agenda = []
-    for day_num in range(1, last_day + 1):
-        d = date(year, month, day_num)
-        day_legs = by_date.get(d, [])
-        agenda.append({
-            "iso": d.isoformat(),
-            "label": d.strftime("%A, %B %d").replace(" 0", " "),
-            "is_today": d == today,
-            "legs": [leg_view(l, now, settings.time_format) for l in day_legs],
-        })
+        _, last_day = cal_module.monthrange(year, month)
+        agenda = []
+        for day_num in range(1, last_day + 1):
+            d = date(year, month, day_num)
+            day_legs = by_date.get(d, [])
+            agenda.append({
+                "iso": d.isoformat(),
+                "label": d.strftime("%A, %B %d").replace(" 0", " "),
+                "is_today": d == today,
+                "legs": [leg_view(l, now, settings.time_format) for l in day_legs],
+            })
 
-    prev_month, prev_year = (12, year - 1) if month == 1 else (month - 1, year)
-    next_month, next_year = (1, year + 1) if month == 12 else (month + 1, year)
+        month_blocks.append({
+            "label": date(year, month, 1).strftime("%B %Y"),
+            "weeks": weeks,
+            "agenda": agenda,
+        })
 
     template = jinja_env.get_template("calendar.html")
     return HTMLResponse(template.render(
         request=request,
-        weeks=weeks,
-        agenda=agenda,
-        month_label=date(year, month, 1).strftime("%B %Y"),
-        prev_year=prev_year, prev_month=prev_month,
-        next_year=next_year, next_month=next_month,
-        cur_year=year, cur_month=month,
+        month_blocks=month_blocks,
         settings=settings.model_dump(),
         is_pilot=pilot is not None,
     ))

@@ -161,14 +161,24 @@
     .topbar-right { display: flex; align-items: center; gap: 0.5rem; }
     .logout-btn {
       margin: 0;
-      padding: 0.5rem 0.85rem;
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       background: transparent;
       color: var(--muted);
       border: 1px solid var(--border);
       border-radius: 999px;
-      font-size: 0.8rem;
-      font-weight: 600;
       cursor: pointer;
+      flex-shrink: 0;
+    }
+    .logout-btn:hover { color: var(--text); border-color: var(--muted); }
+    .topbar-right { flex-wrap: wrap; justify-content: flex-end; }
+    .topnav { flex-wrap: wrap; }
+    @media (max-width: 400px) {
+      .topnav a { padding: 0.5rem 0.7rem; font-size: 0.76rem; }
     }
     .logout-btn:hover { color: var(--text); border-color: var(--muted); }
     .share-code-box { position: relative; margin: 0.5rem 0 1rem; }
@@ -234,7 +244,7 @@
         <a href="/settings">Settings</a>
       </nav>
       <form method="post" action="/logout" style="margin:0;">
-        <button type="submit" class="logout-btn">Log out</button>
+        <button type="submit" class="logout-btn" title="Log out" aria-label="Log out"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg></button>
       </form>
     </div>
   </div>
