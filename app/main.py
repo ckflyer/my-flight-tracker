@@ -737,11 +737,20 @@ async def calendar_page(request: Request):
         for day_num in range(1, last_day + 1):
             d = date(year, month, day_num)
             day_legs = by_date.get(d, [])
+            trip = trip_for_day(d)
             agenda.append({
                 "iso": d.isoformat(),
                 "label": d.strftime("%A, %B %d").replace(" 0", " "),
                 "is_today": d == today,
                 "legs": [leg_view(l, now, settings.time_format) for l in day_legs],
+                "in_trip": trip is not None,
+                "trip_is_start": bool(trip and d == trip["start_date"]),
+                "trip_is_end": bool(trip and d == trip["end_date"]),
+                # Only butt this card seamlessly against the next one if we're
+                # sure that next card is still in this same month's list —
+                # a trip crossing a month boundary just gets a normal gap
+                # there instead of risking a broken-looking seam.
+                "seamless_after": bool(trip and d != trip["end_date"] and day_num < last_day),
             })
 
         month_blocks.append({

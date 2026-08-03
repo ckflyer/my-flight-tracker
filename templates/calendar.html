@@ -73,6 +73,10 @@
 
     .agenda-day { background: var(--card); border-radius: 12px; padding: 0.9rem 1.1rem; margin-bottom: 0.6rem; scroll-margin-top: 1rem; }
     .agenda-day.is-today { border: 1px solid var(--accent); }
+    .agenda-day.in-trip { border-left: 4px solid var(--accent); padding-left: calc(1.1rem - 4px); }
+    .agenda-day.in-trip:not(.trip-start) { border-top-left-radius: 0; }
+    .agenda-day.in-trip:not(.trip-end) { border-bottom-left-radius: 0; }
+    .agenda-day.seamless-after { margin-bottom: 0; }
     .agenda-label { font-size: 0.8rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 0.5rem; }
     .agenda-leg { display: flex; justify-content: space-between; align-items: baseline; padding: 0.3rem 0; font-size: 0.9rem; }
     .agenda-empty { color: var(--muted); font-size: 0.85rem; }
@@ -139,7 +143,7 @@
   </div>
 
   {% for day in block.agenda %}
-  <div class="agenda-day {% if day.is_today %}is-today{% endif %}" id="day-{{ day.iso }}">
+  <div class="agenda-day {% if day.is_today %}is-today{% endif %} {% if day.in_trip %}in-trip{% endif %} {% if day.trip_is_start %}trip-start{% endif %} {% if day.trip_is_end %}trip-end{% endif %} {% if day.seamless_after %}seamless-after{% endif %}" id="day-{{ day.iso }}">
     <div class="agenda-label">{{ day.label }}</div>
     {% if day.legs %}
       {% for leg in day.legs %}
