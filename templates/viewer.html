@@ -379,10 +379,17 @@
       text-overflow: clip;
       line-height: 1.25;
     }
+    #back-to-active {
+      margin-top: 0.6rem;
+    }
+    #back-to-active a {
+      display: inline-block; color: var(--accent); font-size: 0.82rem;
+      font-weight: 600; text-decoration: none; padding: 0.25rem 0;
+    }
     .flight-line {
       display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap;
     }
-    .flight-line .status { flex-shrink: 0; }
+    .flight-line .status { flex-shrink: 0; margin-top: 0; align-self: center; }
     .collapsed-card .chip-icon { width: 18px; height: 18px; }
     .collapsed-card .chip-code { font-size: 0.88rem; color: var(--muted); font-weight: 500; }
     .collapsed-card .chip-time { font-size: 0.95rem; font-weight: 600; }
@@ -497,6 +504,9 @@
           <span class="chip-time" id="card-arr-time">{{ current.arr }}</span>
         </div>
       </div>
+    </div>
+    <div id="back-to-active" style="{{ '' if (selected_id and current_leg_id and selected_id != current_leg_id) else 'display:none' }}">
+      <a href="#" id="back-to-active-link">&#8592; Back to active flight</a>
     </div>
 
     <div class="expand-details" id="expand-details">
@@ -706,7 +716,7 @@
           }).addTo(map);
           var pts = [];
           if (!isNaN(oLat) && !isNaN(oLon)) {
-            L.circleMarker([oLat, oLon], { radius: 5, color: '#f59e0b', fillColor: '#0f172a', fillOpacity: 0.9, weight: 2.5 })
+            L.circleMarker([oLat, oLon], { radius: 5, color: '#f59e0b', fill: false, weight: 2.5 })
               .addTo(map).bindPopup('Origin: ' + el.dataset.origin);
             pts.push([oLat, oLon]);
           }
@@ -817,7 +827,7 @@
       // The leg the SERVER considers active. When this changes (one flight
       // ends, the next becomes current) the page follows it automatically,
       // unless the user has deliberately tapped a different flight.
-      let knownCurrentLegId = selectedId;
+      let knownCurrentLegId = {{ current_leg_id | tojson if current_leg_id else 'null' }};
       let userPinnedSelection = {{ 'true' if selected_id and not is_selected_live else 'false' }};
 
       // Zoom control sits top-left, clear of the settings/recenter buttons
@@ -847,6 +857,16 @@
       let originMarker = null, destMarker = null, remainingLine = null, flownLine = null, planeMarker = null;
       let lastFitPts = [];
 
+      function makePlaneIcon(track) {
+        const svg = `
+          <svg width="40" height="40" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"
+               style="transform: rotate(${track}deg); transform-origin: 20px 20px; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.55));">
+            <path fill="#ffffff" stroke="#0f172a" stroke-width="1" stroke-linejoin="round"
+              d="M20 2 L23.5 14 L36 18 L36 21 L23.5 19.5 L22 30 L27 34 L27 36 L20 33 L13 36 L13 34 L18 30 L16.5 19.5 L4 21 L4 18 L16.5 14 Z"/>
+          </svg>`;
+        return L.divIcon({ className: 'plane-icon', html: svg, iconSize: [40, 40], iconAnchor: [20, 20] });
+      }
+
       // Redraws markers/lines/plane from scratch each call, but only ever
       // touches map view (pan/zoom) when doFit is true — poll-driven
       // refreshes always pass false so a manual pan/zoom is never undone
@@ -860,7 +880,7 @@
         const pts = [];
         if (cur && cur.origin_lat != null) {
           originMarker = L.circleMarker([cur.origin_lat, cur.origin_lon], {
-            radius: 6, color: '#f59e0b', fillColor: '#0f172a', fillOpacity: 0.9, weight: 3
+            radius: 6, color: '#f59e0b', fill: false, weight: 3
           }).addTo(map).bindPopup('Origin: ' + cur.origin);
           pts.push([cur.origin_lat, cur.origin_lon]);
         }
@@ -947,6 +967,7 @@
             if (data.current_leg_id !== undefined && data.current_leg_id !== null
                 && data.current_leg_id !== knownCurrentLegId) {
               knownCurrentLegId = data.current_leg_id;
+              updateBackToActive();
               if (!userPinnedSelection && data.current_leg_id !== selectedId) {
                 selectLeg(data.current_leg_id, { automatic: true });
                 return;
@@ -1088,6 +1109,8 @@
           row.classList.toggle('selected-row', !!isSel);
         });
 
+        updateBackToActive();
+
         currentData = cur;
         liveData = data.live;
         renderMap(currentData, liveData, true);
@@ -1096,6 +1119,26 @@
         try {
           history.replaceState(null, '', '/?leg=' + encodeURIComponent(selectedId));
         } catch (e) {}
+      }
+
+      function updateBackToActive() {
+        const el = document.getElementById('back-to-active');
+        if (!el) return;
+        const show = knownCurrentLegId && selectedId && selectedId !== knownCurrentLegId;
+        el.style.display = show ? '' : 'none';
+      }
+
+      const backLink = document.getElementById('back-to-active-link');
+      if (backLink) {
+        backLink.addEventListener('click', function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!knownCurrentLegId) return;
+          // Going back to the active flight clears the manual pin, so the
+          // page resumes following the active flight on its own.
+          userPinnedSelection = false;
+          selectLeg(knownCurrentLegId, { automatic: true });
+        });
       }
 
       function selectLeg(legId, opts) {

@@ -622,6 +622,11 @@ async def viewer(request: Request, leg: Optional[str] = None):
         "is_selected_live": is_selected_live,
         "live": live,
         "selected_id": selected_leg.id if selected_leg else None,
+        # Lets the page show a way back to the active flight when the user
+        # is looking at some other leg. The active flight isn't in the
+        # upcoming/past lists, so without this there's no row to tap to
+        # return to it.
+        "current_leg_id": info.current.id if info.current else None,
         "upcoming_groups": group_legs_by_day(info.upcoming, day_numbers, now, tf),
         "past_groups": group_legs_by_day(info.past, day_numbers, now, tf),
         "past_count": len(info.past),
