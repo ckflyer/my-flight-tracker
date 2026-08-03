@@ -154,7 +154,14 @@ def list_all_users() -> list:
 
 
 def delete_user(user_id: int) -> None:
-    """Removes an account and everything it owns (schedule, positions)."""
+    """Removes an account and everything it owns (schedule, legacy positions).
+
+    flight_tracks is deliberately NOT touched. Tracks are keyed by flight
+    rather than by user — they're a record of where an aircraft went, and
+    another account may have the same flight on its schedule. Deleting one
+    user must not erase a shared track out from under everyone else. Old
+    tracks age out on their own via the retention prune in track.py.
+    """
     conn = get_connection()
     try:
         conn.execute("DELETE FROM legs WHERE user_id = ?", (user_id,))

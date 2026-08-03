@@ -16,7 +16,7 @@ from .parser import parse_schedule_text
 from .airports import enrich_leg
 from .settings import load_settings, save_settings, AppSettings
 from .track import (
-    record_position, get_breadcrumb, compute_progress, compute_ete,
+    record_position, get_breadcrumb, compute_progress, compute_ete, compute_eta,
     compute_distance_remaining_nm, get_position_history, compute_phase,
 )
 from .auth import (
@@ -43,6 +43,20 @@ app.add_middleware(
     max_age=60 * 60 * 24 * 365,  # a year — sessions are meant to be persistent
     same_site="lax",
 )
+
+
+@app.on_event("startup")
+async def _start_track_poller():
+    """Record tracks for active flights even with nobody watching.
+
+    The container runs a single uvicorn worker, so this is one poller per
+    deployment. If workers are ever added, this would start one per worker
+    and they'd poll the same flights redundantly — the shared cache in
+    livesource would absorb most of it, but the right fix then is to move
+    this to a separate process.
+    """
+    from .poller import start as start_poller
+    start_poller()
 
 
 # ---------------------------------------------------------------------------
@@ -530,7 +544,7 @@ def resolve_selected_leg(info, leg_id: Optional[str]):
     return selected_leg, is_selected_live
 
 
-def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now: datetime, poll_seconds: int):
+def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now: datetime, poll_seconds: int, time_format: str = "24"):
     """Live ADS-B + progress/ETE/breadcrumb/aircraft/phase for the selected
     leg, if it's genuinely the active one. Shared by the full page render
     and the lightweight polling endpoint so the two never drift apart."""
@@ -543,7 +557,7 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now
         # A past (or not-yet-active) leg has no live data, but it may well
         # have a stored track from when it WAS flying. Hand that back so
         # the map can draw the real flown path.
-        extra["breadcrumb"] = get_breadcrumb(user_id, selected_leg.id)
+        extra["breadcrumb"] = get_breadcrumb(selected_leg.id)
         return live, extra
 
     dep_utc = selected_leg.dep_datetime_utc()
@@ -558,21 +572,22 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now
     )
     if should_poll:
         live = live_summary(selected_leg.callsign)
-    history = get_position_history(user_id, selected_leg.id)
-    extra["breadcrumb"] = get_breadcrumb(user_id, selected_leg.id)
+    history = get_position_history(selected_leg.id)
+    extra["breadcrumb"] = get_breadcrumb(selected_leg.id)
     extra["progress_pct"] = compute_progress(selected_leg, live, now)
     extra["ete"] = compute_ete(selected_leg, live, now)
+    extra["eta"] = compute_eta(selected_leg, live, now, time_format)
     extra["distance_nm"] = compute_distance_remaining_nm(selected_leg, live)
     if live and live.get("lat") is not None and live.get("lon") is not None:
-        record_position(user_id, selected_leg.id, live["lat"], live["lon"], now, live.get("on_ground"))
-        extra["breadcrumb"] = get_breadcrumb(user_id, selected_leg.id)
+        record_position(selected_leg.id, live["lat"], live["lon"], now, live.get("on_ground"))
+        extra["breadcrumb"] = get_breadcrumb(selected_leg.id)
         # Tail number and type ride along with the live position now, so
         # there's no separate lookup to wait on and nothing to cache.
         extra["aircraft"] = {
             "registration": live.get("registration"),
             "display_type": live.get("aircraft_type"),
         } if (live.get("registration") or live.get("aircraft_type")) else None
-        history = get_position_history(user_id, selected_leg.id)  # include the point just recorded
+        history = get_position_history(selected_leg.id)  # include the point just recorded
     extra["status"] = compute_phase(selected_leg, live, history, now, poll_seconds)
     return live, extra
 
@@ -608,7 +623,7 @@ async def viewer(request: Request, leg: Optional[str] = None):
 
     selected_leg, is_selected_live = resolve_selected_leg(info, leg)
     selected = leg_view(selected_leg, now, tf)
-    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, settings.poll_seconds)
+    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, settings.poll_seconds, tf)
     if selected:
         selected.update(extra)
     settings_dict = settings.model_dump()
@@ -982,10 +997,15 @@ async def api_selected(request: Request, leg: Optional[str] = None):
     settings = load_settings(user_id)
     info = get_current_info(user_id)
     now = datetime.now(ZoneInfo("UTC"))
+    tf = settings.time_format
+    if not pilot:
+        cookie_tf = request.cookies.get("pt_viewer_tf")
+        if cookie_tf in ("12", "24"):
+            tf = cookie_tf
     selected_leg, is_selected_live = resolve_selected_leg(info, leg)
     if not selected_leg:
         return {"error": "no flight"}
-    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, settings.poll_seconds)
+    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, settings.poll_seconds, tf)
     return {
         "is_selected_live": is_selected_live,
         # Which leg the app currently considers active. The page compares
@@ -997,6 +1017,7 @@ async def api_selected(request: Request, leg: Optional[str] = None):
         "status": extra.get("status"),
         "progress_pct": extra.get("progress_pct"),
         "ete": extra.get("ete"),
+        "eta": extra.get("eta"),
         "distance_nm": extra.get("distance_nm"),
         "breadcrumb": extra.get("breadcrumb", []),
         "aircraft": extra.get("aircraft"),
@@ -1036,7 +1057,7 @@ async def api_leg(request: Request, leg_id: str):
         return {"error": "no flight"}
 
     view = leg_view(selected_leg, now, tf)
-    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, settings.poll_seconds)
+    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, settings.poll_seconds, tf)
     if view:
         view.update(extra)
     return {

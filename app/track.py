@@ -9,6 +9,7 @@ from __future__ import annotations
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional
 
 from .db import get_connection
@@ -43,6 +44,19 @@ _last_prune_at: float = 0.0
 PRUNE_INTERVAL_S = 3600.0
 
 
+def flight_key(leg_id: str) -> str:
+    """Shared identity of a physical flight.
+
+    Leg ids look like "2026-08-04-3729-DFW-OKC", with "-DH" appended when
+    the pilot is deadheading. That suffix describes the PERSON's role, not
+    the aeroplane, so it's stripped here — otherwise a deadhead and a
+    working leg on the same flight would record two separate half-tracks.
+    """
+    if leg_id.endswith("-DH"):
+        return leg_id[:-3]
+    return leg_id
+
+
 def prune_old_positions(retention_days: int = TRACK_RETENTION_DAYS) -> int:
     """Delete stored track points older than the retention window.
 
@@ -52,7 +66,7 @@ def prune_old_positions(retention_days: int = TRACK_RETENTION_DAYS) -> int:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
     conn = get_connection()
     try:
-        cur = conn.execute("DELETE FROM positions WHERE ts < ?", (cutoff,))
+        cur = conn.execute("DELETE FROM flight_tracks WHERE ts < ?", (cutoff,))
         conn.commit()
         return cur.rowcount or 0
     finally:
@@ -75,22 +89,27 @@ def _maybe_prune() -> None:
         print(f"[track] prune failed: {e}")
 
 
-def record_position(user_id: int, leg_id: str, lat: float, lon: float, ts: datetime, on_ground: Optional[bool] = None) -> None:
-    """Append a live position to this leg's track.
+def record_position(leg_id: str, lat: float, lon: float, ts: datetime,
+                    on_ground: Optional[bool] = None) -> None:
+    """Append a position to this FLIGHT's track.
 
-    Other legs' tracks are left alone — that's what makes past flights
-    replayable. A point is skipped when the aircraft hasn't moved
-    meaningfully since the last stored fix AND its ground state is
-    unchanged, so a plane at the gate doesn't pile up identical rows.
-    Ground-state changes are always kept, because the phase machine reads
-    them to detect takeoff and landing.
+    Not user-scoped: one flight has one path regardless of how many people
+    have it on their schedule or are watching it. Callers pass a leg id and
+    the flight key is derived here.
+
+    A point is skipped when the aircraft hasn't moved meaningfully since
+    the last stored fix AND its ground state is unchanged, so an aircraft
+    at a gate doesn't pile up identical rows. Ground-state changes are
+    always kept, because the phase machine reads them to detect takeoff
+    and landing.
     """
+    key = flight_key(leg_id)
     conn = get_connection()
     try:
         last = conn.execute(
-            "SELECT lat, lon, on_ground FROM positions WHERE leg_id = ? AND user_id = ? "
+            "SELECT lat, lon, on_ground FROM flight_tracks WHERE flight_key = ? "
             "ORDER BY ts DESC LIMIT 1",
-            (leg_id, user_id),
+            (key,),
         ).fetchone()
 
         if last is not None:
@@ -100,16 +119,17 @@ def record_position(user_id: int, leg_id: str, lat: float, lon: float, ts: datet
                 return
 
         conn.execute(
-            "INSERT INTO positions (leg_id, user_id, ts, lat, lon, on_ground) VALUES (?, ?, ?, ?, ?, ?)",
-            (leg_id, user_id, ts.isoformat(), lat, lon, None if on_ground is None else int(on_ground)),
+            "INSERT OR IGNORE INTO flight_tracks (flight_key, ts, lat, lon, on_ground) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (key, ts.isoformat(), lat, lon, None if on_ground is None else int(on_ground)),
         )
         conn.execute(
             """
-            DELETE FROM positions WHERE leg_id = ? AND user_id = ? AND rowid NOT IN (
-                SELECT rowid FROM positions WHERE leg_id = ? AND user_id = ? ORDER BY ts DESC LIMIT ?
+            DELETE FROM flight_tracks WHERE flight_key = ? AND rowid NOT IN (
+                SELECT rowid FROM flight_tracks WHERE flight_key = ? ORDER BY ts DESC LIMIT ?
             )
             """,
-            (leg_id, user_id, leg_id, user_id, MAX_TRACK_POINTS),
+            (key, key, MAX_TRACK_POINTS),
         )
         conn.commit()
     finally:
@@ -117,26 +137,28 @@ def record_position(user_id: int, leg_id: str, lat: float, lon: float, ts: datet
     _maybe_prune()
 
 
-def get_breadcrumb(user_id: int, leg_id: str) -> List[List[float]]:
+def get_breadcrumb(leg_id: str) -> List[List[float]]:
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT lat, lon FROM positions WHERE leg_id = ? AND user_id = ? ORDER BY ts ASC",
-            (leg_id, user_id),
+            "SELECT lat, lon FROM flight_tracks WHERE flight_key = ? ORDER BY ts ASC",
+            (flight_key(leg_id),),
         ).fetchall()
     finally:
         conn.close()
     return [[r["lat"], r["lon"]] for r in rows]
 
 
-def get_position_history(user_id: int, leg_id: str) -> List[Dict[str, Any]]:
-    """Chronological position history for this leg, including ground/air state.
-    Used for phase detection (taxi-out/in, arrived) — not just map drawing."""
+def get_position_history(leg_id: str) -> List[Dict[str, Any]]:
+    """Chronological position history for this flight, including ground/air
+    state. Used for phase detection (taxi-out/in, arrived), not just map
+    drawing — which is why the background poller matters: without recorded
+    history, "Arrived" can never be detected."""
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT ts, lat, lon, on_ground FROM positions WHERE leg_id = ? AND user_id = ? ORDER BY ts ASC",
-            (leg_id, user_id),
+            "SELECT ts, lat, lon, on_ground FROM flight_tracks WHERE flight_key = ? ORDER BY ts ASC",
+            (flight_key(leg_id),),
         ).fetchall()
     finally:
         conn.close()
@@ -273,13 +295,13 @@ def compute_distance_remaining_nm(leg: FlightLeg, live: Optional[Dict[str, Any]]
     return round(haversine_nm(live["lat"], live["lon"], dest_info.lat, dest_info.lon), 1)
 
 
-def compute_ete(leg: FlightLeg, live: Optional[Dict[str, Any]], now: datetime) -> Optional[str]:
-    """Time remaining (ETE), not a clock time. Uses live position +
-    groundspeed when available, otherwise falls back to scheduled-arrival
-    minus now — same fallback philosophy as everything else here."""
+def compute_remaining_minutes(leg: FlightLeg, live: Optional[Dict[str, Any]], now: datetime) -> Optional[float]:
+    """Minutes until arrival, from live groundspeed and distance-to-go when
+    available, otherwise scheduled arrival minus now. Shared by both the
+    "time remaining" and "arriving at" displays so they can never disagree.
+    """
     dest_info = leg.dest_info
     arr_utc = leg.arr_datetime_utc()
-    remaining_minutes = None
 
     if (
         live
@@ -290,14 +312,46 @@ def compute_ete(leg: FlightLeg, live: Optional[Dict[str, Any]], now: datetime) -
         and dest_info and dest_info.lat is not None
     ):
         remaining_nm = haversine_nm(live["lat"], live["lon"], dest_info.lat, dest_info.lon)
-        remaining_minutes = (remaining_nm / live["speed_kts"]) * 60
-    elif arr_utc:
-        remaining_minutes = (arr_utc - now).total_seconds() / 60
+        return max(0.0, (remaining_nm / live["speed_kts"]) * 60)
+    if arr_utc:
+        return max(0.0, (arr_utc - now).total_seconds() / 60)
+    return None
 
+
+def compute_eta(leg: FlightLeg, live: Optional[Dict[str, Any]], now: datetime,
+                time_format: str = "24") -> Optional[str]:
+    """Predicted arrival as a CLOCK TIME in the destination's local zone.
+
+    "Landing about 6:42 PM" is the thing a family member actually wants;
+    "1h 12m" makes them do arithmetic against a wall clock. Destination
+    local time matches the scheduled arrival already shown on the card, so
+    the two can be compared directly to see if a flight is running late.
+    """
+    remaining = compute_remaining_minutes(leg, live, now)
+    if remaining is None:
+        return None
+    dest_info = leg.dest_info
+    if not dest_info:
+        return None
+    eta_utc = now + timedelta(minutes=remaining)
+    try:
+        local = eta_utc.astimezone(ZoneInfo(dest_info.timezone))
+    except Exception:
+        return None
+    if time_format == "12":
+        time_str = local.strftime("%I:%M %p").lstrip("0")
+    else:
+        time_str = local.strftime("%H:%M")
+    abbr = local.tzname() or dest_info.timezone.split("/")[-1]
+    return f"{time_str} {abbr}"
+
+
+def compute_ete(leg: FlightLeg, live: Optional[Dict[str, Any]], now: datetime) -> Optional[str]:
+    """Time remaining (ETE), not a clock time. See compute_remaining_minutes."""
+    remaining_minutes = compute_remaining_minutes(leg, live, now)
     if remaining_minutes is None:
         return None
-    remaining_minutes = max(0, remaining_minutes)
-    total_minutes = int(round(remaining_minutes))
+    total_minutes = int(round(max(0, remaining_minutes)))
     hours = total_minutes // 60
     minutes = total_minutes % 60
     if hours > 0:

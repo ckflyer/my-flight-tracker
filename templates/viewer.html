@@ -548,6 +548,7 @@
           {% if current.progress_pct is not none %}<span>{{ current.progress_pct }}% en route</span>{% endif %}
           {% if current.distance_nm is not none %}<span>{{ current.distance_nm }} nm to go</span>{% endif %}
           {% if current.ete %}<span>ETE {{ current.ete }}</span>{% endif %}
+          {% if current.eta %}<span>Landing {{ current.eta }}</span>{% endif %}
         </div>
       </div>
       </div>
@@ -1014,6 +1015,7 @@
                   const parts = ['<span>' + data.progress_pct + '% en route</span>'];
                   if (data.distance_nm != null) parts.push('<span>' + data.distance_nm + ' nm to go</span>');
                   if (data.ete) parts.push('<span>ETE ' + data.ete + '</span>');
+                  if (data.eta) parts.push('<span>Landing ' + data.eta + '</span>');
                   progLabel.innerHTML = parts.join('');
                 }
               } else {

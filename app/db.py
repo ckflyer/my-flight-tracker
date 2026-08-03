@@ -181,6 +181,55 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_positions_user_leg ON positions(user_id, leg_id, ts)"
         )
+
+        # Flight tracks are keyed by the FLIGHT, not by the user.
+        #
+        # A track is a fact about an aircraft, not about a person: if two
+        # pilots are on ENY3729 on the same day, that's one aeroplane and
+        # one path. The older `positions` table carried a user_id and kept
+        # a private copy per account, so N pilots meant N identical tracks
+        # and the background poller would write the same points repeatedly.
+        #
+        # The flight key is the leg id with any "-DH" suffix stripped, so a
+        # deadhead and a working leg on the same flight share one track
+        # rather than splitting into two half-recorded ones.
+        #
+        # Nothing leaks between accounts: the UI only looks up a track for
+        # a leg already on that user's own schedule, and which flights a
+        # user is on lives in `legs`, which stays user-scoped.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS flight_tracks (
+                flight_key TEXT NOT NULL,
+                ts TEXT NOT NULL,
+                lat REAL NOT NULL,
+                lon REAL NOT NULL,
+                on_ground INTEGER,
+                PRIMARY KEY (flight_key, ts)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_flight_tracks_key_ts ON flight_tracks(flight_key, ts)"
+        )
+
+        # One-time migration of per-user history already recorded.
+        # INSERT OR IGNORE collapses the duplicate (flight_key, ts) rows
+        # that two accounts watching the same flight would have produced.
+        already_migrated = conn.execute("SELECT COUNT(*) AS c FROM flight_tracks").fetchone()["c"]
+        if not already_migrated:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO flight_tracks (flight_key, ts, lat, lon, on_ground)
+                SELECT
+                    CASE WHEN leg_id LIKE '%-DH'
+                         THEN substr(leg_id, 1, length(leg_id) - 3)
+                         ELSE leg_id END,
+                    ts, lat, lon, on_ground
+                FROM positions
+                ORDER BY ts
+                """
+            )
         conn.commit()
     finally:
         conn.close()

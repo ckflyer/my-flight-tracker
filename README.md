@@ -133,7 +133,26 @@ the single import there. Nothing else in the app knows which service is in use.
 
 ## Flight tracks
 
-Each leg keeps its own flown path. Points are thinned on write (a fix is
+Tracks are recorded by a background thread (`app/poller.py`) that sweeps
+every ~20s for flights inside their scheduled window and records position
+**whether or not anyone is watching**. Before v2.6, recording only happened
+while someone had the page open — which meant the pilot, the one person
+guaranteed not to be watching, got no track of his own flights. The phase
+machine reads the same history, so "Arrived" also depended on someone
+looking.
+
+Tune with `TRACK_POLLER_INTERVAL_S` (seconds, default 20) or disable with
+`TRACK_POLLER_ENABLED=0`. With nothing scheduled it makes no network
+requests at all. The container runs a single uvicorn worker, so there is
+exactly one poller per deployment.
+
+Tracks are keyed by FLIGHT, not by user: `flight_tracks.flight_key` is the
+leg id with any `-DH` suffix stripped. Two pilots on the same flight share
+one track rather than storing duplicate copies, and a deadhead leg and a
+working leg on the same flight record into the same path. Which flights a
+user is on stays private in `legs`, which is still user-scoped.
+
+Each flight keeps one flown path. Points are thinned on write (a fix is
 skipped unless the aircraft moved at least ~0.12 nm from the last stored
 one, though ground-state changes are always kept), so a plane parked at a
 gate stores one row instead of one per poll. Tracks older than 30 days are
