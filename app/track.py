@@ -1,14 +1,36 @@
-"""Breadcrumb position history + flight-progress / ETA math for the current leg."""
+"""Position history + flight-progress / ETA math.
+
+Tracks are PERSISTENT: each leg keeps its own flown path so a completed
+flight can be replayed on the map later. Until v2.2 every write deleted
+every other leg's points, so only the in-progress flight ever had a track.
+"""
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+import threading
+import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from .db import get_connection
 from .geo import haversine_nm
 from .models import FlightLeg
 
-MAX_BREADCRUMB_POINTS = 300
+# Per-leg safety valve. At a 15s poll a 4-hour flight is ~960 raw fixes and
+# thinning drops most of the stationary ones, so this sits far above
+# anything real — it exists only so a stuck poller can't grow one leg
+# without bound. The old value of 300 would have silently eaten the START
+# of any flight over ~75 minutes, since the cap discards oldest-first.
+MAX_TRACK_POINTS = 3000
+
+# Don't store a new point unless the aircraft moved at least this far from
+# the last stored one. Kills the long runs of near-identical fixes from a
+# parked aircraft (and from the shared cache handing the same fix to
+# several polls), which would otherwise render as a blob at the gate.
+MIN_POINT_SEPARATION_NM = 0.12
+
+# How long completed flight tracks are kept before being pruned.
+TRACK_RETENTION_DAYS = 30
+
 MIN_SPEED_KTS_FOR_ETA = 20  # ignore near-zero ground speed so ETA doesn't spike
 
 LANDING_RADIUS_NM = 17.0       # switch In Air -> Landing within this range of the destination
@@ -16,15 +38,67 @@ GROUND_MOVE_THRESHOLD_NM = 0.1  # ~600ft; cumulative displacement counts as "mov
 STILL_WINDOW_SECONDS = 240      # how long position must stay put before calling it Arrived (rides out taxi-queue stops)
 MIN_SIGNAL_LOST_SECONDS = 90    # how long ADS-B can go quiet after a landing before we just call it Arrived
 
+_prune_lock = threading.Lock()
+_last_prune_at: float = 0.0
+PRUNE_INTERVAL_S = 3600.0
 
-def record_position(user_id: int, leg_id: str, lat: float, lon: float, ts: datetime, on_ground: Optional[bool] = None) -> None:
-    """Append a live position for the current leg. Clears breadcrumbs from
-    any other leg *belonging to this same user* so the table stays small —
-    scoped to user_id so two pilots flying at the same time never touch
-    each other's position history."""
+
+def prune_old_positions(retention_days: int = TRACK_RETENTION_DAYS) -> int:
+    """Delete stored track points older than the retention window.
+
+    Returns the number of rows removed. Cheap (one indexed delete), but
+    record_position() throttles it to hourly so it isn't run every poll.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
     conn = get_connection()
     try:
-        conn.execute("DELETE FROM positions WHERE user_id = ? AND leg_id != ?", (user_id, leg_id))
+        cur = conn.execute("DELETE FROM positions WHERE ts < ?", (cutoff,))
+        conn.commit()
+        return cur.rowcount or 0
+    finally:
+        conn.close()
+
+
+def _maybe_prune() -> None:
+    global _last_prune_at
+    if time.monotonic() - _last_prune_at < PRUNE_INTERVAL_S:
+        return
+    with _prune_lock:
+        if time.monotonic() - _last_prune_at < PRUNE_INTERVAL_S:
+            return
+        _last_prune_at = time.monotonic()
+    try:
+        removed = prune_old_positions()
+        if removed:
+            print(f"[track] pruned {removed} position rows older than {TRACK_RETENTION_DAYS} days")
+    except Exception as e:
+        print(f"[track] prune failed: {e}")
+
+
+def record_position(user_id: int, leg_id: str, lat: float, lon: float, ts: datetime, on_ground: Optional[bool] = None) -> None:
+    """Append a live position to this leg's track.
+
+    Other legs' tracks are left alone — that's what makes past flights
+    replayable. A point is skipped when the aircraft hasn't moved
+    meaningfully since the last stored fix AND its ground state is
+    unchanged, so a plane at the gate doesn't pile up identical rows.
+    Ground-state changes are always kept, because the phase machine reads
+    them to detect takeoff and landing.
+    """
+    conn = get_connection()
+    try:
+        last = conn.execute(
+            "SELECT lat, lon, on_ground FROM positions WHERE leg_id = ? AND user_id = ? "
+            "ORDER BY ts DESC LIMIT 1",
+            (leg_id, user_id),
+        ).fetchone()
+
+        if last is not None:
+            last_ground = None if last["on_ground"] is None else bool(last["on_ground"])
+            if last_ground == on_ground and \
+                    haversine_nm(last["lat"], last["lon"], lat, lon) < MIN_POINT_SEPARATION_NM:
+                return
+
         conn.execute(
             "INSERT INTO positions (leg_id, user_id, ts, lat, lon, on_ground) VALUES (?, ?, ?, ?, ?, ?)",
             (leg_id, user_id, ts.isoformat(), lat, lon, None if on_ground is None else int(on_ground)),
@@ -35,11 +109,12 @@ def record_position(user_id: int, leg_id: str, lat: float, lon: float, ts: datet
                 SELECT rowid FROM positions WHERE leg_id = ? AND user_id = ? ORDER BY ts DESC LIMIT ?
             )
             """,
-            (leg_id, user_id, leg_id, user_id, MAX_BREADCRUMB_POINTS),
+            (leg_id, user_id, leg_id, user_id, MAX_TRACK_POINTS),
         )
         conn.commit()
     finally:
         conn.close()
+    _maybe_prune()
 
 
 def get_breadcrumb(user_id: int, leg_id: str) -> List[List[float]]:

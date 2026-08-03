@@ -8,6 +8,10 @@ stats/gamification, just the tracking.
 - Paste your FFDO schedule; automatic current/next/past flights based on
   local block times
 - Live ADS-B position via Airplanes.live, with a real flight-phase state machine
+- Flown tracks kept per flight for 30 days, so past flights replay their
+  actual path on the map
+- Nothing ever full-page reloads: live data, flight switching, and the
+  active flight changing all update in place
   (Scheduled → Departing → Taxi-out → In Air → Landing → Taxi-in → Arrived) —
   not just a clock guess
 - Breadcrumb trail, flight-progress bar, distance-to-go, ETE, and a classic
@@ -126,6 +130,17 @@ on the server with a callsign that is airborne right now:
 To swap providers, write a module exposing `fetch_state(callsign)` returning
 the normalized dict documented at the top of `app/livesource.py`, then change
 the single import there. Nothing else in the app knows which service is in use.
+
+## Flight tracks
+
+Each leg keeps its own flown path. Points are thinned on write (a fix is
+skipped unless the aircraft moved at least ~0.12 nm from the last stored
+one, though ground-state changes are always kept), so a plane parked at a
+gate stores one row instead of one per poll. Tracks older than 30 days are
+pruned automatically — see `TRACK_RETENTION_DAYS` in `app/track.py`.
+
+Tapping a past flight draws its real track. A flight with no stored track
+falls back to a dashed straight line between the airports.
 
 ## Storage
 

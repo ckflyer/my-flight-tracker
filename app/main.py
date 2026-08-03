@@ -540,6 +540,10 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now
         return live, extra
     if not is_selected_live:
         extra["status"] = selected_leg.status_at(now)
+        # A past (or not-yet-active) leg has no live data, but it may well
+        # have a stored track from when it WAS flying. Hand that back so
+        # the map can draw the real flown path.
+        extra["breadcrumb"] = get_breadcrumb(user_id, selected_leg.id)
         return live, extra
 
     dep_utc = selected_leg.dep_datetime_utc()
@@ -555,6 +559,7 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now
     if should_poll:
         live = live_summary(selected_leg.callsign)
     history = get_position_history(user_id, selected_leg.id)
+    extra["breadcrumb"] = get_breadcrumb(user_id, selected_leg.id)
     extra["progress_pct"] = compute_progress(selected_leg, live, now)
     extra["ete"] = compute_ete(selected_leg, live, now)
     extra["distance_nm"] = compute_distance_remaining_nm(selected_leg, live)
@@ -978,6 +983,11 @@ async def api_selected(request: Request, leg: Optional[str] = None):
     live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, settings.poll_seconds)
     return {
         "is_selected_live": is_selected_live,
+        # Which leg the app currently considers active. The page compares
+        # this to what it's showing so it can switch flights on its own
+        # when one ends and the next begins — that used to require the
+        # five-minute full-page reload.
+        "current_leg_id": info.current.id if info.current else None,
         "live": live,
         "status": extra.get("status"),
         "progress_pct": extra.get("progress_pct"),
@@ -987,4 +997,47 @@ async def api_selected(request: Request, leg: Optional[str] = None):
         "aircraft": extra.get("aircraft"),
         "origin": {"lat": selected_leg.origin_info.lat, "lon": selected_leg.origin_info.lon} if selected_leg.origin_info else None,
         "destination": {"lat": selected_leg.dest_info.lat, "lon": selected_leg.dest_info.lon} if selected_leg.dest_info else None,
+    }
+
+
+@app.get("/api/leg/{leg_id}")
+async def api_leg(request: Request, leg_id: str):
+    """Everything the tracker page needs to switch to a different flight
+    without navigating.
+
+    Tapping a flight row used to be a full page load, which reset scroll
+    position, re-collapsed the card, and closed the past-flights list. This
+    returns the same data the server-rendered page would have, so the page
+    can swap it in place.
+    """
+    pilot = current_pilot(request)
+    viewer_uid = None if pilot else current_viewer_user_id(request)
+    user_id = pilot["id"] if pilot else viewer_uid
+    if not user_id:
+        return {"error": "not authenticated"}
+
+    settings = load_settings(user_id)
+    info = get_current_info(user_id)
+    now = datetime.now(ZoneInfo("UTC"))
+
+    tf = settings.time_format
+    if not pilot:
+        cookie_tf = request.cookies.get("pt_viewer_tf")
+        if cookie_tf in ("12", "24"):
+            tf = cookie_tf
+
+    selected_leg, is_selected_live = resolve_selected_leg(info, leg_id)
+    if not selected_leg:
+        return {"error": "no flight"}
+
+    view = leg_view(selected_leg, now, tf)
+    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, settings.poll_seconds)
+    if view:
+        view.update(extra)
+    return {
+        "leg_id": selected_leg.id,
+        "is_selected_live": is_selected_live,
+        "current_leg_id": info.current.id if info.current else None,
+        "live": live,
+        "current": view,
     }

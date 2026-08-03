@@ -354,6 +354,11 @@
     }
     .map-settings-panel input { width: auto; margin: 0; }
 
+    .airport-label {
+      font-size: 0.62rem; font-weight: 700; letter-spacing: 0.04em;
+      text-align: center; text-shadow: 0 1px 3px rgba(0,0,0,0.85);
+      pointer-events: none; background: none; border: none;
+    }
     .collapsed-card {
       background: var(--card);
       border-radius: 16px;
@@ -458,8 +463,8 @@
 
   <div class="collapsed-card" id="collapsed-card">
     <div id="collapsed-card-header">
-      <div class="flight-num">{{ current.callsign }}{% if current.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
-      <div class="city-route">{{ current.origin_city }} <span class="to-word">to</span> {{ current.dest_city }}</div>
+      <div class="flight-num" id="card-flight-num">{{ current.callsign }}{% if current.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
+      <div class="city-route" id="card-city-route">{{ current.origin_city }} <span class="to-word">to</span> {{ current.dest_city }}</div>
       <div class="times-row">
         <div class="time-chip">
           <span class="chip-icon">
@@ -468,8 +473,8 @@
               <polyline points="7 7 17 7 17 17"></polyline>
             </svg>
           </span>
-          <span class="chip-code">{{ current.origin }}</span>
-          <span class="chip-time">{{ current.dep }}</span>
+          <span class="chip-code" id="card-origin-code">{{ current.origin }}</span>
+          <span class="chip-time" id="card-dep-time">{{ current.dep }}</span>
         </div>
         <div class="time-chip">
           <span class="chip-icon">
@@ -478,15 +483,15 @@
               <polyline points="17 7 17 17 7 17"></polyline>
             </svg>
           </span>
-          <span class="chip-code">{{ current.destination }}</span>
-          <span class="chip-time">{{ current.arr }}</span>
+          <span class="chip-code" id="card-dest-code">{{ current.destination }}</span>
+          <span class="chip-time" id="card-arr-time">{{ current.arr }}</span>
         </div>
       </div>
     </div>
 
     <div class="expand-details" id="expand-details">
       <span class="status {{ current.status|lower|replace(' ', '-') }}" id="status-badge">{{ current.status }}</span>
-      {% if is_selected_live %}
+      <div id="live-section" style="{{ '' if is_selected_live else 'display:none' }}">
       <div class="live-box {{ '' if live else 'muted-live' }}" id="live-box-el">
         <div id="live-box-inner">
           {% if live %}
@@ -526,7 +531,7 @@
           {% if current.ete %}<span>ETE {{ current.ete }}</span>{% endif %}
         </div>
       </div>
-      {% endif %}
+      </div>
       <div class="buttons">
         {% if settings.show_flightaware %}
         <a class="btn" data-fa-link href="{{ current.links.flightaware }}" target="_blank" rel="noopener">FlightAware</a>
@@ -552,7 +557,7 @@
         {% for leg in group.legs %}
         <div class="upcoming-item {% if leg.id == selected_id %}selected-row{% endif %}">
           <div class="list-item">
-            <a class="flight-row-link" href="/?leg={{ leg.id }}">
+            <a class="flight-row-link" data-leg-id="{{ leg.id }}" href="/?leg={{ leg.id }}">
               <div class="row-flight-num">{{ leg.callsign }}{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
               <div class="row-city-route">{{ leg.origin }} → {{ leg.destination }}</div>
               <div class="row-times-row">
@@ -596,7 +601,7 @@
       {% for leg in group.legs %}
       <div class="upcoming-item {% if leg.id == selected_id %}selected-row{% endif %}">
         <div class="list-item">
-          <a class="flight-row-link" href="/?leg={{ leg.id }}">
+          <a class="flight-row-link" data-leg-id="{{ leg.id }}" href="/?leg={{ leg.id }}">
             <div class="row-flight-num">{{ leg.callsign }}{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
             <div class="row-city-route">{{ leg.origin }} → {{ leg.destination }}</div>
             <div class="row-times-row">
@@ -796,8 +801,13 @@
 
       let liveData = {{ live | tojson if live else 'null' }};
       let currentData = {{ current | tojson if current else 'null' }};
-      const isSelectedLive = {{ 'true' if is_selected_live else 'false' }};
-      const selectedId = {{ selected_id | tojson if selected_id else 'null' }};
+      let isSelectedLive = {{ 'true' if is_selected_live else 'false' }};
+      let selectedId = {{ selected_id | tojson if selected_id else 'null' }};
+      // The leg the SERVER considers active. When this changes (one flight
+      // ends, the next becomes current) the page follows it automatically,
+      // unless the user has deliberately tapped a different flight.
+      let knownCurrentLegId = selectedId;
+      let userPinnedSelection = {{ 'true' if selected_id and not is_selected_live else 'false' }};
 
       // Zoom control sits top-left, clear of the settings/recenter buttons
       // (top-right) and the live stats overlay (bottom-right).
@@ -824,7 +834,34 @@
       window._ptRadarLayer = radarLayer;
 
       let originMarker = null, destMarker = null, remainingLine = null, flownLine = null, planeMarker = null;
+      let airportRings = [];
       let lastFitPts = [];
+
+      // CARTO's basemaps deliberately render almost no detail, so an
+      // airport is the same flat colour as everything around it and a
+      // taxiing aircraft looks like it's drifting across empty space.
+      // Drawing the field ourselves gives it an outline and a label
+      // without changing the basemap. The radius is a rough field extent,
+      // not real runway geometry — enough to see that the plane is AT the
+      // airport and roughly where on it.
+      const AIRPORT_RING_NM = 1.6;
+      function addAirportRing(lat, lon, code, colour) {
+        if (lat == null || lon == null) return;
+        const ring = L.circle([lat, lon], {
+          radius: AIRPORT_RING_NM * 1852,
+          color: colour, weight: 1.5, opacity: 0.85,
+          fillColor: colour, fillOpacity: 0.10, interactive: false
+        }).addTo(map);
+        const label = L.marker([lat, lon], {
+          interactive: false,
+          icon: L.divIcon({
+            className: 'airport-label',
+            html: '<span style="color:' + colour + '">' + code + '</span>',
+            iconSize: [44, 14], iconAnchor: [22, -10]
+          })
+        }).addTo(map);
+        airportRings.push(ring, label);
+      }
 
       function makePlaneIcon(track) {
         const svg = `
@@ -844,6 +881,8 @@
         [originMarker, destMarker, remainingLine, flownLine, planeMarker].forEach(function(l) {
           if (l) map.removeLayer(l);
         });
+        airportRings.forEach(function(l) { map.removeLayer(l); });
+        airportRings = [];
         originMarker = destMarker = remainingLine = flownLine = planeMarker = null;
 
         const pts = [];
@@ -851,12 +890,14 @@
           originMarker = L.circleMarker([cur.origin_lat, cur.origin_lon], {
             radius: 7, color: '#22c55e', fillColor: '#22c55e', fillOpacity: 0.95, weight: 2
           }).addTo(map).bindPopup('Origin: ' + cur.origin);
+          addAirportRing(cur.origin_lat, cur.origin_lon, cur.origin, '#22c55e');
           pts.push([cur.origin_lat, cur.origin_lon]);
         }
         if (cur && cur.dest_lat != null) {
           destMarker = L.circleMarker([cur.dest_lat, cur.dest_lon], {
             radius: 7, color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.95, weight: 2
           }).addTo(map).bindPopup('Destination: ' + cur.destination);
+          addAirportRing(cur.dest_lat, cur.dest_lon, cur.destination, '#3b82f6');
           pts.push([cur.dest_lat, cur.dest_lon]);
         }
 
@@ -882,11 +923,22 @@
           planeMarker = L.marker([live.lat, live.lon], { icon: makePlaneIcon(track), zIndexOffset: 1000 })
             .addTo(map)
             .bindPopup('Live position');
-        } else if (cur && cur.origin_lat != null && cur.dest_lat != null) {
-          remainingLine = L.polyline(
-            [[cur.origin_lat, cur.origin_lon], [cur.dest_lat, cur.dest_lon]],
-            { color: '#94a3b8', weight: 2, opacity: 0.7, dashArray: '4 8' }
-          ).addTo(map);
+        } else {
+          // Not the active flight. If this leg was tracked while it flew,
+          // draw the real path it took; otherwise fall back to the dashed
+          // straight line between the two airports.
+          const storedTrack = (cur && cur.breadcrumb) ? cur.breadcrumb : [];
+          if (storedTrack.length > 1) {
+            flownLine = L.polyline(storedTrack, {
+              color: '#94a3b8', weight: 3, opacity: 0.85
+            }).addTo(map);
+            storedTrack.forEach(function(pt) { pts.push(pt); });
+          } else if (cur && cur.origin_lat != null && cur.dest_lat != null) {
+            remainingLine = L.polyline(
+              [[cur.origin_lat, cur.origin_lon], [cur.dest_lat, cur.dest_lon]],
+              { color: '#94a3b8', weight: 2, opacity: 0.7, dashArray: '4 8' }
+            ).addTo(map);
+          }
         }
 
         lastFitPts = pts;
@@ -916,6 +968,20 @@
           .then(function(r) { return r.json(); })
           .then(function(data) {
             if (data.error) return;
+
+            // The 5-minute full-page reload existed to notice this: one
+            // flight ending and the next becoming active. Now the poll
+            // reports it and the page follows along in place. If the user
+            // deliberately tapped a different flight, leave them on it —
+            // don't yank the view out from under them.
+            if (data.current_leg_id !== undefined && data.current_leg_id !== null
+                && data.current_leg_id !== knownCurrentLegId) {
+              knownCurrentLegId = data.current_leg_id;
+              if (!userPinnedSelection && data.current_leg_id !== selectedId) {
+                selectLeg(data.current_leg_id, { automatic: true });
+                return;
+              }
+            }
 
             const statusBadge = document.getElementById('status-badge');
             if (statusBadge && data.status) {
@@ -988,11 +1054,97 @@
           .catch(function() {});
       }
 
+      // Swap the card + map to a different flight WITHOUT a page load, so
+      // scroll position, the expanded/collapsed card, and the open
+      // past-flights list all survive. This is what replaced tapping a row
+      // being a full navigation.
+      function applyLegPayload(data) {
+        if (!data || data.error || !data.current) return;
+        const cur = data.current;
+
+        selectedId = data.leg_id;
+        isSelectedLive = !!data.is_selected_live;
+        if (data.current_leg_id !== undefined) knownCurrentLegId = data.current_leg_id;
+
+        function setText(id, value) {
+          const el = document.getElementById(id);
+          if (el) el.textContent = value == null ? '' : value;
+        }
+        const numEl = document.getElementById('card-flight-num');
+        if (numEl) {
+          numEl.innerHTML = '';
+          numEl.appendChild(document.createTextNode(cur.callsign || ''));
+          if (cur.is_deadhead) {
+            const dh = document.createElement('span');
+            dh.className = 'dh';
+            dh.textContent = 'DH';
+            numEl.appendChild(dh);
+          }
+        }
+        const routeEl = document.getElementById('card-city-route');
+        if (routeEl) {
+          routeEl.innerHTML = '';
+          routeEl.appendChild(document.createTextNode((cur.origin_city || '') + ' '));
+          const to = document.createElement('span');
+          to.className = 'to-word';
+          to.textContent = 'to';
+          routeEl.appendChild(to);
+          routeEl.appendChild(document.createTextNode(' ' + (cur.dest_city || '')));
+        }
+        setText('card-origin-code', cur.origin);
+        setText('card-dep-time', cur.dep);
+        setText('card-dest-code', cur.destination);
+        setText('card-arr-time', cur.arr);
+
+        const statusBadge = document.getElementById('status-badge');
+        if (statusBadge && cur.status) {
+          statusBadge.textContent = cur.status;
+          statusBadge.className = 'status ' + cur.status.toLowerCase().replace(/ /g, '-');
+        }
+
+        // Live box and progress bar are meaningless for a flight that isn't
+        // the active one.
+        const liveSection = document.getElementById('live-section');
+        if (liveSection) liveSection.style.display = isSelectedLive ? '' : 'none';
+
+        const fa = document.querySelector('a[data-fa-link]');
+        if (fa && cur.links && cur.links.flightaware) fa.href = cur.links.flightaware;
+        const fr = document.querySelector('a[data-fr24-link]');
+        if (fr && cur.links && cur.links.fr24) fr.href = cur.links.fr24;
+
+        document.querySelectorAll('.upcoming-item').forEach(function(row) {
+          const link = row.querySelector('[data-leg-id]');
+          const isSel = link && link.getAttribute('data-leg-id') === selectedId;
+          row.classList.toggle('selected-row', !!isSel);
+        });
+
+        currentData = cur;
+        liveData = data.live;
+        renderMap(currentData, liveData, true);
+
+        // Keep the URL shareable/refreshable without navigating.
+        try {
+          history.replaceState(null, '', '/?leg=' + encodeURIComponent(selectedId));
+        } catch (e) {}
+      }
+
+      function selectLeg(legId, opts) {
+        if (!legId) return;
+        if (!opts || !opts.automatic) userPinnedSelection = true;
+        fetch('/api/leg/' + encodeURIComponent(legId))
+          .then(function(r) { return r.json(); })
+          .then(applyLegPayload)
+          .catch(function() {});
+      }
+
+      document.addEventListener('click', function(e) {
+        const link = e.target.closest ? e.target.closest('[data-leg-id]') : null;
+        if (!link) return;
+        e.preventDefault();
+        selectLeg(link.getAttribute('data-leg-id'));
+      });
+
       setInterval(refreshLiveData, {{ poll_ms }});
-      // Infrequent full-page safety net: picks up things a live-data-only
-      // refresh can't (e.g. a different flight becoming the active one),
-      // without disrupting the view on every normal poll cycle.
-      setInterval(function() { location.reload(); }, 5 * 60 * 1000);
     })();
   </script>
 </body>
