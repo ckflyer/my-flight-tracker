@@ -197,7 +197,7 @@
     .list-item:last-child { border-bottom: none; }
     .list-item .meta { font-size: 0.8rem; color: var(--muted); margin-top: 0.15rem; }
     .empty { color: var(--muted); text-align: center; padding: 2rem; }
-    .footer { text-align: center; color: var(--muted); font-size: 0.72rem; margin-top: 0.75rem; }
+    .footer { text-align: center; color: var(--muted); font-size: 0.72rem; margin-top: 0; }
     .toggle {
       display: block;
       width: 100%;
@@ -280,7 +280,7 @@
       margin: -0.4rem 0.1rem 1rem;
     }
     .trip-divider {
-      border-top: 2px dashed var(--border);
+      border-top: 2px dashed var(--muted);
       margin: 0.5rem 0 1.5rem;
     }
     .preview-map {
@@ -302,8 +302,8 @@
     #flight-map { height: 100%; width: 100%; z-index: 1; }
     .map-overlay-stats {
       position: absolute;
-      top: 0.75rem;
-      left: 0.75rem;
+      bottom: 1.9rem;
+      right: 0.75rem;
       z-index: 500;
       background: rgba(15,20,25,0.72);
       backdrop-filter: blur(6px);
@@ -315,9 +315,11 @@
     }
     .map-overlay-stats .stat-unit { font-weight: 400; opacity: 0.75; font-size: 0.72rem; }
     .map-overlay-stats-inner { display: flex; gap: 0.9rem; }
-    .map-controls { position: absolute; top: 0.75rem; right: 0.75rem; z-index: 500; }
+    .map-controls {
+      position: absolute; top: 0.75rem; right: 0.75rem; z-index: 500;
+      display: flex; flex-direction: column; gap: 0.5rem;
+    }
     .map-recenter-btn {
-      position: absolute; bottom: 0.75rem; right: 0.75rem; z-index: 500;
       width: 34px; height: 34px; border-radius: 50%;
       background: rgba(15,20,25,0.72);
       backdrop-filter: blur(6px);
@@ -376,7 +378,7 @@
       text-align: center;
       font-size: 0.72rem;
       color: var(--muted);
-      margin: -0.35rem 0 0.85rem;
+      margin: -0.35rem 0 0;
       cursor: pointer;
       padding: 0.3rem;
     }
@@ -445,13 +447,13 @@
         {% endif %}
         <label><input type="checkbox" id="toggle-radar" checked> Weather radar</label>
       </div>
+      <button type="button" class="map-recenter-btn" id="map-recenter-btn" title="Recenter map" aria-label="Recenter map">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path>
+        </svg>
+      </button>
     </div>
-    <button type="button" class="map-recenter-btn" id="map-recenter-btn" title="Recenter map" aria-label="Recenter map">
-      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="3"></circle>
-        <path d="M12 2v3M12 19v3M2 12h3M19 12h3"></path>
-      </svg>
-    </button>
   </div>
 
   <div class="collapsed-card" id="collapsed-card">
@@ -800,7 +802,7 @@
       // Zoom control moved to bottom-left so it never sits under the live
       // stats overlay (top-left) or the settings/recenter buttons (right).
       const map = L.map('flight-map', { zoomControl: false });
-      L.control.zoom({ position: 'bottomleft' }).addTo(map);
+      L.control.zoom({ position: 'topleft' }).addTo(map);
       mapEl._leafletInstance = map;
 
       const mapTheme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light_all' : 'dark_all';
