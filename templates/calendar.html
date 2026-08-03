@@ -68,8 +68,11 @@
     .day-cell.in-trip.round-left { border-top-left-radius: 8px; border-bottom-left-radius: 8px; }
     .day-cell.in-trip.round-right { border-top-right-radius: 8px; border-bottom-right-radius: 8px; }
     .day-cell.in-trip .meta-line { color: rgba(255,255,255,0.85); }
-    .day-cell .time-label { font-size: 0.65rem; font-weight: 700; margin-top: 0.15rem; line-height: 1.15; text-align: center; }
-    .day-cell .meta-line { font-size: 0.6rem; color: var(--muted); margin-top: 0.15rem; line-height: 1.2; text-align: center; }
+    /* Days with both a start and finish time stack two labels plus a leg
+       count in one small cell, which crowded quickly — smaller type and
+       tighter spacing give the day number room to breathe. */
+    .day-cell .time-label { font-size: 0.56rem; font-weight: 700; margin-top: 0.08rem; line-height: 1.05; text-align: center; letter-spacing: -0.01em; }
+    .day-cell .meta-line { font-size: 0.55rem; color: var(--muted); margin-top: 0.1rem; line-height: 1.15; text-align: center; }
 
     .agenda-day { background: var(--card); border-radius: 12px; padding: 0.9rem 1.1rem; margin-bottom: 0.6rem; scroll-margin-top: 1rem; }
     .agenda-day.is-today { border: 1px solid var(--accent); }
