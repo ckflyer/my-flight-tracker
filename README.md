@@ -7,13 +7,13 @@ stats/gamification, just the tracking.
 
 - Paste your FFDO schedule; automatic current/next/past flights based on
   local block times
-- Live ADS-B position via OpenSky, with a real flight-phase state machine
+- Live ADS-B position via Airplanes.live, with a real flight-phase state machine
   (Scheduled → Departing → Taxi-out → In Air → Landing → Taxi-in → Arrived) —
   not just a clock guess
 - Breadcrumb trail, flight-progress bar, distance-to-go, ETE, and a classic
   green/yellow/red weather radar overlay on the current flight's map
-- Aircraft registration/type looked up automatically (OpenSky's public
-  aircraft database) — no manual entry
+- Aircraft registration/type arrive with the live position — no lookup,
+  no manual entry
 - One-tap FlightRadar24 / FlightAware links that prefer the installed app on
   Android
 - Pilot login (username + password) plus a 5-digit share code so anyone you
@@ -74,7 +74,7 @@ Times are local block times at each airport. Each row has an "×" button on
   next to it that uses the phone's native share sheet (or copies to
   clipboard) to send the link + code.
 - The data model is user-scoped throughout (separate schedules, separate
-  OpenSky credentials, separate everything per pilot account) as groundwork
+  separate everything per pilot account) as groundwork
   for supporting more than one pilot on the same install later. Right now
   there's no public signup — accounts are created only via the one-time
   `/setup` bootstrap.
@@ -91,14 +91,14 @@ flight-tracker/
 │   ├── airports.py      # IATA → timezone / ICAO lookup
 │   ├── schedule.py      # schedule storage + current-flight logic (per user_id)
 │   ├── db.py            # SQLite connection + schema + migrations
-│   ├── aircraft.py      # aircraft registration/type auto-lookup (OpenSky DB)
 │   ├── track.py         # breadcrumb positions, flight-phase state machine, progress/ETE math
-│   ├── opensky.py       # live ADS-B lookups
+│   ├── airplaneslive.py # Airplanes.live provider (swap this to change source)
+│   ├── livesource.py    # provider-agnostic front door: shared cache + rate limit
 │   └── settings.py      # per-user settings (stored on the users table)
 ├── templates/
 │   ├── viewer.html      # mobile-friendly tracker view (map, breadcrumb, progress, radar)
 │   ├── admin.html       # schedule import/delete + share-code management
-│   ├── settings.html    # OpenSky credentials + display preferences
+│   ├── settings.html    # display preferences
 │   ├── login.html       # pilot login / viewer code entry
 │   └── setup.html       # first-run pilot account creation
 ├── data/                 # flighttracker.db + secret_key.txt live here (gitignored)
@@ -110,9 +110,26 @@ flight-tracker/
 └── README.md
 ```
 
+## Live data source
+
+Live positions come from the [Airplanes.live](https://airplanes.live/api-guide/)
+REST API. No key, no account, nothing to configure. It's rate limited to 1
+request per second for the whole deployment, so `livesource.py` puts a shared
+cache in front of it: everyone watching the same flight shares one upstream
+lookup, no matter how many family members have the page open.
+
+To check the source is reachable and returning what the app expects, run this
+on the server with a callsign that is airborne right now:
+
+    python3 check_live_source.py ENY3729
+
+To swap providers, write a module exposing `fetch_state(callsign)` returning
+the normalized dict documented at the top of `app/livesource.py`, then change
+the single import there. Nothing else in the app knows which service is in use.
+
 ## Storage
 
-Everything — schedule legs, users/accounts, aircraft metadata, and live
+Everything — schedule legs, users/accounts, and live
 breadcrumb positions — lives in `data/flighttracker.db` (SQLite). If you're
 upgrading from a version that used `data/schedule.json` or
 `data/settings.json`, those get imported automatically and attached to
@@ -128,7 +145,7 @@ must stay stable — deleting it logs everyone out.
 3. Make sure the `./data` folder exists on the host (Dockge/Compose will create it as a bind mount if it doesn't).
 4. Start the stack. First boot will build the image and expose port `8000`.
 5. Visit `http://<truenas-ip>:8000/` — you'll land on `/setup` to create your pilot account.
-6. Open `/settings` and paste in your OpenSky Client ID / Secret (stored per-account, survives rebuilds). Alternatively, set `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET` in the stack's environment variables in Dockge — the Settings page value takes priority if both are set.
+6. Nothing to configure for live tracking — Airplanes.live needs no API key or account.
 7. On `/admin`, grab the 5-digit share code and send it to whoever should be able to view your flights.
 8. Everything in `./data` persists across container restarts/rebuilds since it's a bind-mounted volume.
 
