@@ -67,8 +67,15 @@ def prune_old_positions(retention_days: int = TRACK_RETENTION_DAYS) -> int:
     conn = get_connection()
     try:
         cur = conn.execute("DELETE FROM flight_tracks WHERE ts < ?", (cutoff,))
+        removed = cur.rowcount or 0
+        # Enrichment ages out with the track it belongs to, so the two stay
+        # in step rather than one table growing forever.
+        try:
+            conn.execute("DELETE FROM flight_enrichment WHERE fetched_at < ?", (cutoff,))
+        except Exception:
+            pass
         conn.commit()
-        return cur.rowcount or 0
+        return removed
     finally:
         conn.close()
 

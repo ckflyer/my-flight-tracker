@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, Optional
 
 from .aeroapi import AeroApiError, fetch_leg
@@ -57,17 +58,44 @@ def get_enrichment(user_id: int, leg_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _store(user_id: int, leg_id: str, payload: Dict[str, Any], now: datetime) -> None:
+def _store(user_id: int, leg_id: str, payload: Dict[str, Any], now: datetime,
+           raw: Optional[Dict[str, Any]] = None) -> None:
     conn = get_connection()
     try:
+        existing = conn.execute(
+            "SELECT first_seen FROM flight_enrichment WHERE leg_id = ? AND user_id = ?",
+            (leg_id, user_id),
+        ).fetchone()
+        # Snapshot the first values seen and never overwrite them — that's
+        # the only record of the ORIGINAL schedule once an airline amends it.
+        first_seen = existing["first_seen"] if existing and existing["first_seen"] else json.dumps(payload)
         conn.execute(
-            "INSERT OR REPLACE INTO flight_enrichment (leg_id, user_id, fetched_at, payload) "
-            "VALUES (?, ?, ?, ?)",
-            (leg_id, user_id, now.isoformat(), json.dumps(payload)),
+            "INSERT OR REPLACE INTO flight_enrichment "
+            "(leg_id, user_id, fetched_at, payload, raw, first_seen) VALUES (?, ?, ?, ?, ?, ?)",
+            (leg_id, user_id, now.isoformat(), json.dumps(payload),
+             json.dumps(raw) if raw is not None else None, first_seen),
         )
         conn.commit()
     finally:
         conn.close()
+
+
+def get_first_seen(user_id: int, leg_id: str) -> Optional[Dict[str, Any]]:
+    """The earliest snapshot of this leg, before any schedule amendments."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT first_seen FROM flight_enrichment WHERE leg_id = ? AND user_id = ?",
+            (leg_id, user_id),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row or not row["first_seen"]:
+        return None
+    try:
+        return json.loads(row["first_seen"])
+    except Exception:
+        return None
 
 
 def _count_query(user_id: int, now: datetime) -> None:
@@ -195,8 +223,8 @@ def refresh(user_id: int, leg, now: datetime, adsb_changed: bool = False) -> Opt
         return None
 
     try:
-        fresh = fetch_leg(api_key, leg.callsign, leg.origin, leg.destination,
-                          leg.dep_datetime_utc())
+        fresh, raw = fetch_leg(api_key, leg.callsign, leg.origin, leg.destination,
+                               leg.dep_datetime_utc(), want_raw=True)
     except AeroApiError as e:
         print(f"[enrichment] {leg.id}: {e}")
         # Still counts against the key's usage — the request was made.
@@ -213,7 +241,7 @@ def refresh(user_id: int, leg, now: datetime, adsb_changed: bool = False) -> Opt
         return reason
 
     fresh["_queries"] = used + 1
-    _store(user_id, leg.id, fresh, now)
+    _store(user_id, leg.id, fresh, now, raw=raw)
     print(f"[enrichment] {leg.id}: refreshed ({reason})")
     return reason
 
@@ -253,51 +281,102 @@ def derive_status(enr: Optional[Dict[str, Any]], adsb_status: Optional[str]) -> 
     return adsb_status or "Scheduled"
 
 
-def delay_info(enr: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """How early or late, and which way to colour it.
-
-    Uses arrival rather than departure: a family member cares when he gets
-    there, and a late departure that makes up time enroute isn't news.
-    Prefers actual, then the live estimate, and compares against schedule.
-
-    Returns state of "early" | "late" | "ontime" — "ontime" is styled as
-    normal text, so no colour is applied unless there's really something
-    to say.
-    """
-    if not enr:
+def _fmt_local(dt: Optional[datetime], tz_name: Optional[str],
+               time_format: str = "24") -> Optional[str]:
+    """A UTC instant as a clock time at the airport, with its zone."""
+    if dt is None or not tz_name:
         return None
-    if enr.get("cancelled"):
-        return {"state": "cancelled", "minutes": 0, "text": "Cancelled"}
-
-    scheduled = _parse(enr.get("scheduled_in")) or _parse(enr.get("scheduled_on"))
-    actual = _parse(enr.get("actual_in")) or _parse(enr.get("actual_on"))
-    estimate = _parse(enr.get("estimated_in")) or _parse(enr.get("estimated_on"))
-    compare = actual or estimate
-    if not scheduled or not compare:
+    try:
+        local = dt.astimezone(ZoneInfo(tz_name))
+    except Exception:
         return None
+    if time_format == "12":
+        text = local.strftime("%I:%M %p").lstrip("0")
+    else:
+        text = local.strftime("%H:%M")
+    abbr = local.tzname() or tz_name.split("/")[-1]
+    return f"{text} {abbr}"
 
-    minutes = int(round((compare - scheduled).total_seconds() / 60))
-    settled = actual is not None
 
-    if abs(minutes) <= ON_TIME_TOLERANCE_MIN:
-        return {"state": "ontime", "minutes": minutes,
-                "text": "On time" if settled else "On time",
-                "settled": settled}
-
-    word = "late" if minutes > 0 else "early"
+def _span(minutes: int) -> str:
     amount = abs(minutes)
     if amount >= 60:
-        span = f"{amount // 60}h {amount % 60:02d}m"
-    else:
-        span = f"{amount} min"
-    verb = "arrived" if settled else "arriving"
+        return f"{amount // 60}h {amount % 60:02d}m"
+    return f"{amount} min"
+
+
+def _delay_for(enr, baseline, actual_key, estimate_key, tz_name, time_format,
+               verb_future, verb_past, tolerance):
+    """Shared shape for the departure and arrival delay blocks.
+
+    `baseline` is the FFDO SCHEDULED time — the pilot's own bid line, not
+    the airline's published schedule. Those can differ by a couple of
+    minutes, and the pilot flies to the FFDO, so that's what "late" is
+    measured against here.
+    """
+    if not enr or baseline is None:
+        return None
+    actual = _parse(enr.get(actual_key))
+    estimate = _parse(enr.get(estimate_key))
+    compare = actual or estimate
+    if compare is None:
+        return None
+
+    # Truncate BOTH to the minute before doing anything else. The displayed
+    # clock time drops seconds, so if the delta were computed from the raw
+    # instants it could round the other way and leave the note disagreeing
+    # with the time printed next to it by a minute — exactly the mismatch
+    # this whole block exists to fix.
+    compare = compare.replace(second=0, microsecond=0)
+    baseline = baseline.replace(second=0, microsecond=0)
+
+    minutes = int(round((compare - baseline).total_seconds() / 60))
+    settled = actual is not None
+    revised = _fmt_local(compare, tz_name, time_format)
+    original = _fmt_local(baseline, tz_name, time_format)
+
+    if abs(minutes) <= tolerance:
+        return {
+            "state": "ontime", "minutes": minutes, "settled": settled,
+            "time": revised, "original": original,
+            "text": f"{verb_past} on time" if settled else "On time",
+        }
+
+    word = "late" if minutes > 0 else "early"
+    verb = verb_past if settled else verb_future
     return {
         "state": "late" if minutes > 0 else "early",
         "minutes": minutes,
-        "text": f"{span} {word}",
-        "detail": f"{verb} {span} {word}",
         "settled": settled,
+        "time": revised,
+        # Only worth showing the original when it actually differs.
+        "original": original,
+        "text": f"{verb} {_span(minutes)} {word}",
     }
+
+
+def departure_delay(enr, leg, time_format: str = "24", tolerance: int = None):
+    """Is he getting out? Measured against the FFDO departure time.
+
+    Separate from arrival on purpose: a maintenance delay at the gate is
+    news long before it shows up as a late arrival, and sometimes a late
+    departure makes the time up enroute and never becomes one at all.
+    """
+    tol = ON_TIME_TOLERANCE_MIN if tolerance is None else tolerance
+    tz = getattr(leg.origin_info, "timezone", None) if leg.origin_info else None
+    return _delay_for(enr, leg.dep_datetime_utc(), "actual_out", "estimated_out",
+                      tz, time_format, "Departing", "Departed", tol)
+
+
+def arrival_delay(enr, leg, time_format: str = "24", tolerance: int = None):
+    """When does he get there? Measured against the FFDO arrival time."""
+    tol = ON_TIME_TOLERANCE_MIN if tolerance is None else tolerance
+    tz = getattr(leg.dest_info, "timezone", None) if leg.dest_info else None
+    if enr and enr.get("cancelled"):
+        return {"state": "cancelled", "minutes": 0, "settled": True,
+                "time": None, "original": None, "text": "Cancelled"}
+    return _delay_for(enr, leg.arr_datetime_utc(), "actual_in", "estimated_in",
+                      tz, time_format, "Arrives", "Arrived", tol)
 
 
 def gate_info(enr: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

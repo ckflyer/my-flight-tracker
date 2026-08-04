@@ -11,8 +11,8 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from .schedule import load_schedule, get_current_info, delete_leg, save_schedule
 from .livesource import live_summary, live_state_for_leg
-from .enrichment import (get_enrichment, derive_status, delay_info,
-                         gate_info, diversion_info, query_stats)
+from .enrichment import (get_enrichment, derive_status, departure_delay,
+                         arrival_delay, gate_info, diversion_info, query_stats)
 from .models import FlightLeg
 from .parser import parse_schedule_text
 from .airports import enrich_leg
@@ -584,7 +584,19 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now
     enr = get_enrichment(user_id, selected_leg.id)
     if enr:
         extra["status"] = derive_status(enr, extra.get("status"))
-        extra["delay"] = delay_info(enr)
+        # Departure and arrival are answered separately: "is he getting
+        # out?" and "when does he get there?" are different questions, and
+        # a late pushback doesn't always become a late arrival.
+        extra["dep_delay"] = departure_delay(enr, selected_leg, time_format)
+        extra["arr_delay"] = arrival_delay(enr, selected_leg, time_format)
+        # THE BUG THIS FIXES: the card used to print the FFDO scheduled
+        # time and then a note saying "18 min early" beside it, so the two
+        # never agreed. When there's an actual or estimated time, that is
+        # what gets shown, with the scheduled time kept as "was ...".
+        if extra["dep_delay"] and extra["dep_delay"].get("time"):
+            extra["dep_shown"] = extra["dep_delay"]["time"]
+        if extra["arr_delay"] and extra["arr_delay"].get("time"):
+            extra["arr_shown"] = extra["arr_delay"]["time"]
         extra["gates"] = gate_info(enr)
         extra["diversion"] = diversion_info(enr, selected_leg.destination)
         extra["ooi"] = {
@@ -1044,7 +1056,10 @@ async def api_selected(request: Request, leg: Optional[str] = None):
         "progress_pct": extra.get("progress_pct"),
         "ete": extra.get("ete"),
         "eta": extra.get("eta"),
-        "delay": extra.get("delay"),
+        "dep_delay": extra.get("dep_delay"),
+        "arr_delay": extra.get("arr_delay"),
+        "dep_shown": extra.get("dep_shown"),
+        "arr_shown": extra.get("arr_shown"),
         "gates": extra.get("gates"),
         "diversion": extra.get("diversion"),
         "distance_nm": extra.get("distance_nm"),

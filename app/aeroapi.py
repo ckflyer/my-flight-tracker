@@ -132,7 +132,7 @@ class AeroApiError(Exception):
 
 
 def fetch_leg(api_key: str, ident: str, origin: str, destination: str,
-              scheduled_dep: Optional[datetime]) -> Optional[Dict[str, Any]]:
+              scheduled_dep: Optional[datetime], want_raw: bool = False):
     """One query. Returns the enrichment dict for this leg, or None.
 
     Raises AeroApiError on auth/quota problems so the caller can surface
@@ -166,5 +166,8 @@ def fetch_leg(api_key: str, ident: str, origin: str, destination: str,
 
     match = pick_flight(data.get("flights") or [], origin, destination, scheduled_dep)
     if not match:
-        return None
-    return normalize(match)
+        return (None, None) if want_raw else None
+    normalized = normalize(match)
+    # The raw record is kept so fields we don't render today don't have to
+    # be bought a second time.
+    return (normalized, match) if want_raw else normalized

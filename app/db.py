@@ -280,6 +280,17 @@ def init_db() -> None:
             )
             """
         )
+        enr_cols = {r["name"] for r in conn.execute("PRAGMA table_info(flight_enrichment)")}
+        # The full untouched API record. Every query costs the pilot money,
+        # so throwing away fields we don't currently render would mean
+        # paying again later to re-fetch data we already had.
+        if "raw" not in enr_cols:
+            conn.execute("ALTER TABLE flight_enrichment ADD COLUMN raw TEXT")
+        # The first values we ever saw for this leg. Airlines amend
+        # published schedules, so without a snapshot the original times are
+        # simply lost and "was 11:55" becomes unanswerable.
+        if "first_seen" not in enr_cols:
+            conn.execute("ALTER TABLE flight_enrichment ADD COLUMN first_seen TEXT")
 
         # One-time migration of per-user history already recorded.
         # INSERT OR IGNORE collapses the duplicate (flight_key, ts) rows

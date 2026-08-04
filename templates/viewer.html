@@ -388,8 +388,15 @@
       display: inline-block; color: var(--accent); font-size: 0.82rem;
       font-weight: 600; text-decoration: none; padding: 0.25rem 0;
     }
+    .delay-row {
+      display: flex; flex-wrap: wrap; gap: 0.35rem 0.9rem; margin-top: 0.35rem;
+    }
     .delay-note {
-      font-size: 0.82rem; font-weight: 600; margin-top: 0.35rem;
+      font-size: 0.82rem; font-weight: 600;
+    }
+    .chip-was {
+      display: block; font-size: 0.7rem; color: var(--muted);
+      text-decoration: line-through; margin-top: 0.1rem;
     }
     .delay-note.early { color: var(--good); }
     .delay-note.late  { color: var(--bad); }
@@ -497,8 +504,12 @@
         <div class="flight-num" id="card-flight-num">{{ current.callsign }}{% if current.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
         <span class="status {{ current.status|lower|replace(' ', '-') }}" id="status-badge">{{ current.status }}</span>
       </div>
-      <div class="delay-note {{ current.delay.state if current.delay else '' }}" id="delay-note"
-           style="{{ '' if current.delay else 'display:none' }}">{{ current.delay.text if current.delay else '' }}</div>
+      <div class="delay-row">
+        <span class="delay-note {{ current.dep_delay.state if current.dep_delay else '' }}" id="dep-delay-note"
+              style="{{ '' if current.dep_delay else 'display:none' }}">{{ current.dep_delay.text if current.dep_delay else '' }}</span>
+        <span class="delay-note {{ current.arr_delay.state if current.arr_delay else '' }}" id="arr-delay-note"
+              style="{{ '' if current.arr_delay else 'display:none' }}">{{ current.arr_delay.text if current.arr_delay else '' }}</span>
+      </div>
       <div class="gate-line" id="gate-line" style="{{ '' if current.gates else 'display:none' }}">
         {%- if current.gates -%}
           {%- if current.gates.origin_gate %}Gate {{ current.gates.origin_gate }}{% if current.gates.origin_terminal %} (T{{ current.gates.origin_terminal }}){% endif %}{%- endif -%}
@@ -515,7 +526,8 @@
             </svg>
           </span>
           <span class="chip-code" id="card-origin-code">{{ current.origin }}</span>
-          <span class="chip-time" id="card-dep-time">{{ current.dep }}</span>
+          <span class="chip-time {{ current.dep_delay.state if current.dep_delay and current.dep_delay.state in ('early','late') else '' }}" id="card-dep-time">{{ current.dep_shown or current.dep }}</span>
+          <span class="chip-was" id="card-dep-was" style="{{ '' if (current.dep_shown and current.dep_delay and current.dep_delay.state != 'ontime') else 'display:none' }}">was {{ current.dep }}</span>
         </div>
         <div class="time-chip">
           <span class="chip-icon">
@@ -525,7 +537,8 @@
             </svg>
           </span>
           <span class="chip-code" id="card-dest-code">{{ current.destination }}</span>
-          <span class="chip-time {{ current.delay.state if current.delay and current.delay.state in ('early','late') else '' }}" id="card-arr-time">{{ current.arr }}</span>
+          <span class="chip-time {{ current.arr_delay.state if current.arr_delay and current.arr_delay.state in ('early','late') else '' }}" id="card-arr-time">{{ current.arr_shown or current.arr }}</span>
+          <span class="chip-was" id="card-arr-was" style="{{ '' if (current.arr_shown and current.arr_delay and current.arr_delay.state != 'ontime') else 'display:none' }}">was {{ current.arr }}</span>
         </div>
       </div>
     </div>
@@ -1041,22 +1054,35 @@
                   if (data.ete) parts.push('<span>ETE ' + data.ete + '</span>');
                   if (data.eta) parts.push('<span>Landing ' + data.eta + '</span>');
 
-                  var dn = document.getElementById('delay-note');
-                  if (dn) {
-                    if (data.delay && data.delay.text) {
-                      dn.textContent = data.delay.text;
-                      dn.className = 'delay-note ' + (data.delay.state || '');
-                      dn.style.display = '';
-                    } else {
-                      dn.style.display = 'none';
+                  function applyDelay(noteId, timeId, wasId, info, scheduled) {
+                    var note = document.getElementById(noteId);
+                    if (note) {
+                      if (info && info.text) {
+                        note.textContent = info.text;
+                        note.className = 'delay-note ' + (info.state || '');
+                        note.style.display = '';
+                      } else {
+                        note.style.display = 'none';
+                      }
+                    }
+                    var timeEl = document.getElementById(timeId);
+                    if (timeEl) {
+                      var tint = (info && (info.state === 'early' || info.state === 'late'))
+                        ? ' ' + info.state : '';
+                      timeEl.className = 'chip-time' + tint;
+                      if (info && info.time) timeEl.textContent = info.time;
+                    }
+                    var wasEl = document.getElementById(wasId);
+                    if (wasEl) {
+                      var show = info && info.time && info.state !== 'ontime' && scheduled;
+                      wasEl.textContent = show ? ('was ' + scheduled) : '';
+                      wasEl.style.display = show ? '' : 'none';
                     }
                   }
-                  var arrEl = document.getElementById('card-arr-time');
-                  if (arrEl) {
-                    var tint = (data.delay && (data.delay.state === 'early' || data.delay.state === 'late'))
-                      ? ' ' + data.delay.state : '';
-                    arrEl.className = 'chip-time' + tint;
-                  }
+                  applyDelay('dep-delay-note', 'card-dep-time', 'card-dep-was',
+                             data.dep_delay, currentData && currentData.dep);
+                  applyDelay('arr-delay-note', 'card-arr-time', 'card-arr-was',
+                             data.arr_delay, currentData && currentData.arr);
                   progLabel.innerHTML = parts.join('');
                 }
               } else {

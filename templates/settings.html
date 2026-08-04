@@ -54,6 +54,34 @@
       background: rgba(34,197,94,0.15); color: #22c55e; padding: 0.65rem 0.85rem;
       border-radius: 8px; margin-bottom: 1rem; font-size: 0.9rem;
     }
+    .switch-row {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 1rem; margin-bottom: 0.6rem;
+    }
+    .switch-row .switch-label { font-size: 0.95rem; font-weight: 600; }
+    .switch { position: relative; display: inline-block; width: 46px; height: 26px; flex-shrink: 0; }
+    .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+    .switch .track {
+      position: absolute; inset: 0; cursor: pointer; border-radius: 999px;
+      background: var(--border); transition: background 0.18s ease;
+    }
+    .switch .track:before {
+      content: ""; position: absolute; height: 20px; width: 20px; left: 3px; top: 3px;
+      background: #fff; border-radius: 50%; transition: transform 0.18s ease;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    }
+    .switch input:checked + .track { background: var(--accent); }
+    .switch input:checked + .track:before { transform: translateX(20px); }
+    .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .sub-fields {
+      margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid var(--border);
+    }
+    .usage-line {
+      display: flex; justify-content: space-between; align-items: baseline;
+      font-size: 0.8rem; color: var(--muted); margin-top: 0.9rem;
+      padding-top: 0.7rem; border-top: 1px solid var(--border);
+    }
+    .usage-line strong { color: var(--text); font-size: 0.95rem; }
     .hint { font-size: 0.8rem; color: var(--muted); margin-top: -0.5rem; margin-bottom: 0.85rem; }
     .topbar {
       display: flex;
@@ -136,22 +164,27 @@
 
   <form method="post" action="/settings">
     <div class="card">
-      <h2>Flight data (optional)</h2>
-      <label style="display:flex;align-items:center;gap:0.5rem;">
-        <input type="checkbox" name="aeroapi_enabled" value="1" id="aeroapi-toggle"
-               {{ 'checked' if s.aeroapi_enabled else '' }} style="width:auto;">
-        <span>Enable FlightAware AeroAPI</span>
-      </label>
-      <p class="hint">Adds actual gate and takeoff times, delays, diversions, cancellations and gate numbers &mdash; things ADS-B cannot broadcast. Position tracking stays on the free ADS-B feed either way.</p>
-      <div id="aeroapi-fields" style="{{ '' if s.aeroapi_enabled else 'display:none' }}">
-        <label>API key</label>
-        <input type="password" name="aeroapi_key" autocomplete="off"
-               placeholder="{{ 'key saved — leave blank to keep it' if s.aeroapi_key else 'paste your AeroAPI key' }}">
-        <p class="hint">Your own key, billed to your own FlightAware account. The Personal tier includes $5/month of free queries, or $10 if you feed ADS-B.</p>
-        <p class="hint" style="margin-top:0.5rem;">
-          <strong>{{ aeroapi_stats.queries }}</strong> queries this month ({{ aeroapi_stats.period }}).
-          Roughly 4&ndash;6 per flight; only the background tracker queries, never page refreshes.
-        </p>
+      <h2>Airline flight data</h2>
+      <div class="switch-row">
+        <span class="switch-label">FlightAware AeroAPI</span>
+        <label class="switch">
+          <input type="checkbox" name="aeroapi_enabled" value="1" id="aeroapi-toggle"
+                 {{ 'checked' if s.aeroapi_enabled else '' }}>
+          <span class="track"></span>
+        </label>
+      </div>
+      <p class="hint">Adds real departure and arrival times, delays, diversions, cancellations and gate numbers &mdash; none of which ADS-B broadcasts. Live position keeps using the free ADS-B feed either way.</p>
+
+      <div id="aeroapi-fields" class="sub-fields" style="{{ '' if s.aeroapi_enabled else 'display:none' }}">
+        <label for="aeroapi-key">API key</label>
+        <input type="password" name="aeroapi_key" id="aeroapi-key" autocomplete="off"
+               placeholder="{{ 'saved \u2014 leave blank to keep it' if s.aeroapi_key else 'paste your AeroAPI key' }}">
+        <p class="hint">Your own key on your own FlightAware account. The Personal tier includes $5/month of free queries, or $10 if you feed ADS-B.</p>
+        <div class="usage-line">
+          <span>Queries this month ({{ aeroapi_stats.period }})</span>
+          <strong>{{ aeroapi_stats.queries }}</strong>
+        </div>
+        <p class="hint" style="margin-top:0.5rem;">About 4&ndash;6 per flight. Only the background tracker queries &mdash; opening or refreshing a page never does.</p>
       </div>
     </div>
 

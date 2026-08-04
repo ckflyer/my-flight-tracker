@@ -249,6 +249,18 @@ Before trusting it, probe the real API from the server:
 That makes one query and prints what came back, what the app would show,
 and which fields are unpopulated for your airline.
 
+Delays are reported separately for departure and arrival, because "is he
+getting out?" and "when does he get there?" are different questions and a
+late pushback doesn't always become a late arrival. Both are measured
+against the FFDO SCHEDULE, not the airline's published times — the pilot
+flies to the bid line, so that's what late means here.
+
+When a revised time exists, the card shows THAT time with the scheduled
+one struck through beneath it. Previously it printed the scheduled time
+next to a note saying "18 min early", and the two never agreed. Delta and
+displayed time are both derived from minute-truncated values so they can
+never disagree by a rounding minute.
+
 Status uses OOOI first and ADS-B as fallback — `actual_out` is reportedly
 absent 15-50% of the time, so the two complement rather than compete.
 Enrichment also gives POSITIVE flight identification: AeroAPI knows which
