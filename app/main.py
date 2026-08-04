@@ -10,7 +10,9 @@ import calendar as cal_module
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from .schedule import load_schedule, get_current_info, delete_leg, save_schedule
-from .livesource import live_summary
+from .livesource import live_summary, live_state_for_leg
+from .enrichment import (get_enrichment, derive_status, delay_info,
+                         gate_info, diversion_info, query_stats)
 from .models import FlightLeg
 from .parser import parse_schedule_text
 from .airports import enrich_leg
@@ -570,11 +572,27 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now
         and now >= dep_utc - timedelta(minutes=20)
         and now <= arr_utc + timedelta(hours=3)
     )
-    if should_poll:
-        live = live_summary(selected_leg.callsign)
+    # History is read BEFORE the live lookup so the turn-flight guard can
+    # see whether this leg has already finished — if it has, whatever is
+    # broadcasting the callsign now is the next flight, not this one.
     history = get_position_history(selected_leg.id)
+    if should_poll:
+        live = live_state_for_leg(selected_leg, now, history)
     extra["breadcrumb"] = get_breadcrumb(selected_leg.id)
     extra["progress_pct"] = compute_progress(selected_leg, live, now)
+    # Read-only: page renders must never spend one of the pilot's queries.
+    enr = get_enrichment(user_id, selected_leg.id)
+    if enr:
+        extra["status"] = derive_status(enr, extra.get("status"))
+        extra["delay"] = delay_info(enr)
+        extra["gates"] = gate_info(enr)
+        extra["diversion"] = diversion_info(enr, selected_leg.destination)
+        extra["ooi"] = {
+            "out": enr.get("actual_out"), "off": enr.get("actual_off"),
+            "on": enr.get("actual_on"), "in": enr.get("actual_in"),
+        }
+        extra["enriched"] = True
+
     extra["ete"] = compute_ete(selected_leg, live, now)
     extra["eta"] = compute_eta(selected_leg, live, now, time_format)
     extra["distance_nm"] = compute_distance_remaining_nm(selected_leg, live)
@@ -918,7 +936,8 @@ async def settings_page(request: Request):
         return pilot
     s = load_settings(pilot["id"])
     template = jinja_env.get_template("settings.html")
-    ctx = {"request": request, "s": s, "saved": False, "is_admin": bool(pilot["is_admin"]), "pilot_id": pilot["id"]}
+    ctx = {"request": request, "s": s, "saved": False, "is_admin": bool(pilot["is_admin"]),
+           "pilot_id": pilot["id"], "aeroapi_stats": query_stats(pilot["id"])}
     if pilot["is_admin"]:
         ctx["all_users"] = list_all_users()
     return HTMLResponse(template.render(**ctx))
@@ -927,6 +946,8 @@ async def settings_page(request: Request):
 @app.post("/settings")
 async def settings_save(
     request: Request,
+    aeroapi_enabled: str = Form(""),
+    aeroapi_key: str = Form(""),
     time_format: str = Form("24"),
     theme: str = Form("dark"),
     poll_seconds: int = Form(15),
@@ -937,6 +958,10 @@ async def settings_save(
     if isinstance(pilot, RedirectResponse):
         return pilot
     s = AppSettings(
+        aeroapi_enabled=bool(aeroapi_enabled),
+        # A blank key with the toggle on means "keep what's stored" — the
+        # form shows the key masked, so submitting shouldn't wipe it.
+        aeroapi_key=aeroapi_key.strip() or load_settings(pilot["id"]).aeroapi_key,
         time_format="12" if time_format == "12" else "24",
         theme="light" if theme == "light" else "dark",
         poll_seconds=max(10, min(300, int(poll_seconds))),
@@ -945,7 +970,8 @@ async def settings_save(
     )
     save_settings(pilot["id"], s)
     template = jinja_env.get_template("settings.html")
-    ctx = {"request": request, "s": s, "saved": True, "is_admin": bool(pilot["is_admin"]), "pilot_id": pilot["id"]}
+    ctx = {"request": request, "s": s, "saved": True, "is_admin": bool(pilot["is_admin"]),
+           "pilot_id": pilot["id"], "aeroapi_stats": query_stats(pilot["id"])}
     if pilot["is_admin"]:
         ctx["all_users"] = list_all_users()
     return HTMLResponse(template.render(**ctx))
@@ -1018,6 +1044,9 @@ async def api_selected(request: Request, leg: Optional[str] = None):
         "progress_pct": extra.get("progress_pct"),
         "ete": extra.get("ete"),
         "eta": extra.get("eta"),
+        "delay": extra.get("delay"),
+        "gates": extra.get("gates"),
+        "diversion": extra.get("diversion"),
         "distance_nm": extra.get("distance_nm"),
         "breadcrumb": extra.get("breadcrumb", []),
         "aircraft": extra.get("aircraft"),

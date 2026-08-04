@@ -161,6 +161,100 @@ pruned automatically — see `TRACK_RETENTION_DAYS` in `app/track.py`.
 Tapping a past flight draws its real track. A flight with no stored track
 falls back to a dashed straight line between the airports.
 
+## Matching the right aircraft
+
+Live data is looked up by callsign, and a callsign is not unique to a leg.
+Regional turns fly out and back under one flight number (3700 DFW-MFE and
+3700 MFE-DFW the same day), and the return departs well inside the 3-hour
+window the outbound leg stays "current" for.
+
+`app/flightmatch.py` solves this with aircraft IDENTITY and the schedule,
+never geometry:
+
+  0. **Arbitrate** — when several legs share a callsign on the same day
+     (a turn, or a multi-stop line), only the one actually in progress may
+     claim the aircraft: the latest leg whose scheduled departure has
+     arrived. This is deterministic and needs no observation of the
+     aircraft at all, which matters because the ground-cycle release below
+     depends on seeing it stopped at the outstation — and small fields
+     frequently have no ADS-B coverage, so that release often never fires.
+     Not scoped to one account: which leg an aeroplane is flying is a fact
+     about the aeroplane.
+
+  1. **Acquire** — a leg adopts an aircraft on its callsign when that
+     aircraft is at the ORIGIN, or during a window around scheduled
+     departure (`ACQUIRE_BEFORE_DEP_MINUTES`/`ACQUIRE_AFTER_DEP_MINUTES`,
+     default -20/+45). The window matters for outstations with no ADS-B
+     receiver, where a flight may first appear already enroute. A turn's
+     return leg can't depart until this one has landed, so it never falls
+     inside that window.
+  2. **Hold** — from then on only that ICAO hex is accepted, and it's
+     accepted unconditionally, wherever it goes.
+  3. **Release** — a leg is one ground -> airborne -> ground cycle. Once the
+     acquired aircraft has flown and then been STOPPED on the ground
+     (under 5 kts) for `GROUND_COMPLETE_SECONDS` (default 300), the leg is
+     finished and the callsign is released. Stopped rather than merely on
+     the ground, so a long taxi-in doesn't end the leg early and lose the
+     taxi track. Completion doesn't require reaching the scheduled
+     destination, so a diversion correctly ends the leg where it actually
+     lands.
+
+     A change of transponder code CORROBORATES this, but only while the
+     aircraft is stopped on the ground — a new code parked at a gate means
+     a new flight plan, so the previous leg is over and there's no need to
+     wait out the full parked window. Squawk is never consulted in the
+     air: codes are routinely reassigned in flight as an aircraft is handed
+     between ATC facilities, so an airborne change says nothing about
+     whether the flight has ended. Only ground-observed codes are even
+     stored.
+
+Judging aircraft by heading was tried and removed. It cannot survive a
+diversion: a DFW-OKC leg turning back to DFW looks identical to the return
+flight, so the guard disowned the user's own aircraft exactly when it
+mattered most. Holds, opposite-flow departures and arrival vectoring break
+it the same way. There is no route data to compare against either — ADS-B
+does not transmit origin or destination, and airplanes.live has no route
+endpoint.
+
+## Optional: FlightAware AeroAPI enrichment
+
+Off by default. Each pilot enables it in Settings with their OWN AeroAPI
+key — the Personal tier includes $5/month of free queries, $10 if you feed
+ADS-B. With no key the app behaves exactly as it does without it.
+
+It supplies only what ADS-B cannot broadcast: actual OOOI times (gate-out,
+wheels-off, wheels-on, gate-in), live arrival estimates, delays,
+diversions with the amended destination, cancellations, and gate/terminal.
+Position, altitude, speed, tail number and type stay on the free ADS-B
+feed — they're never bought.
+
+Cost discipline, in `app/enrichment.py`:
+
+  * ONLY the background poller queries. Page renders read the cache, so
+    refreshing during a delay costs nothing.
+  * ADS-B transitions are the primary trigger — a query is spent when
+    something changed, not on a timer.
+  * A schedule fallback covers legs with no ADS-B coverage at all, which
+    is exactly when the airline's own OOOI matters most.
+  * `MIN_QUERY_GAP` and `MAX_QUERIES_PER_LEG` cap the spend per leg no
+    matter what.
+
+Budget works out around 4-6 queries per flight. Settings shows a running
+count for the month.
+
+Before trusting it, probe the real API from the server:
+
+    docker compose exec flight-tracker python3 check_aeroapi.py YOUR_KEY ENY3729 DFW OKC
+
+That makes one query and prints what came back, what the app would show,
+and which fields are unpopulated for your airline.
+
+Status uses OOOI first and ADS-B as fallback — `actual_out` is reportedly
+absent 15-50% of the time, so the two complement rather than compete.
+Enrichment also gives POSITIVE flight identification: AeroAPI knows which
+record corresponds to this origin/destination pair, so a turn's two
+directions are distinguished by data rather than inference.
+
 ## Storage
 
 Everything — schedule legs, users/accounts, and live

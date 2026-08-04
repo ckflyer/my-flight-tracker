@@ -136,6 +136,26 @@
 
   <form method="post" action="/settings">
     <div class="card">
+      <h2>Flight data (optional)</h2>
+      <label style="display:flex;align-items:center;gap:0.5rem;">
+        <input type="checkbox" name="aeroapi_enabled" value="1" id="aeroapi-toggle"
+               {{ 'checked' if s.aeroapi_enabled else '' }} style="width:auto;">
+        <span>Enable FlightAware AeroAPI</span>
+      </label>
+      <p class="hint">Adds actual gate and takeoff times, delays, diversions, cancellations and gate numbers &mdash; things ADS-B cannot broadcast. Position tracking stays on the free ADS-B feed either way.</p>
+      <div id="aeroapi-fields" style="{{ '' if s.aeroapi_enabled else 'display:none' }}">
+        <label>API key</label>
+        <input type="password" name="aeroapi_key" autocomplete="off"
+               placeholder="{{ 'key saved — leave blank to keep it' if s.aeroapi_key else 'paste your AeroAPI key' }}">
+        <p class="hint">Your own key, billed to your own FlightAware account. The Personal tier includes $5/month of free queries, or $10 if you feed ADS-B.</p>
+        <p class="hint" style="margin-top:0.5rem;">
+          <strong>{{ aeroapi_stats.queries }}</strong> queries this month ({{ aeroapi_stats.period }}).
+          Roughly 4&ndash;6 per flight; only the background tracker queries, never page refreshes.
+        </p>
+      </div>
+    </div>
+
+    <div class="card">
       <h2>Display</h2>
       <div class="row">
         <div>
@@ -220,5 +240,14 @@
   </div>
   {% endif %}
   <div style="text-align:center; color:var(--muted); font-size:0.75rem; margin-top:2rem;">v{{ version }}</div>
+<script>
+  (function() {
+    var t = document.getElementById('aeroapi-toggle');
+    var f = document.getElementById('aeroapi-fields');
+    if (t && f) t.addEventListener('change', function() {
+      f.style.display = t.checked ? '' : 'none';
+    });
+  })();
+</script>
 </body>
 </html>

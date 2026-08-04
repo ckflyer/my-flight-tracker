@@ -119,6 +119,20 @@ def init_db() -> None:
         if "recovery_code_hash" not in user_cols:
             conn.execute("ALTER TABLE users ADD COLUMN recovery_code_hash TEXT")
 
+        # Optional per-pilot AeroAPI credentials. Each pilot brings their own
+        # key and pays their own (usually zero) bill, exactly as the OpenSky
+        # fields used to work. With no key the app behaves as it always has.
+        if "aeroapi_enabled" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN aeroapi_enabled INTEGER NOT NULL DEFAULT 0")
+        if "aeroapi_key" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN aeroapi_key TEXT")
+        # Query accounting, so the pilot can see what their key is spending
+        # before a bill tells them. Reset when the month rolls over.
+        if "aeroapi_queries" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN aeroapi_queries INTEGER NOT NULL DEFAULT 0")
+        if "aeroapi_period" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN aeroapi_period TEXT")
+
         # Migration: legs are keyed on (user_id, id), not id alone.
         #
         # Leg ids are derived from the flight itself ("2026-08-04-3729-DFW-OKC"),
@@ -211,6 +225,60 @@ def init_db() -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_flight_tracks_key_ts ON flight_tracks(flight_key, ts)"
+        )
+
+        # Which physical aircraft is flying a given leg.
+        #
+        # A callsign is not unique to a leg — regional turns fly out and
+        # back under one flight number — but an aircraft's ICAO hex address
+        # is unique. Once an aircraft has been seen at the leg's ORIGIN it
+        # is recorded here, and from then on only that hex is accepted for
+        # the leg. That's what makes diversions safe: identity never
+        # depends on where the aircraft is going.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS flight_aircraft (
+                flight_key TEXT PRIMARY KEY,
+                icao24 TEXT NOT NULL,
+                acquired_at TEXT NOT NULL
+            )
+            """
+        )
+        fa_cols = {r["name"] for r in conn.execute("PRAGMA table_info(flight_aircraft)")}
+        # Whether this aircraft has actually flown yet — without it, sitting
+        # on the ground before pushback looks identical to sitting on the
+        # ground after landing.
+        if "airborne_seen" not in fa_cols:
+            conn.execute("ALTER TABLE flight_aircraft ADD COLUMN airborne_seen INTEGER NOT NULL DEFAULT 0")
+        # When it last came to a complete stop on the ground.
+        if "stopped_since" not in fa_cols:
+            conn.execute("ALTER TABLE flight_aircraft ADD COLUMN stopped_since TEXT")
+        # Last observed transponder code, ONLY ever compared while stopped
+        # on the ground — codes are routinely reassigned in flight as an
+        # aircraft is handed between ATC facilities, so an airborne change
+        # means nothing about whether the flight has ended.
+        if "last_squawk" not in fa_cols:
+            conn.execute("ALTER TABLE flight_aircraft ADD COLUMN last_squawk TEXT")
+        # Set once the leg is judged finished; blocks any re-acquisition.
+        if "completed_at" not in fa_cols:
+            conn.execute("ALTER TABLE flight_aircraft ADD COLUMN completed_at TEXT")
+
+        # Cached AeroAPI enrichment, one row per leg per pilot.
+        #
+        # Scoped to the pilot whose key paid for it, unlike flight_tracks
+        # which is shared: position is public ADS-B, but this was bought
+        # with one person's key under a personal-use tier, so it isn't
+        # pooled across accounts.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS flight_enrichment (
+                leg_id TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                fetched_at TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                PRIMARY KEY (leg_id, user_id)
+            )
+            """
         )
 
         # One-time migration of per-user history already recorded.

@@ -45,6 +45,60 @@ def save_schedule(user_id: int, legs: List[FlightLeg]) -> None:
         conn.close()
 
 
+def _row_to_leg(row) -> Optional[FlightLeg]:
+    try:
+        leg = FlightLeg(
+            id=row["id"],
+            date=date.fromisoformat(row["date"]),
+            flight_number=row["flight_number"],
+            origin=row["origin"],
+            destination=row["destination"],
+            dep_time_local=datetime.strptime(row["dep_time_local"], "%H:%M:%S").time(),
+            arr_time_local=datetime.strptime(row["arr_time_local"], "%H:%M:%S").time(),
+            is_deadhead=bool(row["is_deadhead"]),
+            trip_start=bool(row["trip_start"]) if "trip_start" in row.keys() else False,
+        )
+        enrich_leg(leg)
+        return leg
+    except Exception:
+        return None
+
+
+def legs_sharing_callsign(flight_number: str, on_date: date) -> List[FlightLeg]:
+    """Every leg on this date flown under this flight number.
+
+    Regional turns reuse one flight number in both directions, so a single
+    callsign can map to two or more legs in the same day. Deliberately NOT
+    scoped to one user: "which leg is this aircraft flying right now" is a
+    fact about the aeroplane, and tracks are keyed by flight rather than by
+    account. Deduplicated by flight key so the same leg appearing on two
+    pilots' schedules is only considered once.
+    """
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM legs WHERE flight_number = ? AND date = ?",
+            (flight_number, on_date.isoformat()),
+        ).fetchall()
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+    seen, legs = set(), []
+    for row in rows:
+        leg = _row_to_leg(row)
+        if not leg:
+            continue
+        key = leg.id[:-3] if leg.id.endswith("-DH") else leg.id
+        if key in seen:
+            continue
+        seen.add(key)
+        legs.append(leg)
+    legs.sort(key=lambda l: l.dep_datetime_utc() or datetime.min.replace(tzinfo=ZoneInfo("UTC")))
+    return legs
+
+
 def load_schedule(user_id: int) -> List[FlightLeg]:
     conn = get_connection()
     try:

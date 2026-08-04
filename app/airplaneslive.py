@@ -136,6 +136,7 @@ def normalize(ac: Dict[str, Any]) -> Dict[str, Any]:
         "registration": registration,
         "type_code": type_code,
         "aircraft_type": describe_type(type_code),
+        "squawk": (ac.get("squawk") or "").strip() or None,
         "position_age_s": position_age,
         "source": "airplanes.live",
     }

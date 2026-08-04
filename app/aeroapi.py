@@ -1,0 +1,170 @@
+"""FlightAware AeroAPI enrichment — the things ADS-B cannot tell you.
+
+Position, altitude, speed, tail number and type all come free from
+Airplanes.live and are NOT fetched here. This module exists only for data
+the aircraft doesn't broadcast:
+
+  * OOOI — scheduled / estimated / actual gate-out, wheels-off, wheels-on,
+    gate-in. Airline and ACARS sourced, so it works with no ADS-B receiver
+    anywhere near the field.
+  * Delays, as live-updating estimates rather than "still not here".
+  * Diversions, with the amended destination.
+  * Cancellations, which nothing in ADS-B can ever tell you.
+  * Gate, terminal and baggage claim.
+
+COST DISCIPLINE
+---------------
+This is the pilot's own API key and own money, so every call is
+deliberate. Only the background poller calls this module — never a page
+render — and results are cached in the database. A family member hammering
+refresh during a delay costs nothing.
+
+Endpoint: GET /flights/{ident}, one call returning everything above.
+Auth: x-apikey header. Docs: flightaware.com/aeroapi/portal/documentation
+"""
+from __future__ import annotations
+
+import os
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+import requests
+
+BASE_URL = os.environ.get("AEROAPI_BASE", "https://aeroapi.flightaware.com/aeroapi")
+REQUEST_TIMEOUT = 15
+
+
+def _dt(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _airport_code(block: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Prefer the IATA code — that's what an FFDO schedule uses."""
+    if not block:
+        return None
+    return (block.get("code_iata") or block.get("code") or "").strip().upper() or None
+
+
+def pick_flight(flights: List[Dict[str, Any]], origin: str, destination: str,
+                scheduled_dep: Optional[datetime]) -> Optional[Dict[str, Any]]:
+    """Choose the flight record that IS this leg.
+
+    /flights/{ident} returns several records for a flight number — recent
+    past, in progress, upcoming — and on a turn it returns both directions
+    under one number. Matching origin and destination is what makes this
+    positive identification rather than inference: the return leg simply
+    has them the other way round.
+
+    Where several records still match (same route, different days), the one
+    with the closest scheduled departure wins.
+    """
+    origin = (origin or "").strip().upper()
+    destination = (destination or "").strip().upper()
+
+    candidates = []
+    for f in flights or []:
+        o = _airport_code(f.get("origin"))
+        d = _airport_code(f.get("destination"))
+        if o != origin:
+            continue
+        # A diverted flight's destination is amended, so accept a record
+        # whose destination no longer matches when it says it diverted —
+        # otherwise the leg would go dark exactly when it diverts.
+        if d != destination and not f.get("diverted"):
+            continue
+        candidates.append(f)
+
+    if not candidates:
+        return None
+    if scheduled_dep is None:
+        return candidates[0]
+
+    def gap(f):
+        sched = _dt(f.get("scheduled_out")) or _dt(f.get("scheduled_off"))
+        if sched is None:
+            return float("inf")
+        return abs((sched - scheduled_dep).total_seconds())
+
+    best = min(candidates, key=gap)
+    # More than a day away it isn't this leg, whatever the route says.
+    return best if gap(best) < 86400 else None
+
+
+def normalize(f: Dict[str, Any]) -> Dict[str, Any]:
+    """One AeroAPI flight record -> the enrichment dict the app stores."""
+    return {
+        "fa_flight_id": f.get("fa_flight_id"),
+        "registration": f.get("registration"),
+        "cancelled": bool(f.get("cancelled")),
+        "diverted": bool(f.get("diverted")),
+        "blocked": bool(f.get("blocked")),
+        "status_text": f.get("status"),
+        "origin": _airport_code(f.get("origin")),
+        "destination": _airport_code(f.get("destination")),
+        # OOOI. "actual" is what happened; "estimated" is the live forecast.
+        "scheduled_out": f.get("scheduled_out"), "estimated_out": f.get("estimated_out"),
+        "actual_out": f.get("actual_out"),
+        "scheduled_off": f.get("scheduled_off"), "estimated_off": f.get("estimated_off"),
+        "actual_off": f.get("actual_off"),
+        "scheduled_on": f.get("scheduled_on"), "estimated_on": f.get("estimated_on"),
+        "actual_on": f.get("actual_on"),
+        "scheduled_in": f.get("scheduled_in"), "estimated_in": f.get("estimated_in"),
+        "actual_in": f.get("actual_in"),
+        # Reported in SECONDS by AeroAPI.
+        "departure_delay": f.get("departure_delay"),
+        "arrival_delay": f.get("arrival_delay"),
+        "gate_origin": f.get("gate_origin"),
+        "gate_destination": f.get("gate_destination"),
+        "terminal_origin": f.get("terminal_origin"),
+        "terminal_destination": f.get("terminal_destination"),
+        "baggage_claim": f.get("baggage_claim"),
+        "source": "aeroapi",
+    }
+
+
+class AeroApiError(Exception):
+    pass
+
+
+def fetch_leg(api_key: str, ident: str, origin: str, destination: str,
+              scheduled_dep: Optional[datetime]) -> Optional[Dict[str, Any]]:
+    """One query. Returns the enrichment dict for this leg, or None.
+
+    Raises AeroApiError on auth/quota problems so the caller can surface
+    something actionable in Settings — a silently dead toggle is worse than
+    no toggle. Ordinary "no matching flight" is just None.
+    """
+    ident = (ident or "").strip().upper()
+    if not api_key or not ident:
+        return None
+
+    url = f"{BASE_URL}/flights/{ident}"
+    try:
+        r = requests.get(url, headers={"x-apikey": api_key},
+                         params={"max_pages": 1}, timeout=REQUEST_TIMEOUT)
+    except Exception as e:
+        raise AeroApiError(f"could not reach AeroAPI: {e}")
+
+    if r.status_code in (401, 403):
+        raise AeroApiError("AeroAPI rejected the key (401/403) — check it in Settings")
+    if r.status_code == 429:
+        raise AeroApiError("AeroAPI rate limit or quota reached (429)")
+    if r.status_code >= 500:
+        raise AeroApiError(f"AeroAPI server error ({r.status_code})")
+    if r.status_code != 200:
+        raise AeroApiError(f"AeroAPI returned {r.status_code}")
+
+    try:
+        data = r.json()
+    except Exception as e:
+        raise AeroApiError(f"AeroAPI response was not JSON: {e}")
+
+    match = pick_flight(data.get("flights") or [], origin, destination, scheduled_dep)
+    if not match:
+        return None
+    return normalize(match)

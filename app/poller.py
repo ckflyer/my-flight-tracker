@@ -29,9 +29,10 @@ from typing import Dict, List
 from zoneinfo import ZoneInfo
 
 from .db import get_connection
-from .livesource import live_state
+from .livesource import live_state_for_leg
 from .schedule import get_current_info
-from .track import record_position
+from .track import record_position, get_position_history
+from .enrichment import refresh as refresh_enrichment
 
 # How often to sweep for active flights. Matches the viewer's default poll
 # so a recorded track has the same resolution whether or not anyone was
@@ -55,13 +56,17 @@ def _all_user_ids() -> List[int]:
 
 
 def active_flights() -> Dict[str, str]:
-    """Every flight currently in its window, as {leg_id: callsign}.
+    """Every flight currently in its window, as {leg_id: leg}.
 
     Deduplicated across accounts: if several pilots share a flight it is
     polled once, and because tracks are keyed by flight rather than user,
     that single fetch serves all of them.
+
+    Returns {leg_id: FlightLeg} — the leg itself, not just its callsign,
+    because verifying an aircraft actually belongs to this leg needs the
+    origin and destination.
     """
-    found: Dict[str, str] = {}
+    found: Dict[str, object] = {}
     for user_id in _all_user_ids():
         try:
             info = get_current_info(user_id)
@@ -70,27 +75,60 @@ def active_flights() -> Dict[str, str]:
             continue
         leg = info.current
         if leg and leg.callsign:
-            found[leg.id] = leg.callsign
+            found[leg.id] = leg
     return found
+
+
+def _owners_of(leg_id: str) -> List[int]:
+    """Which accounts have this leg — i.e. whose AeroAPI key may pay."""
+    conn = get_connection()
+    try:
+        return [r["user_id"] for r in conn.execute(
+            "SELECT DISTINCT user_id FROM legs WHERE id = ?", (leg_id,))]
+    finally:
+        conn.close()
 
 
 def poll_once() -> int:
     """One sweep. Returns how many flights had a position recorded."""
     recorded = 0
     now = datetime.now(ZoneInfo("UTC"))
-    for leg_id, callsign in active_flights().items():
+    for leg_id, leg in active_flights().items():
         try:
-            state = live_state(callsign)
+            # Same guard the page uses: a callsign match that's heading the
+            # wrong way is the return flight, and recording it here would
+            # silently corrupt the stored track with nobody watching.
+            history = get_position_history(leg_id)
+            state = live_state_for_leg(leg, now, history)
         except Exception as e:
-            print(f"[poller] lookup failed for {callsign}: {e}")
+            print(f"[poller] lookup failed for {leg.callsign}: {e}")
             continue
         if not state or state.get("lat") is None or state.get("lon") is None:
+            # No ADS-B for this leg — precisely when the airline's own OOOI
+            # matters most, so still give enrichment a chance.
+            for user_id in _owners_of(leg_id):
+                try:
+                    refresh_enrichment(user_id, leg, now, adsb_changed=False)
+                except Exception as e:
+                    print(f"[poller] enrichment failed for {leg_id}/{user_id}: {e}")
             continue
         try:
+            before = len(history)
             record_position(leg_id, state["lat"], state["lon"], now, state.get("on_ground"))
             recorded += 1
+            # A stored point means the aircraft actually moved or changed
+            # ground state — the cheap signal that something happened, and
+            # the primary trigger for spending an AeroAPI query.
+            changed = len(get_position_history(leg_id)) > before
         except Exception as e:
             print(f"[poller] record failed for {leg_id}: {e}")
+            changed = False
+
+        for user_id in _owners_of(leg_id):
+            try:
+                refresh_enrichment(user_id, leg, now, adsb_changed=changed)
+            except Exception as e:
+                print(f"[poller] enrichment failed for {leg_id}/{user_id}: {e}")
     return recorded
 
 

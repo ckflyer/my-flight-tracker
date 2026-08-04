@@ -115,6 +115,40 @@ def live_summary(callsign: str, cache_ttl_s: float = DEFAULT_CACHE_TTL_S) -> Opt
     return live_state(callsign, cache_ttl_s)
 
 
+def live_state_for_leg(leg, now, history=None):
+    """Live state for a leg, or None if this isn't the leg's aircraft.
+
+    Every consumer — the page, the poll endpoint, the background recorder —
+    goes through here, so the guard can't be applied in one path and
+    forgotten in another.
+    """
+    from .flightmatch import already_arrived, evaluate, observe, release_aircraft
+
+    if history is not None and already_arrived(leg, history, now):
+        # The leg is over. Whatever is broadcasting this callsign now is the
+        # next flight — most often the same aeroplane turning straight back
+        # around under the same flight number.
+        release_aircraft(leg)
+        return None
+
+    state = live_state(leg.callsign)
+    if state is None:
+        return None
+
+    verdict = evaluate(leg, state, now)
+    if not verdict.accepted:
+        print(f"[livesource] ignoring aircraft on {leg.callsign} for {leg.id}: {verdict.reason}")
+        return None
+
+    # Fold this observation into the leg's flight-cycle state. If it
+    # completes the leg (flown, then stopped on the ground — or a new
+    # squawk while parked), this is the last observation this leg accepts.
+    if observe(leg, state, now):
+        print(f"[livesource] {leg.id} complete — aircraft has flown and is stopped "
+              f"on the ground; releasing the callsign")
+    return state
+
+
 def reset_cache() -> None:
     """Test hook — clears cache and the rate-limit clock."""
     global _last_upstream_at

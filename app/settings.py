@@ -15,6 +15,8 @@ from .db import get_connection
 
 
 class AppSettings(BaseModel):
+    aeroapi_enabled: bool = False
+    aeroapi_key: str = ""
     time_format: str = "24"
     show_flightaware: bool = True
     show_fr24: bool = True
@@ -27,7 +29,8 @@ def load_settings(user_id: int) -> AppSettings:
     try:
         row = conn.execute(
             """
-            SELECT time_format, theme, poll_seconds, show_flightaware, show_fr24
+            SELECT aeroapi_enabled, aeroapi_key, time_format, theme, poll_seconds,
+                   show_flightaware, show_fr24
             FROM users WHERE id = ?
             """,
             (user_id,),
@@ -37,6 +40,8 @@ def load_settings(user_id: int) -> AppSettings:
     if not row:
         return AppSettings()
     return AppSettings(
+        aeroapi_enabled=bool(row["aeroapi_enabled"]),
+        aeroapi_key=row["aeroapi_key"] or "",
         time_format=row["time_format"] or "24",
         theme=row["theme"] or "dark",
         poll_seconds=row["poll_seconds"] or 15,
@@ -51,11 +56,13 @@ def save_settings(user_id: int, s: AppSettings) -> None:
         conn.execute(
             """
             UPDATE users SET
+                aeroapi_enabled = ?, aeroapi_key = ?,
                 time_format = ?, theme = ?, poll_seconds = ?,
                 show_flightaware = ?, show_fr24 = ?
             WHERE id = ?
             """,
             (
+                int(s.aeroapi_enabled), s.aeroapi_key,
                 s.time_format, s.theme, s.poll_seconds,
                 int(s.show_flightaware), int(s.show_fr24),
                 user_id,

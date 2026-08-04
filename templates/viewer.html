@@ -23,6 +23,7 @@
       --text: #e7ecf3;
       --muted: #8b9bb4;
       --good: #22c55e;
+      --bad: #f87171;
       --warn: #f59e0b;
       --border: #2a3548;
       --map-border: #334155;
@@ -33,6 +34,7 @@
       --accent: #2563eb;
       --text: #0f172a;
       --muted: #64748b;
+      --bad: #dc2626;
       --good: #16a34a;
       --warn: #d97706;
       --border: #e2e8f0;
@@ -386,6 +388,20 @@
       display: inline-block; color: var(--accent); font-size: 0.82rem;
       font-weight: 600; text-decoration: none; padding: 0.25rem 0;
     }
+    .delay-note {
+      font-size: 0.82rem; font-weight: 600; margin-top: 0.35rem;
+    }
+    .delay-note.early { color: var(--good); }
+    .delay-note.late  { color: var(--bad); }
+    .delay-note.ontime { color: var(--muted); font-weight: 500; }
+    .delay-note.cancelled { color: var(--bad); font-weight: 700; }
+    /* The arrival time itself is tinted to match, so a glance at the chip
+       says early/late without reading the note. */
+    .chip-time.early { color: var(--good); }
+    .chip-time.late  { color: var(--bad); }
+    .gate-line {
+      font-size: 0.78rem; color: var(--muted); margin-top: 0.3rem;
+    }
     .flight-line {
       display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap;
     }
@@ -481,6 +497,14 @@
         <div class="flight-num" id="card-flight-num">{{ current.callsign }}{% if current.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
         <span class="status {{ current.status|lower|replace(' ', '-') }}" id="status-badge">{{ current.status }}</span>
       </div>
+      <div class="delay-note {{ current.delay.state if current.delay else '' }}" id="delay-note"
+           style="{{ '' if current.delay else 'display:none' }}">{{ current.delay.text if current.delay else '' }}</div>
+      <div class="gate-line" id="gate-line" style="{{ '' if current.gates else 'display:none' }}">
+        {%- if current.gates -%}
+          {%- if current.gates.origin_gate %}Gate {{ current.gates.origin_gate }}{% if current.gates.origin_terminal %} (T{{ current.gates.origin_terminal }}){% endif %}{%- endif -%}
+          {%- if current.gates.dest_gate %} &rarr; Gate {{ current.gates.dest_gate }}{% if current.gates.dest_terminal %} (T{{ current.gates.dest_terminal }}){% endif %}{%- endif -%}
+        {%- endif -%}
+      </div>
       <div class="city-route" id="card-city-route">{{ current.origin_city }} <span class="to-word">to</span> {{ current.dest_city }}</div>
       <div class="times-row">
         <div class="time-chip">
@@ -501,7 +525,7 @@
             </svg>
           </span>
           <span class="chip-code" id="card-dest-code">{{ current.destination }}</span>
-          <span class="chip-time" id="card-arr-time">{{ current.arr }}</span>
+          <span class="chip-time {{ current.delay.state if current.delay and current.delay.state in ('early','late') else '' }}" id="card-arr-time">{{ current.arr }}</span>
         </div>
       </div>
     </div>
@@ -1016,6 +1040,23 @@
                   if (data.distance_nm != null) parts.push('<span>' + data.distance_nm + ' nm to go</span>');
                   if (data.ete) parts.push('<span>ETE ' + data.ete + '</span>');
                   if (data.eta) parts.push('<span>Landing ' + data.eta + '</span>');
+
+                  var dn = document.getElementById('delay-note');
+                  if (dn) {
+                    if (data.delay && data.delay.text) {
+                      dn.textContent = data.delay.text;
+                      dn.className = 'delay-note ' + (data.delay.state || '');
+                      dn.style.display = '';
+                    } else {
+                      dn.style.display = 'none';
+                    }
+                  }
+                  var arrEl = document.getElementById('card-arr-time');
+                  if (arrEl) {
+                    var tint = (data.delay && (data.delay.state === 'early' || data.delay.state === 'late'))
+                      ? ' ' + data.delay.state : '';
+                    arrEl.className = 'chip-time' + tint;
+                  }
                   progLabel.innerHTML = parts.join('');
                 }
               } else {
