@@ -253,19 +253,26 @@ def refresh(user_id: int, leg, now: datetime, adsb_changed: bool = False) -> Opt
 ON_TIME_TOLERANCE_MIN = 5
 
 
-def derive_status(enr: Optional[Dict[str, Any]], adsb_status: Optional[str]) -> Optional[str]:
-    """Flight phase, OOOI first, ADS-B as the fallback.
+# How far along a flight each phase is. Used to combine two sources that
+# each go stale in different ways, rather than letting either one win
+# outright.
+# How far past schedule a departure estimate has to move before the card
+# says "Delayed" rather than "Departing".
+DELAY_STATUS_MIN = 10
 
-    OOOI leads because it's what actually happened, reported by the
-    airline, and it works where there's no ADS-B coverage at all. But
-    actual_out in particular is often missing, so where OOOI is silent the
-    ADS-B phase machine still answers — the two complement rather than
-    compete.
-    """
+PHASE_ORDER = {
+    "Unknown": -1, "Scheduled": 0, "Delayed": 0, "Cancelled": 0,
+    "Departing": 1, "Taxi-out": 1,
+    "In Air": 2, "Diverting": 2,
+    "Landing": 3,
+    "Taxi-in": 4,
+    "Arrived": 5,
+}
+
+
+def _ooi_phase(enr: Optional[Dict[str, Any]]) -> Optional[str]:
     if not enr:
-        return adsb_status
-    if enr.get("cancelled"):
-        return "Cancelled"
+        return None
     if enr.get("actual_in"):
         return "Arrived"
     if enr.get("actual_on"):
@@ -274,15 +281,60 @@ def derive_status(enr: Optional[Dict[str, Any]], adsb_status: Optional[str]) -> 
         return "Diverting" if enr.get("diverted") else "In Air"
     if enr.get("actual_out"):
         return "Taxi-out"
-    # Airborne per ADS-B but OOOI hasn't caught up (actual_out is missing
-    # 15-50% of the time), so don't contradict what we can see.
-    if adsb_status and adsb_status not in ("Scheduled",):
+    return None
+
+
+def derive_status(enr: Optional[Dict[str, Any]], adsb_status: Optional[str]) -> Optional[str]:
+    """Flight phase from OOOI and ADS-B together — whichever is further along.
+
+    Neither source can be trusted alone, and they fail in OPPOSITE
+    directions:
+
+      * OOOI runs LATE. actual_on and actual_in are published with a lag,
+        so a flight that has visibly landed still reports "In Air".
+      * ADS-B runs BLIND. No receiver near a small field means no ground
+        state at all, so a landed aircraft just disappears.
+
+    An earlier version returned the first matching OOOI field and never
+    consulted ADS-B afterwards, which meant a flight sat at "In Air" while
+    ADS-B plainly showed it stopped on the ground at the destination.
+
+    So: rank both and take the more advanced. Whichever notices first
+    wins, and neither can drag the flight backwards.
+    """
+    if enr and enr.get("cancelled"):
+        return "Cancelled"
+
+    # "Departing" from the ADS-B side only means the scheduled departure
+    # time has passed with nothing seen yet — it is NOT evidence the
+    # aircraft is going anywhere. If the airline has pushed the estimate
+    # and there's still no gate-out, the flight is delayed, and saying
+    # "Departing" for a flight sitting at the gate is actively misleading.
+    if enr and not enr.get("actual_out") and not enr.get("actual_off"):
+        pushed = _parse(enr.get("estimated_out"))
+        sched = _parse(enr.get("scheduled_out"))
+        if pushed and sched and (pushed - sched).total_seconds() >= DELAY_STATUS_MIN * 60:
+            if adsb_status in (None, "Scheduled", "Departing", "Taxi-out"):
+                return "Delayed"
+
+    ooi = _ooi_phase(enr)
+    if ooi is None:
+        return adsb_status or "Scheduled"
+    if not adsb_status:
+        return ooi
+
+    ooi_rank = PHASE_ORDER.get(ooi, -1)
+    adsb_rank = PHASE_ORDER.get(adsb_status, -1)
+    if adsb_rank > ooi_rank:
         return adsb_status
-    return adsb_status or "Scheduled"
+    # Keep the diversion wording when OOOI knows about it and ADS-B can't.
+    if ooi == "Diverting" and adsb_rank <= ooi_rank:
+        return "Diverting"
+    return ooi
 
 
 def _fmt_local(dt: Optional[datetime], tz_name: Optional[str],
-               time_format: str = "24") -> Optional[str]:
+               time_format: str = "24", with_zone: bool = True) -> Optional[str]:
     """A UTC instant as a clock time at the airport, with its zone."""
     if dt is None or not tz_name:
         return None
@@ -294,6 +346,8 @@ def _fmt_local(dt: Optional[datetime], tz_name: Optional[str],
         text = local.strftime("%I:%M %p").lstrip("0")
     else:
         text = local.strftime("%H:%M")
+    if not with_zone:
+        return text
     abbr = local.tzname() or tz_name.split("/")[-1]
     return f"{text} {abbr}"
 
@@ -306,7 +360,7 @@ def _span(minutes: int) -> str:
 
 
 def _delay_for(enr, baseline, actual_key, estimate_key, tz_name, time_format,
-               verb_future, verb_past, tolerance):
+               verb_future, verb_past, tolerance, observed=None, settled_override=None):
     """Shared shape for the departure and arrival delay blocks.
 
     `baseline` is the FFDO SCHEDULED time — the pilot's own bid line, not
@@ -318,7 +372,11 @@ def _delay_for(enr, baseline, actual_key, estimate_key, tz_name, time_format,
         return None
     actual = _parse(enr.get(actual_key))
     estimate = _parse(enr.get(estimate_key))
-    compare = actual or estimate
+    # Order matters: the airline's actual, then what WE observed, then the
+    # forecast. An observed gate stop is a fact; estimated_in is not, and
+    # presenting a forecast as the arrival time is misleading once the
+    # aircraft is demonstrably parked.
+    compare = actual or observed or estimate
     if compare is None:
         return None
 
@@ -331,14 +389,22 @@ def _delay_for(enr, baseline, actual_key, estimate_key, tz_name, time_format,
     baseline = baseline.replace(second=0, microsecond=0)
 
     minutes = int(round((compare - baseline).total_seconds() / 60))
-    settled = actual is not None
+    # Past tense follows the FLIGHT, not just whether the airline has
+    # published a figure — a card reading "Arrived" beside "Arrives 11 min
+    # early" is self-contradictory.
+    settled = (actual is not None) or (observed is not None)
+    if settled_override is not None:
+        settled = settled_override
     revised = _fmt_local(compare, tz_name, time_format)
     original = _fmt_local(baseline, tz_name, time_format)
+    revised_short = _fmt_local(compare, tz_name, time_format, with_zone=False)
+    original_short = _fmt_local(baseline, tz_name, time_format, with_zone=False)
 
     if abs(minutes) <= tolerance:
         return {
             "state": "ontime", "minutes": minutes, "settled": settled,
             "time": revised, "original": original,
+            "time_short": revised_short, "original_short": original_short,
             "text": f"{verb_past} on time" if settled else "On time",
         }
 
@@ -351,11 +417,15 @@ def _delay_for(enr, baseline, actual_key, estimate_key, tz_name, time_format,
         "time": revised,
         # Only worth showing the original when it actually differs.
         "original": original,
+        "time_short": revised_short,
+        "original_short": original_short,
         "text": f"{verb} {_span(minutes)} {word}",
+        "short_text": f"{_span(minutes)} {word}",
     }
 
 
-def departure_delay(enr, leg, time_format: str = "24", tolerance: int = None):
+def departure_delay(enr, leg, time_format: str = "24", tolerance: int = None,
+                    status: Optional[str] = None):
     """Is he getting out? Measured against the FFDO departure time.
 
     Separate from arrival on purpose: a maintenance delay at the gate is
@@ -364,19 +434,25 @@ def departure_delay(enr, leg, time_format: str = "24", tolerance: int = None):
     """
     tol = ON_TIME_TOLERANCE_MIN if tolerance is None else tolerance
     tz = getattr(leg.origin_info, "timezone", None) if leg.origin_info else None
+    departed = status in ("In Air", "Landing", "Taxi-in", "Arrived", "Diverting") if status else None
     return _delay_for(enr, leg.dep_datetime_utc(), "actual_out", "estimated_out",
-                      tz, time_format, "Departing", "Departed", tol)
+                      tz, time_format, "Departing", "Departed", tol,
+                      settled_override=departed if departed else None)
 
 
-def arrival_delay(enr, leg, time_format: str = "24", tolerance: int = None):
+def arrival_delay(enr, leg, time_format: str = "24", tolerance: int = None,
+                  status: Optional[str] = None, observed_in=None):
     """When does he get there? Measured against the FFDO arrival time."""
     tol = ON_TIME_TOLERANCE_MIN if tolerance is None else tolerance
     tz = getattr(leg.dest_info, "timezone", None) if leg.dest_info else None
     if enr and enr.get("cancelled"):
         return {"state": "cancelled", "minutes": 0, "settled": True,
                 "time": None, "original": None, "text": "Cancelled"}
+    arrived = (status == "Arrived") if status else None
     return _delay_for(enr, leg.arr_datetime_utc(), "actual_in", "estimated_in",
-                      tz, time_format, "Arrives", "Arrived", tol)
+                      tz, time_format, "Arrives", "Arrived", tol,
+                      observed=observed_in,
+                      settled_override=True if arrived else None)
 
 
 def gate_info(enr: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

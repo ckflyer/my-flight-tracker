@@ -23,8 +23,9 @@ def save_schedule(user_id: int, legs: List[FlightLeg]) -> None:
                 """
                 INSERT OR REPLACE INTO legs
                     (id, user_id, sort_index, date, flight_number, origin, destination,
-                     dep_time_local, arr_time_local, is_deadhead, trip_start)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     dep_time_local, arr_time_local, is_deadhead, trip_start,
+                     operator_callsign)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     leg.id,
@@ -38,6 +39,7 @@ def save_schedule(user_id: int, legs: List[FlightLeg]) -> None:
                     leg.arr_time_local.isoformat(),
                     1 if leg.is_deadhead else 0,
                     1 if leg.trip_start else 0,
+                    leg.operator_callsign,
                 ),
             )
         conn.commit()
@@ -57,11 +59,23 @@ def _row_to_leg(row) -> Optional[FlightLeg]:
             arr_time_local=datetime.strptime(row["arr_time_local"], "%H:%M:%S").time(),
             is_deadhead=bool(row["is_deadhead"]),
             trip_start=bool(row["trip_start"]) if "trip_start" in row.keys() else False,
+            operator_callsign=(row["operator_callsign"]
+                               if "operator_callsign" in row.keys() else None),
         )
         enrich_leg(leg)
         return leg
     except Exception:
         return None
+
+
+def set_operator_callsign(leg_id: str, callsign: str) -> None:
+    """Remember which carrier operates this leg. Resolved once, not per poll."""
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE legs SET operator_callsign = ? WHERE id = ?", (callsign, leg_id))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def legs_sharing_callsign(flight_number: str, on_date: date) -> List[FlightLeg]:
@@ -124,6 +138,8 @@ def load_schedule(user_id: int) -> List[FlightLeg]:
                 arr_time_local=datetime.strptime(row["arr_time_local"], "%H:%M:%S").time(),
                 is_deadhead=bool(row["is_deadhead"]),
                 trip_start=bool(row["trip_start"]) if "trip_start" in row.keys() else False,
+                operator_callsign=(row["operator_callsign"]
+                                   if "operator_callsign" in row.keys() else None),
             )
             enrich_leg(leg)
             legs.append(leg)

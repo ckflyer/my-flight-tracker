@@ -25,7 +25,7 @@ Auth: x-apikey header. Docs: flightaware.com/aeroapi/portal/documentation
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -171,3 +171,61 @@ def fetch_leg(api_key: str, ident: str, origin: str, destination: str,
     # The raw record is kept so fields we don't render today don't have to
     # be bought a second time.
     return (normalized, match) if want_raw else normalized
+
+
+def resolve_operator(api_key: str, flight_number: str, origin: str,
+                     destination: str, on_date) -> Optional[str]:
+    """Which carrier operates this flight number on this route?
+
+    An FFDO line gives a bare number and a (D) marker. A deadhead is very
+    often on mainline American or another wholly-owned regional, so
+    assuming ENY looks up a flight that doesn't exist and the leg never
+    tracks. Flight number alone is ambiguous; flight number CROSSED WITH
+    THE ROUTE is not — only one carrier flies 4110 DFW-LFT on a given day.
+
+    GET /schedules/{start}/{end} answers exactly that. One query per leg,
+    ever: a published schedule doesn't change, so the answer is stored on
+    the leg and never looked up again.
+
+    Returns an ICAO callsign like "ENY4110" or "AAL2043", or None.
+    """
+    if not api_key or not flight_number:
+        return None
+    start = on_date.isoformat()
+    end = (on_date + timedelta(days=1)).isoformat()
+    url = f"{BASE_URL}/schedules/{start}/{end}"
+    try:
+        r = requests.get(
+            url,
+            headers={"x-apikey": api_key},
+            params={"origin": origin, "destination": destination,
+                    "flight_number": str(flight_number), "max_pages": 1},
+            timeout=REQUEST_TIMEOUT,
+        )
+    except Exception as e:
+        raise AeroApiError(f"could not reach AeroAPI: {e}")
+    if r.status_code in (401, 403):
+        raise AeroApiError("AeroAPI rejected the key (401/403)")
+    if r.status_code != 200:
+        raise AeroApiError(f"AeroAPI /schedules returned {r.status_code}")
+
+    try:
+        rows = r.json().get("scheduled") or []
+    except Exception:
+        return None
+
+    want_o = (origin or "").strip().upper()
+    want_d = (destination or "").strip().upper()
+    for row in rows:
+        o = (row.get("origin_iata") or row.get("origin") or "").strip().upper()
+        d = (row.get("destination_iata") or row.get("destination") or "").strip().upper()
+        if o != want_o or d != want_d:
+            continue
+        # actual_ident is the OPERATING flight when the queried one is a
+        # codeshare — AAL4110 marketed, ENY4110 operated. The operating
+        # carrier is what gets broadcast on ADS-B, so that's what we need.
+        ident = (row.get("actual_ident_icao") or row.get("actual_ident")
+                 or row.get("ident_icao") or row.get("ident"))
+        if ident:
+            return str(ident).strip().upper()
+    return None

@@ -162,6 +162,8 @@
     .status.landing { background: rgba(56,189,248,0.22); color: #38bdf8; }
     .status.scheduled { background: rgba(59,130,246,0.2); color: var(--accent); }
     .status.departing, .status.taxi-out, .status.taxi-in { background: rgba(245,158,11,0.2); color: var(--warn); }
+    .status.delayed { background: rgba(248,113,113,0.2); color: var(--bad); }
+    .status.cancelled { background: rgba(248,113,113,0.25); color: var(--bad); font-weight: 700; }
     .status.arrived { background: rgba(139,155,180,0.2); color: var(--muted); }
     .dh {
       display: inline-block;
@@ -394,10 +396,28 @@
     .delay-note {
       font-size: 0.82rem; font-weight: 600;
     }
-    .chip-was {
-      display: block; font-size: 0.7rem; color: var(--muted);
-      text-decoration: line-through; margin-top: 0.1rem;
+    .chip-delay {
+      display: block; font-size: 0.72rem; font-weight: 600; margin-top: 0.1rem;
     }
+    .chip-delay.early { color: var(--good); }
+    .chip-delay.late { color: var(--bad); }
+    .chip-delay.cancelled { color: var(--bad); }
+    /* Expanded-only detail rows: everything that used to crowd the
+       collapsed card lives here instead. */
+    .detail-block { margin-top: 0.9rem; }
+    .detail-block h3 {
+      font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.07em;
+      color: var(--muted); margin-bottom: 0.5rem; font-weight: 700;
+    }
+    .detail-row {
+      display: flex; justify-content: space-between; gap: 1rem;
+      font-size: 0.82rem; padding: 0.22rem 0;
+    }
+    .detail-row .k { color: var(--muted); }
+    .detail-row .v { text-align: right; }
+    .detail-row .v.early { color: var(--good); }
+    .detail-row .v.late { color: var(--bad); }
+    .detail-row .v.was { color: var(--muted); text-decoration: line-through; }
     .delay-note.early { color: var(--good); }
     .delay-note.late  { color: var(--bad); }
     .delay-note.ontime { color: var(--muted); font-weight: 500; }
@@ -406,9 +426,6 @@
        says early/late without reading the note. */
     .chip-time.early { color: var(--good); }
     .chip-time.late  { color: var(--bad); }
-    .gate-line {
-      font-size: 0.78rem; color: var(--muted); margin-top: 0.3rem;
-    }
     .flight-line {
       display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap;
     }
@@ -504,18 +521,8 @@
         <div class="flight-num" id="card-flight-num">{{ current.callsign }}{% if current.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
         <span class="status {{ current.status|lower|replace(' ', '-') }}" id="status-badge">{{ current.status }}</span>
       </div>
-      <div class="delay-row">
-        <span class="delay-note {{ current.dep_delay.state if current.dep_delay else '' }}" id="dep-delay-note"
-              style="{{ '' if current.dep_delay else 'display:none' }}">{{ current.dep_delay.text if current.dep_delay else '' }}</span>
-        <span class="delay-note {{ current.arr_delay.state if current.arr_delay else '' }}" id="arr-delay-note"
-              style="{{ '' if current.arr_delay else 'display:none' }}">{{ current.arr_delay.text if current.arr_delay else '' }}</span>
-      </div>
-      <div class="gate-line" id="gate-line" style="{{ '' if current.gates else 'display:none' }}">
-        {%- if current.gates -%}
-          {%- if current.gates.origin_gate %}Gate {{ current.gates.origin_gate }}{% if current.gates.origin_terminal %} (T{{ current.gates.origin_terminal }}){% endif %}{%- endif -%}
-          {%- if current.gates.dest_gate %} &rarr; Gate {{ current.gates.dest_gate }}{% if current.gates.dest_terminal %} (T{{ current.gates.dest_terminal }}){% endif %}{%- endif -%}
-        {%- endif -%}
-      </div>
+
+
       <div class="city-route" id="card-city-route">{{ current.origin_city }} <span class="to-word">to</span> {{ current.dest_city }}</div>
       <div class="times-row">
         <div class="time-chip">
@@ -526,8 +533,7 @@
             </svg>
           </span>
           <span class="chip-code" id="card-origin-code">{{ current.origin }}</span>
-          <span class="chip-time {{ current.dep_delay.state if current.dep_delay and current.dep_delay.state in ('early','late') else '' }}" id="card-dep-time">{{ current.dep_shown or current.dep }}</span>
-          <span class="chip-was" id="card-dep-was" style="{{ '' if (current.dep_shown and current.dep_delay and current.dep_delay.state != 'ontime') else 'display:none' }}">was {{ current.dep }}</span>
+          <span class="chip-time {{ current.dep_delay.state if current.dep_delay and current.dep_delay.state in ('early','late') else '' }}" id="card-dep-time">{{ (current.dep_delay.time_short if current.dep_delay and current.dep_delay.time_short else current.dep_short) or current.dep }}</span>
         </div>
         <div class="time-chip">
           <span class="chip-icon">
@@ -537,8 +543,9 @@
             </svg>
           </span>
           <span class="chip-code" id="card-dest-code">{{ current.destination }}</span>
-          <span class="chip-time {{ current.arr_delay.state if current.arr_delay and current.arr_delay.state in ('early','late') else '' }}" id="card-arr-time">{{ current.arr_shown or current.arr }}</span>
-          <span class="chip-was" id="card-arr-was" style="{{ '' if (current.arr_shown and current.arr_delay and current.arr_delay.state != 'ontime') else 'display:none' }}">was {{ current.arr }}</span>
+          <span class="chip-time {{ current.arr_delay.state if current.arr_delay and current.arr_delay.state in ('early','late') else '' }}" id="card-arr-time">{{ (current.arr_delay.time_short if current.arr_delay and current.arr_delay.time_short else current.arr_short) or current.arr }}</span>
+          <span class="chip-delay {{ current.arr_delay.state if current.arr_delay else '' }}" id="card-arr-delay"
+                style="{{ '' if (current.arr_delay and current.arr_delay.state in ('early','late','cancelled')) else 'display:none' }}">{{ current.arr_delay.short_text if current.arr_delay and current.arr_delay.short_text else '' }}</span>
         </div>
       </div>
     </div>
@@ -585,7 +592,42 @@
           {% if current.progress_pct is not none %}<span>{{ current.progress_pct }}% en route</span>{% endif %}
           {% if current.distance_nm is not none %}<span>{{ current.distance_nm }} nm to go</span>{% endif %}
           {% if current.ete %}<span>ETE {{ current.ete }}</span>{% endif %}
-          {% if current.eta %}<span>Landing {{ current.eta }}</span>{% endif %}
+        </div>
+      </div>
+
+      <div class="detail-block" id="flight-detail" style="{{ '' if current.enriched else 'display:none' }}">
+        <h3>Flight detail</h3>
+        <div class="detail-row" id="row-dep-delay" style="{{ '' if current.dep_delay else 'display:none' }}">
+          <span class="k">Departure</span>
+          <span class="v {{ current.dep_delay.state if current.dep_delay else '' }}" id="v-dep-delay">{{ current.dep_delay.text if current.dep_delay else '' }}</span>
+        </div>
+        <div class="detail-row" id="row-arr-delay" style="{{ '' if current.arr_delay else 'display:none' }}">
+          <span class="k">Arrival</span>
+          <span class="v {{ current.arr_delay.state if current.arr_delay else '' }}" id="v-arr-delay">{{ current.arr_delay.text if current.arr_delay else '' }}</span>
+        </div>
+        <div class="detail-row" id="row-sched">
+          <span class="k">Scheduled</span>
+          <span class="v was" id="v-sched">{{ current.dep }} &rarr; {{ current.arr }}</span>
+        </div>
+        <div class="detail-row" id="row-gate-dep" style="{{ '' if (current.gates and current.gates.origin_gate) else 'display:none' }}">
+          <span class="k">{{ current.origin }} gate</span>
+          <span class="v" id="v-gate-dep">{{ current.gates.origin_gate if current.gates else '' }}{% if current.gates and current.gates.origin_terminal %} &middot; Terminal {{ current.gates.origin_terminal }}{% endif %}</span>
+        </div>
+        <div class="detail-row" id="row-gate-arr" style="{{ '' if (current.gates and current.gates.dest_gate) else 'display:none' }}">
+          <span class="k">{{ current.destination }} gate</span>
+          <span class="v" id="v-gate-arr">{{ current.gates.dest_gate if current.gates else '' }}{% if current.gates and current.gates.dest_terminal %} &middot; Terminal {{ current.gates.dest_terminal }}{% endif %}</span>
+        </div>
+        <div class="detail-row" id="row-baggage" style="{{ '' if (current.gates and current.gates.baggage) else 'display:none' }}">
+          <span class="k">Baggage</span>
+          <span class="v" id="v-baggage">{{ current.gates.baggage if current.gates else '' }}</span>
+        </div>
+        <div class="detail-row" id="row-updated" style="{{ '' if current.enriched else 'display:none' }}">
+          <span class="k">Airline data</span>
+          <span class="v" id="v-updated">{{ current.enriched_at or '' }}</span>
+        </div>
+        <div class="detail-row" id="row-diverted" style="{{ '' if current.diversion else 'display:none' }}">
+          <span class="k">Diverted to</span>
+          <span class="v late" id="v-diverted">{{ current.diversion.diverted_to if current.diversion else '' }}</span>
         </div>
       </div>
       </div>
@@ -1052,37 +1094,63 @@
                   const parts = ['<span>' + data.progress_pct + '% en route</span>'];
                   if (data.distance_nm != null) parts.push('<span>' + data.distance_nm + ' nm to go</span>');
                   if (data.ete) parts.push('<span>ETE ' + data.ete + '</span>');
-                  if (data.eta) parts.push('<span>Landing ' + data.eta + '</span>');
 
-                  function applyDelay(noteId, timeId, wasId, info, scheduled) {
-                    var note = document.getElementById(noteId);
-                    if (note) {
-                      if (info && info.text) {
-                        note.textContent = info.text;
-                        note.className = 'delay-note ' + (info.state || '');
-                        note.style.display = '';
-                      } else {
-                        note.style.display = 'none';
-                      }
-                    }
-                    var timeEl = document.getElementById(timeId);
-                    if (timeEl) {
-                      var tint = (info && (info.state === 'early' || info.state === 'late'))
-                        ? ' ' + info.state : '';
-                      timeEl.className = 'chip-time' + tint;
-                      if (info && info.time) timeEl.textContent = info.time;
-                    }
-                    var wasEl = document.getElementById(wasId);
-                    if (wasEl) {
-                      var show = info && info.time && info.state !== 'ontime' && scheduled;
-                      wasEl.textContent = show ? ('was ' + scheduled) : '';
-                      wasEl.style.display = show ? '' : 'none';
-                    }
+                  function setText(id, value) {
+                    var el = document.getElementById(id);
+                    if (el) el.textContent = value == null ? '' : value;
                   }
-                  applyDelay('dep-delay-note', 'card-dep-time', 'card-dep-was',
-                             data.dep_delay, currentData && currentData.dep);
-                  applyDelay('arr-delay-note', 'card-arr-time', 'card-arr-was',
-                             data.arr_delay, currentData && currentData.arr);
+                  function setShown(id, show) {
+                    var el = document.getElementById(id);
+                    if (el) el.style.display = show ? '' : 'none';
+                  }
+                  // Collapsed card: just the time, tinted, plus a short
+                  // delay note beside the arrival.
+                  function applyTime(timeId, info, fallback) {
+                    var el = document.getElementById(timeId);
+                    if (!el) return;
+                    var tint = (info && (info.state === 'early' || info.state === 'late'))
+                      ? ' ' + info.state : '';
+                    el.className = 'chip-time' + tint;
+                    el.textContent = (info && info.time_short) || fallback || el.textContent;
+                  }
+                  applyTime('card-dep-time', data.dep_delay, currentData && currentData.dep_short);
+                  applyTime('card-arr-time', data.arr_delay, currentData && currentData.arr_short);
+
+                  var arrChip = document.getElementById('card-arr-delay');
+                  if (arrChip) {
+                    var ad = data.arr_delay;
+                    var showChip = ad && ad.short_text &&
+                      (ad.state === 'early' || ad.state === 'late' || ad.state === 'cancelled');
+                    arrChip.textContent = showChip ? ad.short_text : '';
+                    arrChip.className = 'chip-delay ' + (ad ? ad.state : '');
+                    arrChip.style.display = showChip ? '' : 'none';
+                  }
+
+                  // Expanded detail block.
+                  setShown('flight-detail', !!(data.dep_delay || data.arr_delay || data.gates));
+                  setShown('row-dep-delay', !!data.dep_delay);
+                  setShown('row-arr-delay', !!data.arr_delay);
+                  if (data.dep_delay) {
+                    setText('v-dep-delay', data.dep_delay.text);
+                    var dv = document.getElementById('v-dep-delay');
+                    if (dv) dv.className = 'v ' + (data.dep_delay.state || '');
+                  }
+                  if (data.arr_delay) {
+                    setText('v-arr-delay', data.arr_delay.text);
+                    var av = document.getElementById('v-arr-delay');
+                    if (av) av.className = 'v ' + (data.arr_delay.state || '');
+                  }
+                  var g = data.gates || {};
+                  setShown('row-gate-dep', !!g.origin_gate);
+                  setShown('row-gate-arr', !!g.dest_gate);
+                  setShown('row-baggage', !!g.baggage);
+                  if (g.origin_gate) setText('v-gate-dep', g.origin_gate +
+                    (g.origin_terminal ? ' \u00b7 Terminal ' + g.origin_terminal : ''));
+                  if (g.dest_gate) setText('v-gate-arr', g.dest_gate +
+                    (g.dest_terminal ? ' \u00b7 Terminal ' + g.dest_terminal : ''));
+                  if (g.baggage) setText('v-baggage', g.baggage);
+                  setShown('row-diverted', !!data.diversion);
+                  if (data.diversion) setText('v-diverted', data.diversion.diverted_to);
                   progLabel.innerHTML = parts.join('');
                 }
               } else {

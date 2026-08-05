@@ -190,6 +190,12 @@ def init_db() -> None:
             conn.execute("DROP TABLE legs")
             conn.execute("ALTER TABLE legs_rebuild RENAME TO legs")
 
+        # Added after the rebuild above on purpose: that migration copies an
+        # explicit column list, so a column added before it would be dropped.
+        leg_cols_now = {r["name"] for r in conn.execute("PRAGMA table_info(legs)")}
+        if "operator_callsign" not in leg_cols_now:
+            conn.execute("ALTER TABLE legs ADD COLUMN operator_callsign TEXT")
+
         # Every positions lookup filters on user_id as well as leg_id; the
         # original index covered only (leg_id, ts).
         conn.execute(

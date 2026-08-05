@@ -261,11 +261,54 @@ next to a note saying "18 min early", and the two never agreed. Delta and
 displayed time are both derived from minute-truncated values so they can
 never disagree by a rounding minute.
 
-Status uses OOOI first and ADS-B as fallback — `actual_out` is reportedly
+Status combines OOOI and ADS-B by RANK, taking whichever is further along.
+The two fail in opposite directions: OOOI runs late (actual_on and actual_in
+are published with a lag, so a landed flight still reads "In Air"), while
+ADS-B runs blind (no receiver near a small field means no ground state at
+all). Ranking them means whichever notices first wins and neither can drag
+the flight backwards. An earlier version returned the first matching OOOI
+field and never consulted ADS-B again, which left flights showing "In Air"
+after they had visibly landed.
+
+## Deadheads on other carriers
+
+An FFDO line gives a bare flight number and a "(D)" — never the airline. A
+deadhead is usually mainline American or another wholly-owned regional,
+each broadcasting its own callsign, so assuming ENY looks up a flight that
+doesn't exist and the leg never tracks.
+
+`app/carrier.py` resolves it from flight number CROSSED WITH THE ROUTE,
+since only one carrier flies 4110 DFW-LFT on a given day. With AeroAPI it
+uses GET /schedules (one query, ever — schedules don't change, so the
+answer is stored on the leg). Without a key it probes ENY/AAL/JIA/PDT
+against ADS-B once around departure and takes whichever has an aircraft at
+the origin. Codeshares resolve to the OPERATING carrier, since that's what
+gets broadcast.
+
+Old note (superseded): status uses OOOI first and ADS-B as fallback — `actual_out` is reportedly
 absent 15-50% of the time, so the two complement rather than compete.
 Enrichment also gives POSITIVE flight identification: AeroAPI knows which
 record corresponds to this origin/destination pair, so a turn's two
 directions are distinguished by data rather than inference.
+
+## Arrival times: fact before forecast
+
+Arrival is taken in this order: the airline's actual gate-in, then OUR OWN
+observed gate stop (the aircraft came to a halt after flying — see
+`observed_gate_in`), then the estimate. AeroAPI publishes actual_in with a
+lag, so a flight can be parked while the only airline figure available is
+an hour-old forecast; presenting that forecast as the arrival time is how
+"arrived 4:05, 11 minutes early" appeared for a flight that blocked in at
+4:11.
+
+Tense follows the FLIGHT rather than the API: if status says Arrived, the
+note reads "Arrived", never "Arrives".
+
+"Departing" on the ADS-B side only means the scheduled departure time has
+passed with nothing seen yet — it is not evidence the aircraft is moving.
+When the airline has pushed the estimate by more than
+`DELAY_STATUS_MIN` (10) minutes and there's still no gate-out, the status
+reads **Delayed** instead.
 
 ## Storage
 

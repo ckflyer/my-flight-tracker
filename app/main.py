@@ -101,7 +101,8 @@ def require_pilot(request: Request):
 # View helpers
 # ---------------------------------------------------------------------------
 
-def fmt_local(leg: FlightLeg, which: str = "dep", time_format: str = "24") -> str:
+def fmt_local(leg: FlightLeg, which: str = "dep", time_format: str = "24",
+              with_zone: bool = True) -> str:
     if which == "dep":
         t = leg.dep_time_local
         info = leg.origin_info
@@ -112,7 +113,7 @@ def fmt_local(leg: FlightLeg, which: str = "dep", time_format: str = "24") -> st
         time_str = t.strftime("%I:%M %p").lstrip("0")
     else:
         time_str = t.strftime("%H:%M")
-    if not info:
+    if not info or not with_zone:
         return time_str
     tz = ZoneInfo(info.timezone)
     sample = datetime(2026, 7, 1, 12, 0, tzinfo=tz)
@@ -139,6 +140,12 @@ def leg_view(leg: Optional[FlightLeg], now: datetime, time_format: str = "24") -
         "destination": leg.destination,
         "dep": fmt_local(leg, "dep", time_format),
         "arr": fmt_local(leg, "arr", time_format),
+        # Zone codes are dropped on the collapsed card — they repeat on
+        # every single time and were the main source of clutter and line
+        # wrapping on a phone. The footer already says times are local to
+        # each airport, and the expanded detail carries the full form.
+        "dep_short": fmt_local(leg, "dep", time_format, with_zone=False),
+        "arr_short": fmt_local(leg, "arr", time_format, with_zone=False),
         "status": leg.status_at(now),
         "links": tracking_links(leg),
         "date": str(leg.date),
@@ -587,8 +594,17 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now
         # Departure and arrival are answered separately: "is he getting
         # out?" and "when does he get there?" are different questions, and
         # a late pushback doesn't always become a late arrival.
-        extra["dep_delay"] = departure_delay(enr, selected_leg, time_format)
-        extra["arr_delay"] = arrival_delay(enr, selected_leg, time_format)
+        status_now = extra["status"]
+        # Our own observed gate stop, used when the airline hasn't published
+        # actual_in yet — a fact beats a stale forecast.
+        try:
+            from .flightmatch import observed_gate_in
+            obs_in = observed_gate_in(selected_leg)
+        except Exception:
+            obs_in = None
+        extra["dep_delay"] = departure_delay(enr, selected_leg, time_format, status=status_now)
+        extra["arr_delay"] = arrival_delay(enr, selected_leg, time_format,
+                                           status=status_now, observed_in=obs_in)
         # THE BUG THIS FIXES: the card used to print the FFDO scheduled
         # time and then a note saying "18 min early" beside it, so the two
         # never agreed. When there's an actual or estimated time, that is
@@ -604,6 +620,17 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now
             "on": enr.get("actual_on"), "in": enr.get("actual_in"),
         }
         extra["enriched"] = True
+        # So it's visible how fresh the airline data is, and how rarely it
+        # actually needs fetching.
+        fetched = enr.get("_fetched_at")
+        if fetched:
+            try:
+                age = (now - datetime.fromisoformat(fetched)).total_seconds() / 60
+                extra["enriched_at"] = ("just now" if age < 1.5
+                                        else f"{int(age)} min ago" if age < 90
+                                        else f"{int(age // 60)}h ago")
+            except Exception:
+                pass
 
     extra["ete"] = compute_ete(selected_leg, live, now)
     extra["eta"] = compute_eta(selected_leg, live, now, time_format)
@@ -1058,6 +1085,7 @@ async def api_selected(request: Request, leg: Optional[str] = None):
         "eta": extra.get("eta"),
         "dep_delay": extra.get("dep_delay"),
         "arr_delay": extra.get("arr_delay"),
+        "enriched_at": extra.get("enriched_at"),
         "dep_shown": extra.get("dep_shown"),
         "arr_shown": extra.get("arr_shown"),
         "gates": extra.get("gates"),

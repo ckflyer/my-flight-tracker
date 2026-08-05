@@ -24,6 +24,11 @@ class FlightLeg(BaseModel):
     dep_time_local: time  # local to origin
     arr_time_local: time  # local to destination
     is_deadhead: bool = False
+    # Which carrier actually operates this flight. An FFDO line only gives
+    # a bare number, and a deadhead is very often on mainline AA or another
+    # wholly-owned regional, so assuming "ENY" would look up a flight that
+    # doesn't exist. Resolved from flight number + route once, then stored.
+    operator_callsign: Optional[str] = None
     trip_start: bool = False  # True if a blank line in the pasted FFDO preceded this leg (new trip)
     # resolved later
     origin_info: Optional[AirportInfo] = None
@@ -31,7 +36,14 @@ class FlightLeg(BaseModel):
 
     @property
     def callsign(self) -> str:
-        """ENY-prefixed callsign for OpenSky / tracking links."""
+        """The callsign this flight actually broadcasts.
+
+        Defaults to Envoy, which is right for the pilot's own legs, but a
+        resolved operator wins — a deadhead on AAL or PSA broadcasts its
+        own carrier's callsign, not ENY.
+        """
+        if self.operator_callsign:
+            return self.operator_callsign
         return f"ENY{self.flight_number}"
 
     def dep_datetime_utc(self) -> Optional[datetime]:

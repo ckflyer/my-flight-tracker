@@ -32,7 +32,8 @@ from .db import get_connection
 from .livesource import live_state_for_leg
 from .schedule import get_current_info
 from .track import record_position, get_position_history
-from .enrichment import refresh as refresh_enrichment
+from .enrichment import refresh as refresh_enrichment, credentials
+from .carrier import resolve as resolve_carrier, needs_resolution
 
 # How often to sweep for active flights. Matches the viewer's default poll
 # so a recorded track has the same resolution whether or not anyone was
@@ -94,6 +95,17 @@ def poll_once() -> int:
     recorded = 0
     now = datetime.now(ZoneInfo("UTC"))
     for leg_id, leg in active_flights().items():
+        # A deadhead's FFDO line has no carrier, so the callsign has to be
+        # resolved before anything is looked up — searching for ENY4110
+        # when the aircraft squawks AAL4110 finds nothing. Resolved once
+        # and stored on the leg, not repeated every sweep.
+        if needs_resolution(leg):
+            key = next((credentials(uid) for uid in _owners_of(leg_id)
+                        if credentials(uid)), None)
+            try:
+                resolve_carrier(leg, key, now)
+            except Exception as e:
+                print(f"[poller] carrier resolution failed for {leg_id}: {e}")
         try:
             # Same guard the page uses: a callsign match that's heading the
             # wrong way is the return flight, and recording it here would

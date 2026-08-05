@@ -145,6 +145,26 @@ def _row(leg: FlightLeg):
         conn.close()
 
 
+def observed_gate_in(leg: FlightLeg) -> Optional[datetime]:
+    """When WE saw the aircraft come to a stop after flying.
+
+    This is the closest thing to the parking-brake moment that ADS-B can
+    give, and it beats a stale estimated_in: AeroAPI publishes actual_in
+    with a lag, so a flight can be sitting at the gate while the only
+    airline figure available is still a forecast from an hour ago. Showing
+    that forecast as though it were the arrival time is how "arrived 4:05,
+    11 minutes early" appeared for a flight that actually blocked in at
+    4:11.
+    """
+    row = _row(leg)
+    if not row or not row["airborne_seen"] or not row["stopped_since"]:
+        return None
+    try:
+        return datetime.fromisoformat(row["stopped_since"])
+    except Exception:
+        return None
+
+
 def is_complete(leg: FlightLeg) -> bool:
     row = _row(leg)
     return bool(row and row["completed_at"])
