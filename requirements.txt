@@ -1,9 +1,0 @@
-fastapi>=0.140
-uvicorn>=0.50
-python-multipart
-airportsdata
-pydantic>=2
-jinja2
-tzdata
-requests
-itsdangerous
