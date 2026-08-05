@@ -32,8 +32,11 @@ from .db import get_connection
 from .livesource import live_state_for_leg
 from .schedule import get_current_info
 from .track import record_position, get_position_history
-from .enrichment import refresh as refresh_enrichment, credentials
+from .enrichment import refresh as refresh_enrichment, credentials, get_enrichment
 from .carrier import resolve as resolve_carrier, needs_resolution
+from .closure import maybe_close, is_closed
+from .flightmatch import (observed_gate_in, took_off_again,
+                          signal_gap_seconds, stopped_seconds)
 
 # How often to sweep for active flights. Matches the viewer's default poll
 # so a recorded track has the same resolution whether or not anyone was
@@ -90,6 +93,47 @@ def _owners_of(leg_id: str) -> List[int]:
         conn.close()
 
 
+def _settle(leg_id: str, leg, now, changed: bool) -> None:
+    """Refresh enrichment and decide whether the leg is finished.
+
+    Runs for every owner of the leg, since each pilot's own key pays for
+    their own enrichment and each keeps their own closeout record.
+    """
+    observed_in = observed_gate_in(leg)
+    relaunched = took_off_again(leg)
+    stopped_for = stopped_seconds(leg, now)
+    signal_gap = signal_gap_seconds(leg, now)
+    # "Down" gates the closeout pass: only worth hunting for gate-in once
+    # the aircraft has actually stopped somewhere.
+    down = observed_in is not None
+    for user_id in _owners_of(leg_id):
+        if is_closed(user_id, leg_id):
+            continue
+        try:
+            refresh_enrichment(user_id, leg, now, adsb_changed=changed, down=down)
+        except Exception as e:
+            print(f"[poller] enrichment failed for {leg_id}/{user_id}: {e}")
+        try:
+            enr = get_enrichment(user_id, leg_id)
+            # "Fresh" enrichment means the airline is still telling us
+            # things, so the flight is still live and the backstop must
+            # not fire — however late it is running.
+            fresh = False
+            if enr and enr.get("_fetched_at"):
+                try:
+                    from datetime import datetime as _dt, timedelta as _td
+                    fresh = (now - _dt.fromisoformat(enr["_fetched_at"])) < _td(minutes=45)
+                except Exception:
+                    fresh = False
+            maybe_close(user_id, leg, enr, now,
+                        has_api=bool(credentials(user_id)),
+                        observed_in=observed_in, relaunched=relaunched,
+                        stopped_for=stopped_for, signal_gap=signal_gap,
+                        enrichment_fresh=fresh)
+        except Exception as e:
+            print(f"[poller] closeout failed for {leg_id}/{user_id}: {e}")
+
+
 def poll_once() -> int:
     """One sweep. Returns how many flights had a position recorded."""
     recorded = 0
@@ -118,11 +162,7 @@ def poll_once() -> int:
         if not state or state.get("lat") is None or state.get("lon") is None:
             # No ADS-B for this leg — precisely when the airline's own OOOI
             # matters most, so still give enrichment a chance.
-            for user_id in _owners_of(leg_id):
-                try:
-                    refresh_enrichment(user_id, leg, now, adsb_changed=False)
-                except Exception as e:
-                    print(f"[poller] enrichment failed for {leg_id}/{user_id}: {e}")
+            _settle(leg_id, leg, now, False)
             continue
         try:
             before = len(history)
@@ -136,11 +176,7 @@ def poll_once() -> int:
             print(f"[poller] record failed for {leg_id}: {e}")
             changed = False
 
-        for user_id in _owners_of(leg_id):
-            try:
-                refresh_enrichment(user_id, leg, now, adsb_changed=changed)
-            except Exception as e:
-                print(f"[poller] enrichment failed for {leg_id}/{user_id}: {e}")
+        _settle(leg_id, leg, now, changed)
     return recorded
 
 

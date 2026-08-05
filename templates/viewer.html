@@ -163,7 +163,12 @@
     .status.scheduled { background: rgba(59,130,246,0.2); color: var(--accent); }
     .status.departing, .status.taxi-out, .status.taxi-in { background: rgba(245,158,11,0.2); color: var(--warn); }
     .status.delayed { background: rgba(248,113,113,0.2); color: var(--bad); }
+    .status.diverting, .status.diverted { background: rgba(245,158,11,0.28); color: var(--warn); font-weight: 700; }
     .status.cancelled { background: rgba(248,113,113,0.25); color: var(--bad); font-weight: 700; }
+    .status.unknown { background: rgba(139,155,180,0.18); color: var(--muted); }
+    .last-tracked {
+      font-size: 0.78rem; color: var(--muted); margin-left: 0.5rem; font-weight: 500;
+    }
     .status.arrived { background: rgba(139,155,180,0.2); color: var(--muted); }
     .dh {
       display: inline-block;
@@ -520,6 +525,8 @@
       <div class="flight-line">
         <div class="flight-num" id="card-flight-num">{{ current.callsign }}{% if current.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
         <span class="status {{ current.status|lower|replace(' ', '-') }}" id="status-badge">{{ current.status }}</span>
+        <span class="last-tracked" id="last-tracked"
+              style="{{ '' if current.last_tracked else 'display:none' }}">last tracked {{ current.last_tracked or '' }}</span>
       </div>
 
 
@@ -620,6 +627,14 @@
         <div class="detail-row" id="row-baggage" style="{{ '' if (current.gates and current.gates.baggage) else 'display:none' }}">
           <span class="k">Baggage</span>
           <span class="v" id="v-baggage">{{ current.gates.baggage if current.gates else '' }}</span>
+        </div>
+        <div class="detail-row" id="row-closed" style="{{ '' if current.closed else 'display:none' }}">
+          <span class="k">Closed out</span>
+          <span class="v" id="v-closed">{{ current.closed_by|replace('_',' ') if current.closed_by else '' }}</span>
+        </div>
+        <div class="detail-row" id="row-arrsrc" style="{{ '' if current.arrival_source else 'display:none' }}">
+          <span class="k">Arrival time from</span>
+          <span class="v" id="v-arrsrc">{{ current.arrival_source if current.arrival_source else '' }}</span>
         </div>
         <div class="detail-row" id="row-updated" style="{{ '' if current.enriched else 'display:none' }}">
           <span class="k">Airline data</span>
@@ -1095,62 +1110,7 @@
                   if (data.distance_nm != null) parts.push('<span>' + data.distance_nm + ' nm to go</span>');
                   if (data.ete) parts.push('<span>ETE ' + data.ete + '</span>');
 
-                  function setText(id, value) {
-                    var el = document.getElementById(id);
-                    if (el) el.textContent = value == null ? '' : value;
-                  }
-                  function setShown(id, show) {
-                    var el = document.getElementById(id);
-                    if (el) el.style.display = show ? '' : 'none';
-                  }
-                  // Collapsed card: just the time, tinted, plus a short
-                  // delay note beside the arrival.
-                  function applyTime(timeId, info, fallback) {
-                    var el = document.getElementById(timeId);
-                    if (!el) return;
-                    var tint = (info && (info.state === 'early' || info.state === 'late'))
-                      ? ' ' + info.state : '';
-                    el.className = 'chip-time' + tint;
-                    el.textContent = (info && info.time_short) || fallback || el.textContent;
-                  }
-                  applyTime('card-dep-time', data.dep_delay, currentData && currentData.dep_short);
-                  applyTime('card-arr-time', data.arr_delay, currentData && currentData.arr_short);
-
-                  var arrChip = document.getElementById('card-arr-delay');
-                  if (arrChip) {
-                    var ad = data.arr_delay;
-                    var showChip = ad && ad.short_text &&
-                      (ad.state === 'early' || ad.state === 'late' || ad.state === 'cancelled');
-                    arrChip.textContent = showChip ? ad.short_text : '';
-                    arrChip.className = 'chip-delay ' + (ad ? ad.state : '');
-                    arrChip.style.display = showChip ? '' : 'none';
-                  }
-
-                  // Expanded detail block.
-                  setShown('flight-detail', !!(data.dep_delay || data.arr_delay || data.gates));
-                  setShown('row-dep-delay', !!data.dep_delay);
-                  setShown('row-arr-delay', !!data.arr_delay);
-                  if (data.dep_delay) {
-                    setText('v-dep-delay', data.dep_delay.text);
-                    var dv = document.getElementById('v-dep-delay');
-                    if (dv) dv.className = 'v ' + (data.dep_delay.state || '');
-                  }
-                  if (data.arr_delay) {
-                    setText('v-arr-delay', data.arr_delay.text);
-                    var av = document.getElementById('v-arr-delay');
-                    if (av) av.className = 'v ' + (data.arr_delay.state || '');
-                  }
-                  var g = data.gates || {};
-                  setShown('row-gate-dep', !!g.origin_gate);
-                  setShown('row-gate-arr', !!g.dest_gate);
-                  setShown('row-baggage', !!g.baggage);
-                  if (g.origin_gate) setText('v-gate-dep', g.origin_gate +
-                    (g.origin_terminal ? ' \u00b7 Terminal ' + g.origin_terminal : ''));
-                  if (g.dest_gate) setText('v-gate-arr', g.dest_gate +
-                    (g.dest_terminal ? ' \u00b7 Terminal ' + g.dest_terminal : ''));
-                  if (g.baggage) setText('v-baggage', g.baggage);
-                  setShown('row-diverted', !!data.diversion);
-                  if (data.diversion) setText('v-diverted', data.diversion.diverted_to);
+                  applyEnrichment(data);
                   progLabel.innerHTML = parts.join('');
                 }
               } else {
@@ -1186,6 +1146,69 @@
       // scroll position, the expanded/collapsed card, and the open
       // past-flights list all survive. This is what replaced tapping a row
       // being a full navigation.
+      // Renders every enrichment-driven element. Called from BOTH the poll
+      // and a flight switch — when only the poll called it, tapping a
+      // future flight left the PREVIOUS leg's delay on screen, so an
+      // unflown flight showed "1h 57m late".
+      function applyEnrichment(data) {
+        function setText(id, value) {
+          var el = document.getElementById(id);
+          if (el) el.textContent = value == null ? '' : value;
+        }
+        function setShown(id, show) {
+          var el = document.getElementById(id);
+          if (el) el.style.display = show ? '' : 'none';
+        }
+        // Collapsed card: just the time, tinted, plus a short
+        // delay note beside the arrival.
+        function applyTime(timeId, info, fallback) {
+          var el = document.getElementById(timeId);
+          if (!el) return;
+          var tint = (info && (info.state === 'early' || info.state === 'late'))
+            ? ' ' + info.state : '';
+          el.className = 'chip-time' + tint;
+          el.textContent = (info && info.time_short) || fallback || el.textContent;
+        }
+        applyTime('card-dep-time', data.dep_delay, currentData && currentData.dep_short);
+        applyTime('card-arr-time', data.arr_delay, currentData && currentData.arr_short);
+
+        var arrChip = document.getElementById('card-arr-delay');
+        if (arrChip) {
+          var ad = data.arr_delay;
+          var showChip = ad && ad.short_text &&
+            (ad.state === 'early' || ad.state === 'late' || ad.state === 'cancelled');
+          arrChip.textContent = showChip ? ad.short_text : '';
+          arrChip.className = 'chip-delay ' + (ad ? ad.state : '');
+          arrChip.style.display = showChip ? '' : 'none';
+        }
+
+        // Expanded detail block.
+        setShown('flight-detail', !!(data.dep_delay || data.arr_delay || data.gates));
+        setShown('row-dep-delay', !!data.dep_delay);
+        setShown('row-arr-delay', !!data.arr_delay);
+        if (data.dep_delay) {
+          setText('v-dep-delay', data.dep_delay.text);
+          var dv = document.getElementById('v-dep-delay');
+          if (dv) dv.className = 'v ' + (data.dep_delay.state || '');
+        }
+        if (data.arr_delay) {
+          setText('v-arr-delay', data.arr_delay.text);
+          var av = document.getElementById('v-arr-delay');
+          if (av) av.className = 'v ' + (data.arr_delay.state || '');
+        }
+        var g = data.gates || {};
+        setShown('row-gate-dep', !!g.origin_gate);
+        setShown('row-gate-arr', !!g.dest_gate);
+        setShown('row-baggage', !!g.baggage);
+        if (g.origin_gate) setText('v-gate-dep', g.origin_gate +
+          (g.origin_terminal ? ' \u00b7 Terminal ' + g.origin_terminal : ''));
+        if (g.dest_gate) setText('v-gate-arr', g.dest_gate +
+          (g.dest_terminal ? ' \u00b7 Terminal ' + g.dest_terminal : ''));
+        if (g.baggage) setText('v-baggage', g.baggage);
+        setShown('row-diverted', !!data.diversion);
+        if (data.diversion) setText('v-diverted', data.diversion.diverted_to);
+      }
+
       function applyLegPayload(data) {
         if (!data || data.error || !data.current) return;
         const cur = data.current;
@@ -1250,6 +1273,17 @@
 
         currentData = cur;
         liveData = data.live;
+
+        // Clear/refresh enrichment for the newly selected leg, AFTER
+        // currentData is swapped so the fallback times come from the new
+        // leg. Without this call at all, the previous flight's delay,
+        // gates and detail rows persisted onto the one just tapped.
+        applyEnrichment({
+          dep_delay: cur.dep_delay || null,
+          arr_delay: cur.arr_delay || null,
+          gates: cur.gates || null,
+          diversion: cur.diversion || null,
+        });
         renderMap(currentData, liveData, true);
 
         // Keep the URL shareable/refreshable without navigating.

@@ -181,10 +181,28 @@
                placeholder="{{ 'saved \u2014 leave blank to keep it' if s.aeroapi_key else 'paste your AeroAPI key' }}">
         <p class="hint">Your own key on your own FlightAware account. The Personal tier includes $5/month of free queries, or $10 if you feed ADS-B.</p>
         <div class="usage-line">
-          <span>Queries this month ({{ aeroapi_stats.period }})</span>
-          <strong>{{ aeroapi_stats.queries }}</strong>
+          <span>Estimated spend this month ({{ aeroapi_stats.period }})</span>
+          <strong{% if aeroapi_stats.over_budget %} style="color:var(--bad)"{% endif %}>${{ '%.2f'|format(aeroapi_stats.spent) }} of ${{ '%.2f'|format(aeroapi_stats.budget) }}</strong>
         </div>
-        <p class="hint" style="margin-top:0.5rem;">About 4&ndash;6 per flight. Only the background tracker queries &mdash; opening or refreshing a page never does.</p>
+        {% if aeroapi_stats.exhausted %}
+        <p class="hint" style="color:var(--bad);font-weight:600;">
+          Cap reached &mdash; AeroAPI is paused for the rest of the month. Live ADS-B tracking is unaffected.
+        </p>
+        {% endif %}
+        <div class="switch-row" style="margin-top:0.9rem;">
+          <span class="switch-label" style="font-weight:500;font-size:0.85rem;">Keep querying past ${{ '%.2f'|format(aeroapi_stats.budget) }}</span>
+          <label class="switch">
+            <input type="checkbox" name="aeroapi_allow_overage" value="1"
+                   {{ 'checked' if s.aeroapi_allow_overage else '' }}>
+            <span class="track"></span>
+          </label>
+        </div>
+        <p class="hint">Off by default. The Personal tier includes $5/month free, and the cap sits just under it so an estimate that&rsquo;s slightly off can&rsquo;t produce a bill. Turn this on only if you don&rsquo;t mind FlightAware billing you for the overage.</p>
+        <p class="hint" style="margin-top:0.5rem;">
+          Capped at ${{ '%.2f'|format(aeroapi_stats.budget) }}/month &mdash; queries stop automatically at that point.
+          Roughly 6&ndash;10 per flight at ${{ '%.3f'|format(aeroapi_stats.cost_per_query) }} each.
+          Only the background tracker queries; opening or refreshing a page never does.
+        </p>
       </div>
     </div>
 

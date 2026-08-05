@@ -24,12 +24,30 @@ from zoneinfo import ZoneInfo
 from typing import Any, Dict, Optional
 
 from .aeroapi import AeroApiError, fetch_leg
+import os
+
 from .db import get_connection
 
 # Never query a leg more often than this, whatever the triggers say.
 MIN_QUERY_GAP = timedelta(minutes=8)
 # Absolute ceiling per leg — a runaway loop can't cost more than this.
-MAX_QUERIES_PER_LEG = 10
+# Raised from 10 to make room for the closeout pass, which is reserved
+# below so a chatty flight can't starve it.
+MAX_QUERIES_PER_LEG = 14
+# Of that ceiling, how many are held back purely for hunting actual_in.
+CLOSEOUT_RESERVE = 4
+# Once the aircraft is down, how often to ask whether gate-in has posted.
+CLOSEOUT_GAP = timedelta(minutes=10)
+# And for how long before giving up and letting the backstop close it.
+CLOSEOUT_WINDOW = timedelta(minutes=90)
+
+# What a /flights/{ident} call actually costs, per FlightAware's published
+# rate. Used only to show spend and to enforce the budget below.
+COST_PER_QUERY_USD = float(os.environ.get("AEROAPI_COST_PER_QUERY", "0.005"))
+# Hard monthly ceiling. The Personal tier includes $5/month free ($10 if
+# you feed ADS-B); defaulting under that means the app can never quietly
+# produce a bill. Raise it if you're on a paid tier.
+MONTHLY_BUDGET_USD = float(os.environ.get("AEROAPI_MONTHLY_BUDGET", "4.50"))
 # How early to take a first look (gate assignment and any pre-departure delay).
 PREVIEW_BEFORE_DEP = timedelta(minutes=60)
 # If ADS-B has told us nothing by this far past scheduled departure, ask anyway.
@@ -98,8 +116,12 @@ def get_first_seen(user_id: int, leg_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _count_query(user_id: int, now: datetime) -> None:
-    """Bump this month's query counter, rolling over on a new month."""
+def _count_query(user_id: int, now: datetime, billed: int = 1) -> None:
+    """Add this call's RESULT SETS to the month's tally.
+
+    Billing is per result set of up to 15 records, so a call can cost more
+    than one. Counting calls would under-report.
+    """
     period = now.strftime("%Y-%m")
     conn = get_connection()
     try:
@@ -108,13 +130,13 @@ def _count_query(user_id: int, now: datetime) -> None:
         ).fetchone()
         if not row or row["aeroapi_period"] != period:
             conn.execute(
-                "UPDATE users SET aeroapi_period = ?, aeroapi_queries = 1 WHERE id = ?",
-                (period, user_id),
+                "UPDATE users SET aeroapi_period = ?, aeroapi_queries = ? WHERE id = ?",
+                (period, billed, user_id),
             )
         else:
             conn.execute(
-                "UPDATE users SET aeroapi_queries = aeroapi_queries + 1 WHERE id = ?",
-                (user_id,),
+                "UPDATE users SET aeroapi_queries = aeroapi_queries + ? WHERE id = ?",
+                (billed, user_id),
             )
         conn.commit()
     finally:
@@ -133,6 +155,41 @@ def query_stats(user_id: int) -> Dict[str, Any]:
     if not row or row["aeroapi_period"] != period:
         return {"period": period, "queries": 0}
     return {"period": row["aeroapi_period"], "queries": row["aeroapi_queries"] or 0}
+
+
+def budget_state(user_id: int) -> Dict[str, Any]:
+    """Estimated spend this month, and whether we've hit the cap.
+
+    ESTIMATED is the operative word: FlightAware's meter isn't visible to
+    us, so this is our own tally of result sets multiplied by the published
+    rate. The default cap sits under the $5 free credit precisely so an
+    estimate being slightly off doesn't produce a bill.
+    """
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT aeroapi_budget, aeroapi_allow_overage FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    budget = float(row["aeroapi_budget"]) if row and row["aeroapi_budget"] is not None else MONTHLY_BUDGET_USD
+    allow_overage = bool(row["aeroapi_allow_overage"]) if row else False
+
+    stats = query_stats(user_id)
+    spent = stats["queries"] * COST_PER_QUERY_USD
+    over = spent >= budget
+    return {
+        "queries": stats["queries"],
+        "period": stats["period"],
+        "spent": round(spent, 2),
+        "budget": round(budget, 2),
+        "allow_overage": allow_overage,
+        "over_budget": over,
+        # Only actually stops when the pilot hasn't opted into overage.
+        "exhausted": over and not allow_overage,
+        "cost_per_query": COST_PER_QUERY_USD,
+    }
 
 
 def credentials(user_id: int) -> Optional[str]:
@@ -167,11 +224,19 @@ def is_finished(enr: Optional[Dict[str, Any]]) -> bool:
 
 
 def should_query(enr: Optional[Dict[str, Any]], leg, now: datetime,
-                 adsb_changed: bool, queries_used: int) -> Optional[str]:
+                 adsb_changed: bool, queries_used: int,
+                 down: bool = False) -> Optional[str]:
     """Why this leg deserves a query right now, or None to skip."""
     if queries_used >= MAX_QUERIES_PER_LEG:
         return None
     if is_finished(enr):
+        return None
+
+    # Ordinary triggers may only spend down to the closeout reserve; the
+    # last few queries are kept for confirming gate-in, which is the one
+    # thing that closes a leg on the airline's authority.
+    ordinary_budget = MAX_QUERIES_PER_LEG - CLOSEOUT_RESERVE
+    if queries_used >= ordinary_budget and not down:
         return None
 
     dep = leg.dep_datetime_utc()
@@ -183,6 +248,16 @@ def should_query(enr: Optional[Dict[str, Any]], leg, now: datetime,
     last = _parse(enr.get("_fetched_at"))
     if last and (now - last) < MIN_QUERY_GAP:
         return None
+
+    # CLOSEOUT PASS. The aircraft is on the ground and stopped, but the
+    # airline hasn't posted gate-in yet. Without this the ordinary triggers
+    # can run out before actual_in appears, and the leg never closes on the
+    # airline's authority. Bounded in both rate and duration.
+    if down and not enr.get("actual_in"):
+        arr = leg.arr_datetime_utc()
+        if arr and now <= arr + CLOSEOUT_WINDOW:
+            if not last or (now - last) >= CLOSEOUT_GAP:
+                return "closeout: waiting on gate-in"
 
     # Something visibly happened on ADS-B — worth confirming against the
     # airline's own record.
@@ -205,7 +280,8 @@ def should_query(enr: Optional[Dict[str, Any]], leg, now: datetime,
     return None
 
 
-def refresh(user_id: int, leg, now: datetime, adsb_changed: bool = False) -> Optional[str]:
+def refresh(user_id: int, leg, now: datetime, adsb_changed: bool = False,
+            down: bool = False) -> Optional[str]:
     """Refresh this leg's enrichment if the budget rules allow.
 
     Returns the reason a query was spent, or None. Never raises — an
@@ -216,25 +292,33 @@ def refresh(user_id: int, leg, now: datetime, adsb_changed: bool = False) -> Opt
     if not api_key:
         return None
 
+    # Hard stop: never spend past the monthly budget.
+    budget = budget_state(user_id)
+    if budget["exhausted"]:
+        print(f"[enrichment] monthly cap reached "
+              f"(~${budget['spent']:.2f} of ${budget['budget']:.2f}) — "
+              f"AeroAPI paused, ADS-B tracking continues")
+        return None
+
     enr = get_enrichment(user_id, leg.id)
     used = int((enr or {}).get("_queries", 0))
-    reason = should_query(enr, leg, now, adsb_changed, used)
+    reason = should_query(enr, leg, now, adsb_changed, used, down=down)
     if not reason:
         return None
 
     try:
-        fresh, raw = fetch_leg(api_key, leg.callsign, leg.origin, leg.destination,
-                               leg.dep_datetime_utc(), want_raw=True)
+        fresh, raw, billed = fetch_leg(api_key, leg.callsign, leg.origin, leg.destination,
+                                       leg.dep_datetime_utc(), want_raw=True)
     except AeroApiError as e:
         print(f"[enrichment] {leg.id}: {e}")
         # Still counts against the key's usage — the request was made.
-        _count_query(user_id, now)
+        _count_query(user_id, now, 1)
         return None
     except Exception as e:
         print(f"[enrichment] {leg.id}: unexpected error: {e}")
         return None
 
-    _count_query(user_id, now)
+    _count_query(user_id, now, billed)
     if fresh is None:
         print(f"[enrichment] {leg.id}: no matching flight for {leg.callsign} "
               f"{leg.origin}-{leg.destination}")
@@ -266,17 +350,18 @@ PHASE_ORDER = {
     "In Air": 2, "Diverting": 2,
     "Landing": 3,
     "Taxi-in": 4,
-    "Arrived": 5,
+    "Arrived": 5, "Diverted": 5,
 }
 
 
 def _ooi_phase(enr: Optional[Dict[str, Any]]) -> Optional[str]:
     if not enr:
         return None
+    diverted = bool(enr.get("diverted"))
     if enr.get("actual_in"):
-        return "Arrived"
+        return "Diverted" if diverted else "Arrived"
     if enr.get("actual_on"):
-        return "Taxi-in"
+        return "Diverted" if diverted else "Taxi-in"
     if enr.get("actual_off"):
         return "Diverting" if enr.get("diverted") else "In Air"
     if enr.get("actual_out"):

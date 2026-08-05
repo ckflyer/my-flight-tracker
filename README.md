@@ -310,6 +310,97 @@ When the airline has pushed the estimate by more than
 `DELAY_STATUS_MIN` (10) minutes and there's still no gate-out, the status
 reads **Delayed** instead.
 
+## The phase machine does not guess
+
+`compute_phase` reports only what the aircraft is broadcasting:
+
+  Scheduled -> Taxi-out -> In Air / Landing -> Taxi-in, else **Unknown**
+
+Earlier versions inferred a phase from the clock and from silence:
+scheduled departure had passed so the flight was "Departing"; the signal
+dropped while airborne so it "must still be flying"; it dropped on the
+ground so it "must have arrived". Air travel doesn't cooperate — gate
+holds, returns to stand and diversions all break that, and a coverage gap
+is not evidence of anything. When the aircraft isn't tracked the card says
+**Unknown** and when it was last seen, and tracking resumes wherever the
+aircraft reappears.
+
+"Departing" is gone. "Arrived", "Diverted" and "Cancelled" never come from
+here: arrival is a closure decision (closure.py), and diversion and
+cancellation exist only in the API — ADS-B has no concept of either.
+
+Progress, distance and ETE follow the same rule. No live position means no
+figure at all and the progress bar hides, rather than showing a number
+derived from the clock. ETE needs either a live groundspeed or the
+airline's revised arrival; the bare schedule isn't knowledge.
+
+Landing fires inside 8 nm (was 17, which triggered while still being
+vectored downwind).
+
+## Progress and status ordering
+
+`compute_live_payload` computes the ADS-B phase FIRST, then lets enrichment
+refine it. That assignment used to happen at the END of the function, after
+the enrichment block had already set the status — silently discarding every
+OOOI-derived value including "Delayed". A flight two hours late at the gate
+still read "Departing" because the airline's own view was computed and then
+thrown away.
+
+Progress is pinned to zero until there is evidence the aircraft actually
+left: a live fix showing not-on-ground, or a status of In Air or later.
+Without that guard, `compute_progress`'s elapsed-time fallback measured the
+clock against the SCHEDULE, so a flight still at the gate showed 27% (and,
+once past its scheduled arrival, 100%) en route. The guard applies with or
+without an AeroAPI key, because that fallback is exactly what a pilot with
+no key relies on. When revised times are known, progress and ETE are
+recomputed against those rather than the superseded schedule.
+
+## Closing a leg out
+
+`app/closure.py` makes closure one decision with one recorded reason,
+stored in `flight_closeout` alongside the flown track. Once closed a leg is
+FROZEN: no polling, no live data, no recomputation, so a past flight's
+numbers never drift.
+
+With an AeroAPI key, OOOI is the authority — the airline's `actual_in` (or
+a cancellation) closes the leg, and nothing else does. Without a key,
+ADS-B does the best it can: the ground cycle (flew, then stopped), or the
+aircraft going airborne AGAIN after landing, which is unambiguous and needs
+no timers.
+
+A CLOSEOUT PASS keeps asking for `actual_in` once the aircraft is down —
+every 10 minutes for up to 90, using queries reserved from the per-leg
+budget so a chatty flight can't starve it. Without it the ordinary triggers
+can run out before gate-in publishes and the leg never closes on the
+airline's authority.
+
+An observed arrival requires BOTH that the aircraft has been stationary for
+5 minutes AND that its signal has gone quiet for 8. Stopping alone means
+nothing — waiting off-gate for a stand can mean half an hour parked with the
+transponder still transmitting. An aircraft that has genuinely blocked in
+goes silent.
+
+A BACKSTOP exists because `actual_in` is the field most often missing, and a
+leg that never closes never releases its callsign. It is deliberately hard
+to reach: 3 hours past the REVISED arrival (not the scheduled one, since a
+six-hour delay is a real and normal thing), and only when there is nothing
+left to learn — no live ADS-B signal and no fresh airline data. It records
+`backstop` rather than claiming airline authority, and a late gate-in still
+upgrades it.
+
+Every figure carries its source, so the card can say "arrival from airline"
+versus "observed" rather than presenting a guess as fact.
+
+## Cost control
+
+`/flights/{ident}` costs $0.005 per result set. At ~50 legs/month and
+6-10 queries per leg that's roughly $1.50-$2.50/month, inside the Personal
+tier's $5 free credit. `MAX_QUERIES_PER_LEG` (14) caps any single leg,
+`CLOSEOUT_RESERVE` (4) of those are held for confirming gate-in, and
+`AEROAPI_MONTHLY_BUDGET` (default $4.50) is a hard monthly stop — queries
+cease entirely once it's reached, so the app can never quietly produce a
+bill. Settings shows queries and dollars spent against the cap.
+
 ## Storage
 
 Everything — schedule legs, users/accounts, and live

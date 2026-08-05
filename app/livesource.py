@@ -122,14 +122,7 @@ def live_state_for_leg(leg, now, history=None):
     goes through here, so the guard can't be applied in one path and
     forgotten in another.
     """
-    from .flightmatch import already_arrived, evaluate, observe, release_aircraft
-
-    if history is not None and already_arrived(leg, history, now):
-        # The leg is over. Whatever is broadcasting this callsign now is the
-        # next flight — most often the same aeroplane turning straight back
-        # around under the same flight number.
-        release_aircraft(leg)
-        return None
+    from .flightmatch import evaluate, observe, release_aircraft
 
     state = live_state(leg.callsign)
     if state is None:

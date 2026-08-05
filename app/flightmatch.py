@@ -145,6 +145,39 @@ def _row(leg: FlightLeg):
         conn.close()
 
 
+def took_off_again(leg: FlightLeg) -> bool:
+    """Has the acquired aircraft flown again since landing?"""
+    row = _row(leg)
+    if not row:
+        return False
+    try:
+        return bool(row["landed_seen"]) and not row["stopped_since"] and bool(row["completed_at"])
+    except Exception:
+        return False
+
+
+def signal_gap_seconds(leg: FlightLeg, now: datetime) -> Optional[float]:
+    """How long since we last had any live data for this leg's aircraft."""
+    row = _row(leg)
+    if not row or not row["last_signal_at"]:
+        return None
+    try:
+        return (now - datetime.fromisoformat(row["last_signal_at"])).total_seconds()
+    except Exception:
+        return None
+
+
+def stopped_seconds(leg: FlightLeg, now: datetime) -> Optional[float]:
+    """How long the aircraft has been stationary, if it has flown."""
+    row = _row(leg)
+    if not row or not row["airborne_seen"] or not row["stopped_since"]:
+        return None
+    try:
+        return (now - datetime.fromisoformat(row["stopped_since"])).total_seconds()
+    except Exception:
+        return None
+
+
 def observed_gate_in(leg: FlightLeg) -> Optional[datetime]:
     """When WE saw the aircraft come to a stop after flying.
 
@@ -196,6 +229,8 @@ def observe(leg: FlightLeg, state: Dict[str, Any], now: datetime) -> bool:
     speed = state.get("speed_kts")
     squawk = state.get("squawk")
     airborne_seen = bool(row["airborne_seen"])
+    landed_seen = bool(row["landed_seen"]) if "landed_seen" in row.keys() else False
+    relaunched = False
     stopped_since = row["stopped_since"]
     last_squawk = row["last_squawk"]
 
@@ -203,20 +238,24 @@ def observe(leg: FlightLeg, state: Dict[str, Any], now: datetime) -> bool:
     new_stopped_since = stopped_since
 
     if not on_ground:
+        # Airborne again after having landed: this leg is over and the
+        # aircraft is flying the next one.
+        if landed_seen:
+            relaunched = True
         airborne_seen = True
         new_stopped_since = None          # airborne: no ground timer running
     else:
+        if airborne_seen:
+            landed_seen = True
         stopped = speed is not None and speed <= GROUND_STOP_KTS
         if stopped:
             if new_stopped_since is None:
                 new_stopped_since = now.isoformat()
-            elif airborne_seen:
-                try:
-                    elapsed = (now - datetime.fromisoformat(new_stopped_since)).total_seconds()
-                except Exception:
-                    elapsed = 0
-                if elapsed >= GROUND_COMPLETE_SECONDS:
-                    completed = True
+            # Being stopped is NOT enough to call the flight over. Waiting
+            # off-gate for a stand can mean half an hour parked with the
+            # aircraft still transmitting. Closure now also requires the
+            # signal to go quiet, which is decided in closure.py where the
+            # gap since last contact is visible.
             # New code while parked = a new flight plan = this leg is done.
             # Never evaluated in the air.
             if (airborne_seen and squawk and last_squawk and squawk != last_squawk):
@@ -227,22 +266,25 @@ def observe(leg: FlightLeg, state: Dict[str, Any], now: datetime) -> bool:
     conn = get_connection()
     try:
         conn.execute(
-            "UPDATE flight_aircraft SET airborne_seen = ?, stopped_since = ?, "
-            "last_squawk = COALESCE(?, last_squawk), completed_at = ? WHERE flight_key = ?",
+            "UPDATE flight_aircraft SET airborne_seen = ?, landed_seen = ?, stopped_since = ?, "
+            "last_squawk = COALESCE(?, last_squawk), last_signal_at = ?, completed_at = ? "
+            "WHERE flight_key = ?",
             (
                 int(airborne_seen),
+                int(landed_seen),
                 new_stopped_since,
                 # Only ever remember a squawk observed on the ground, so an
                 # in-flight reassignment can't poison the comparison.
                 squawk if on_ground else None,
-                now.isoformat() if completed else row["completed_at"],
+                now.isoformat(),
+                now.isoformat() if (completed or relaunched) else row["completed_at"],
                 flight_key_for(leg),
             ),
         )
         conn.commit()
     finally:
         conn.close()
-    return completed
+    return completed or relaunched
 
 
 def get_acquired_aircraft(leg: FlightLeg) -> Optional[str]:
@@ -322,6 +364,20 @@ def evaluate(leg: FlightLeg, state: Optional[Dict[str, Any]],
         if reg and seen and reg != seen:
             return Verdict(False, f"AeroAPI has {reg} operating this leg, not {seen}")
 
+    # A closed leg is frozen — it accepts nothing further, from any source.
+    # This is also what permanently retires the same-callsign turn problem:
+    # a closed leg can never adopt the return flight.
+    try:
+        # Ask closure.py rather than reading its table directly — it owns
+        # what "closed" means, and a second copy of that query here is how
+        # the two drift apart.
+        from .closure import any_closeout
+        if any_closeout(leg.id):
+            return Verdict(False, "this leg is closed out — anything on the callsign "
+                                  "now belongs to a later flight")
+    except Exception:
+        pass
+
     if is_complete(leg):
         return Verdict(False, "this leg has already finished — whatever is using "
                               "the callsign now belongs to the next flight")
@@ -372,22 +428,6 @@ def evaluate(leg: FlightLeg, state: Optional[Dict[str, Any]],
     return Verdict(False, f"{d_origin:.0f}nm from {leg.origin}, and past the departure "
                           f"window — waiting for an aircraft at the origin rather than "
                           f"adopting whatever is using this callsign")
-
-
-def already_arrived(leg: FlightLeg, history: List[Dict[str, Any]], now: datetime) -> bool:
-    """Has this leg finished?
-
-    Once the aircraft has settled on the ground at the destination the leg
-    is over, and anything appearing on the callsign afterwards belongs to
-    the next flight. Imported locally to dodge a circular import.
-    """
-    from .track import compute_phase
-    if not history:
-        return False
-    try:
-        return compute_phase(leg, None, history, now, 15) == "Arrived"
-    except Exception:
-        return False
 
 
 def is_plausible_for_leg(leg: FlightLeg, state: Optional[Dict[str, Any]],

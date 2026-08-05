@@ -130,6 +130,14 @@ def init_db() -> None:
         # before a bill tells them. Reset when the month rolls over.
         if "aeroapi_queries" not in user_cols:
             conn.execute("ALTER TABLE users ADD COLUMN aeroapi_queries INTEGER NOT NULL DEFAULT 0")
+        # Per-pilot spend cap. Each pilot has their own key and their own
+        # bill, so the cap belongs to the account rather than the server.
+        if "aeroapi_budget" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN aeroapi_budget REAL NOT NULL DEFAULT 4.50")
+        # Opt-in to keep querying past the cap, for anyone on a paid tier
+        # who doesn't mind the overage.
+        if "aeroapi_allow_overage" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN aeroapi_allow_overage INTEGER NOT NULL DEFAULT 0")
         if "aeroapi_period" not in user_cols:
             conn.execute("ALTER TABLE users ADD COLUMN aeroapi_period TEXT")
 
@@ -266,8 +274,38 @@ def init_db() -> None:
         if "last_squawk" not in fa_cols:
             conn.execute("ALTER TABLE flight_aircraft ADD COLUMN last_squawk TEXT")
         # Set once the leg is judged finished; blocks any re-acquisition.
+        # Set once the aircraft has been seen on the ground after flying.
+        # If it then goes airborne AGAIN, the leg is unambiguously over —
+        # the cleanest closure signal ADS-B can give, and it costs nothing.
+        if "landed_seen" not in fa_cols:
+            conn.execute("ALTER TABLE flight_aircraft ADD COLUMN landed_seen INTEGER NOT NULL DEFAULT 0")
+        # When live data was last seen for this aircraft. A flight that has
+        # actually blocked in goes quiet (transponder off); one parked on a
+        # pad waiting for a gate keeps transmitting.
+        if "last_signal_at" not in fa_cols:
+            conn.execute("ALTER TABLE flight_aircraft ADD COLUMN last_signal_at TEXT")
         if "completed_at" not in fa_cols:
             conn.execute("ALTER TABLE flight_aircraft ADD COLUMN completed_at TEXT")
+
+        # A leg's final, frozen record.
+        #
+        # Once closed, a leg stops polling, stops recomputing and stops
+        # accepting live data — its numbers never drift again. Kept
+        # alongside the flown track so a past flight can show what actually
+        # happened, with the SOURCE of each figure recorded rather than
+        # presented as uniform fact.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS flight_closeout (
+                leg_id TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                closed_at TEXT NOT NULL,
+                closed_by TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                PRIMARY KEY (leg_id, user_id)
+            )
+            """
+        )
 
         # Cached AeroAPI enrichment, one row per leg per pilot.
         #
@@ -297,6 +335,32 @@ def init_db() -> None:
         # simply lost and "was 11:55" becomes unanswerable.
         if "first_seen" not in enr_cols:
             conn.execute("ALTER TABLE flight_enrichment ADD COLUMN first_seen TEXT")
+
+        # A finished leg, frozen.
+        #
+        # Once closed, a leg stops polling, stops recomputing, and stops
+        # accepting live data — so what you see on a past flight is what was
+        # true when it ended, not something that quietly drifts as late data
+        # arrives. `closed_by` records WHICH source closed it, so the card
+        # can be honest about whether an arrival time is the airline's own
+        # figure or our observation of the aircraft stopping.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS flight_closeout (
+                leg_id TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                closed_at TEXT NOT NULL,
+                closed_by TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                closeout_queries INTEGER NOT NULL DEFAULT 0,
+                last_closeout_at TEXT,
+                PRIMARY KEY (leg_id, user_id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_closeout_user ON flight_closeout(user_id, closed_at)"
+        )
 
         # One-time migration of per-user history already recorded.
         # INSERT OR IGNORE collapses the duplicate (flight_key, ts) rows

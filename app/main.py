@@ -12,13 +12,15 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from .schedule import load_schedule, get_current_info, delete_leg, save_schedule
 from .livesource import live_summary, live_state_for_leg
 from .enrichment import (get_enrichment, derive_status, departure_delay,
-                         arrival_delay, gate_info, diversion_info, query_stats)
+                         arrival_delay, gate_info, diversion_info, query_stats,
+                         budget_state)
+from .closure import get_closeout
 from .models import FlightLeg
 from .parser import parse_schedule_text
 from .airports import enrich_leg
 from .settings import load_settings, save_settings, AppSettings
 from .track import (
-    record_position, get_breadcrumb, compute_progress, compute_ete, compute_eta,
+    record_position, get_breadcrumb, compute_progress, compute_ete, last_tracked_at,
     compute_distance_remaining_nm, get_position_history, compute_phase,
 )
 from .auth import (
@@ -127,6 +129,28 @@ def tracking_links(leg: FlightLeg) -> dict:
         "fr24": f"https://www.flightradar24.com/{cs}",
         "flightaware": f"https://flightaware.com/live/flight/{cs}",
     }
+
+
+def _fmt_utc_local(dt, tz_name, time_format="24"):
+    """A UTC instant as a clock time at an airport."""
+    if dt is None or not tz_name:
+        return None
+    try:
+        local = dt.astimezone(ZoneInfo(tz_name))
+    except Exception:
+        return None
+    text = (local.strftime("%I:%M %p").lstrip("0") if time_format == "12"
+            else local.strftime("%H:%M"))
+    return f"{text} {local.tzname() or ''}".strip()
+
+
+def _parse_iso(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+    except Exception:
+        return None
 
 
 def leg_view(leg: Optional[FlightLeg], now: datetime, time_format: str = "24") -> Optional[dict]:
@@ -586,8 +610,59 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now
     if should_poll:
         live = live_state_for_leg(selected_leg, now, history)
     extra["breadcrumb"] = get_breadcrumb(selected_leg.id)
-    extra["progress_pct"] = compute_progress(selected_leg, live, now)
+    extra["progress_pct"] = compute_progress(selected_leg, live, now)  # provisional; revised below
+    extra["ete"] = compute_ete(selected_leg, live, now)
+    extra["distance_nm"] = compute_distance_remaining_nm(selected_leg, live)
+
+    if live and live.get("lat") is not None and live.get("lon") is not None:
+        record_position(selected_leg.id, live["lat"], live["lon"], now, live.get("on_ground"))
+        extra["breadcrumb"] = get_breadcrumb(selected_leg.id)
+        # Tail number and type ride along with the live position now, so
+        # there's no separate lookup to wait on and nothing to cache.
+        extra["aircraft"] = {
+            "registration": live.get("registration"),
+            "display_type": live.get("aircraft_type"),
+        } if (live.get("registration") or live.get("aircraft_type")) else None
+        history = get_position_history(selected_leg.id)  # include the point just recorded
+    # ADS-B phase FIRST, then enrichment refines it.
+    #
+    # This assignment used to happen at the very END of the function, after
+    # the enrichment block had already set extra["status"] — so it silently
+    # overwrote every OOOI-derived status, including "Delayed". A flight
+    # sitting at the gate two hours late still read "Departing" because the
+    # airline's own view of it was computed and then thrown away.
+    extra["status"] = compute_phase(selected_leg, live, history, now, poll_seconds)
+    # When the aircraft isn't being tracked, say so and say when it last
+    # was, instead of guessing a phase.
+    if extra["status"] == "Unknown":
+        seen = last_tracked_at(history)
+        if seen:
+            gap = (now - seen).total_seconds() / 60
+            if gap < 60:
+                extra["last_tracked"] = f"{int(gap)} min ago"
+            else:
+                tz = getattr(selected_leg.dest_info, "timezone", None)
+                extra["last_tracked"] = _fmt_utc_local(seen, tz, time_format)
+
     # Read-only: page renders must never spend one of the pilot's queries.
+    # A closed leg reports its FROZEN record. Nothing recomputes, so the
+    # numbers a past flight shows never drift.
+    closeout = get_closeout(user_id, selected_leg.id)
+    if closeout:
+        extra["closed"] = True
+        # A closed leg's status comes from the closure record, so there is
+        # exactly one definition of "arrived" rather than the phase machine
+        # having its own. Diverted and Cancelled are API-only facts.
+        if closeout.get("cancelled"):
+            extra["final_status"] = "Cancelled"
+        elif closeout.get("diverted"):
+            extra["final_status"] = "Diverted"
+        else:
+            extra["final_status"] = "Arrived"
+        extra["closed_by"] = closeout.get("closed_by")
+        extra["arrival_source"] = closeout.get("arrival_source")
+        extra["closeout"] = closeout
+
     enr = get_enrichment(user_id, selected_leg.id)
     if enr:
         extra["status"] = derive_status(enr, extra.get("status"))
@@ -605,6 +680,27 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now
         extra["dep_delay"] = departure_delay(enr, selected_leg, time_format, status=status_now)
         extra["arr_delay"] = arrival_delay(enr, selected_leg, time_format,
                                            status=status_now, observed_in=obs_in)
+
+        # Status is already final here, so this is a reliable read.
+        airborne = bool(enr.get("actual_off")) or status_now in (
+            "In Air", "Landing", "Taxi-in", "Arrived", "Diverting")
+
+        # Recompute time-to-go against the REVISED arrival, so a known delay
+        # is reflected instead of counting down to a schedule that's already
+        # been superseded.
+        revised_arr = None
+        for key in ("actual_in", "estimated_in", "actual_on", "estimated_on"):
+            parsed = _parse_iso(enr.get(key))
+            if parsed:
+                revised_arr = parsed
+                break
+        if revised_arr:
+            extra["ete"] = compute_ete(selected_leg, live, now, arr_override=revised_arr)
+            if airborne:
+                extra["progress_pct"] = compute_progress(
+                    selected_leg, live, now, departed=True,
+                    dep_override=_parse_iso(enr.get("actual_off")) or _parse_iso(enr.get("actual_out")),
+                    arr_override=revised_arr)
         # THE BUG THIS FIXES: the card used to print the FFDO scheduled
         # time and then a note saying "18 min early" beside it, so the two
         # never agreed. When there's an actual or estimated time, that is
@@ -632,20 +728,20 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now
             except Exception:
                 pass
 
-    extra["ete"] = compute_ete(selected_leg, live, now)
-    extra["eta"] = compute_eta(selected_leg, live, now, time_format)
-    extra["distance_nm"] = compute_distance_remaining_nm(selected_leg, live)
-    if live and live.get("lat") is not None and live.get("lon") is not None:
-        record_position(selected_leg.id, live["lat"], live["lon"], now, live.get("on_ground"))
-        extra["breadcrumb"] = get_breadcrumb(selected_leg.id)
-        # Tail number and type ride along with the live position now, so
-        # there's no separate lookup to wait on and nothing to cache.
-        extra["aircraft"] = {
-            "registration": live.get("registration"),
-            "display_type": live.get("aircraft_type"),
-        } if (live.get("registration") or live.get("aircraft_type")) else None
-        history = get_position_history(selected_leg.id)  # include the point just recorded
-    extra["status"] = compute_phase(selected_leg, live, history, now, poll_seconds)
+    # Departure guard, applied last so it sees the final status. Works with
+    # or without AeroAPI, since the elapsed-time fallback in
+    # compute_progress is exactly what a pilot with no key relies on.
+    _airborne = (
+        (live is not None and live.get("on_ground") is False)
+        or extra.get("status") in ("In Air", "Landing", "Taxi-in", "Arrived", "Diverting")
+    )
+    if not _airborne:
+        extra["progress_pct"] = None
+        extra["distance_nm"] = None
+
+    # Closure has the final word on status.
+    if extra.get("final_status"):
+        extra["status"] = extra["final_status"]
     return live, extra
 
 
@@ -976,7 +1072,7 @@ async def settings_page(request: Request):
     s = load_settings(pilot["id"])
     template = jinja_env.get_template("settings.html")
     ctx = {"request": request, "s": s, "saved": False, "is_admin": bool(pilot["is_admin"]),
-           "pilot_id": pilot["id"], "aeroapi_stats": query_stats(pilot["id"])}
+           "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"])}
     if pilot["is_admin"]:
         ctx["all_users"] = list_all_users()
     return HTMLResponse(template.render(**ctx))
@@ -987,6 +1083,7 @@ async def settings_save(
     request: Request,
     aeroapi_enabled: str = Form(""),
     aeroapi_key: str = Form(""),
+    aeroapi_allow_overage: str = Form(""),
     time_format: str = Form("24"),
     theme: str = Form("dark"),
     poll_seconds: int = Form(15),
@@ -1001,6 +1098,7 @@ async def settings_save(
         # A blank key with the toggle on means "keep what's stored" — the
         # form shows the key masked, so submitting shouldn't wipe it.
         aeroapi_key=aeroapi_key.strip() or load_settings(pilot["id"]).aeroapi_key,
+        aeroapi_allow_overage=bool(aeroapi_allow_overage),
         time_format="12" if time_format == "12" else "24",
         theme="light" if theme == "light" else "dark",
         poll_seconds=max(10, min(300, int(poll_seconds))),
@@ -1010,7 +1108,7 @@ async def settings_save(
     save_settings(pilot["id"], s)
     template = jinja_env.get_template("settings.html")
     ctx = {"request": request, "s": s, "saved": True, "is_admin": bool(pilot["is_admin"]),
-           "pilot_id": pilot["id"], "aeroapi_stats": query_stats(pilot["id"])}
+           "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"])}
     if pilot["is_admin"]:
         ctx["all_users"] = list_all_users()
     return HTMLResponse(template.render(**ctx))
@@ -1082,10 +1180,13 @@ async def api_selected(request: Request, leg: Optional[str] = None):
         "status": extra.get("status"),
         "progress_pct": extra.get("progress_pct"),
         "ete": extra.get("ete"),
-        "eta": extra.get("eta"),
         "dep_delay": extra.get("dep_delay"),
         "arr_delay": extra.get("arr_delay"),
         "enriched_at": extra.get("enriched_at"),
+        "last_tracked": extra.get("last_tracked"),
+        "closed": extra.get("closed"),
+        "closed_by": extra.get("closed_by"),
+        "arrival_source": extra.get("arrival_source"),
         "dep_shown": extra.get("dep_shown"),
         "arr_shown": extra.get("arr_shown"),
         "gates": extra.get("gates"),

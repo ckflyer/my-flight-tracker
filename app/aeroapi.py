@@ -31,6 +31,11 @@ from typing import Any, Dict, List, Optional
 import requests
 
 BASE_URL = os.environ.get("AEROAPI_BASE", "https://aeroapi.flightaware.com/aeroapi")
+
+# FlightAware bills per RESULT SET of up to 15 records, not per HTTP call.
+# A response with 20 flight records is two result sets. Counting calls
+# would quietly under-report spend.
+RESULT_SET_SIZE = 15
 REQUEST_TIMEOUT = 15
 
 
@@ -164,13 +169,17 @@ def fetch_leg(api_key: str, ident: str, origin: str, destination: str,
     except Exception as e:
         raise AeroApiError(f"AeroAPI response was not JSON: {e}")
 
-    match = pick_flight(data.get("flights") or [], origin, destination, scheduled_dep)
+    records = data.get("flights") or []
+    # How many result sets this response actually cost.
+    billed = max(1, -(-len(records) // RESULT_SET_SIZE))
+    match = pick_flight(records, origin, destination, scheduled_dep)
     if not match:
-        return (None, None) if want_raw else None
+        return (None, None, billed) if want_raw else None
     normalized = normalize(match)
+    normalized["_billed"] = billed
     # The raw record is kept so fields we don't render today don't have to
     # be bought a second time.
-    return (normalized, match) if want_raw else normalized
+    return (normalized, match, billed) if want_raw else normalized
 
 
 def resolve_operator(api_key: str, flight_number: str, origin: str,

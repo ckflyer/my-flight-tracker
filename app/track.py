@@ -34,7 +34,8 @@ TRACK_RETENTION_DAYS = 30
 
 MIN_SPEED_KTS_FOR_ETA = 20  # ignore near-zero ground speed so ETA doesn't spike
 
-LANDING_RADIUS_NM = 17.0       # switch In Air -> Landing within this range of the destination
+LANDING_RADIUS_NM = 8.0        # In Air -> Landing inside this range. 17 nm fired while
+                               # still being vectored downwind; 8 is about final.
 GROUND_MOVE_THRESHOLD_NM = 0.1  # ~600ft; cumulative displacement counts as "moved," not instantaneous speed
 STILL_WINDOW_SECONDS = 240      # how long position must stay put before calling it Arrived (rides out taxi-queue stops)
 MIN_SIGNAL_LOST_SECONDS = 90    # how long ADS-B can go quiet after a landing before we just call it Arrived
@@ -202,73 +203,90 @@ def _stable_since(history: List[Dict[str, Any]], anchor_lat: float, anchor_lon: 
     return stable_from
 
 
-def compute_phase(leg: FlightLeg, live: Optional[Dict[str, Any]], history: List[Dict[str, Any]], now: datetime, poll_seconds: int = 45) -> str:
-    """Live-data-driven flight phase: Scheduled / Departing / Taxi-out /
-    In Air / Landing / Taxi-in / Arrived.
+def compute_phase(leg: FlightLeg, live: Optional[Dict[str, Any]],
+                  history: List[Dict[str, Any]], now: datetime,
+                  poll_seconds: int) -> str:
+    """Flight phase, from what the aircraft is actually broadcasting.
 
-    Ground movement (taxi-out/in) is judged by cumulative displacement from
-    a fixed reference point, not instantaneous speed — a plane stopped in a
-    taxi queue still reads as "moving" in this sense, since it's already
-    displaced from where it started. "Arrived" only fires once position has
-    been stable for a sustained window (rides out a queue stop) or ADS-B
-    has gone quiet for a bit after a landing was already confirmed (common
-    at fields with weak ramp-area coverage) — never from silence before
-    we've confirmed anything actually happened.
+    This deliberately does NOT guess. Earlier versions inferred a phase
+    from the clock and from silence: scheduled departure had passed so the
+    flight was "Departing"; the signal dropped while airborne so it "must
+    still be flying"; the signal dropped on the ground so it "must have
+    arrived". Air travel doesn't cooperate with that — gate holds, returns
+    to stand and diversions all break it, and a coverage gap isn't
+    evidence of anything.
+
+    So: if the aircraft is being tracked, the phase comes from the data.
+    If it isn't, the answer is Unknown, and the card says when it was last
+    seen. We pick back up wherever the aircraft reappears.
+
+    "Arrived" is NOT produced here. That's a closure decision (closure.py),
+    which requires the aircraft stopped AND the signal gone, or the
+    airline's own gate-in. "Diverted" and "Cancelled" come only from the
+    API — ADS-B has no concept of either.
     """
     dep = leg.dep_datetime_utc()
-    arr = leg.arr_datetime_utc()
-    if not dep or not arr:
-        return "Unknown"
 
-    if now < dep - timedelta(minutes=20):
-        return "Scheduled"
-
-    ever_airborne = any(p["on_ground"] is False for p in history)
-    dest = leg.dest_info
-
-    if live and live.get("lat") is not None and live.get("lon") is not None:
-        on_ground_now = bool(live.get("on_ground"))
-        if not on_ground_now:
+    tracked = live and live.get("lat") is not None and live.get("lon") is not None
+    if tracked:
+        if not live.get("on_ground"):
+            dest = leg.dest_info
             if dest and dest.lat is not None:
                 d = haversine_nm(live["lat"], live["lon"], dest.lat, dest.lon)
                 if d <= LANDING_RADIUS_NM:
                     return "Landing"
             return "In Air"
 
-        # On the ground right now.
-        if not ever_airborne:
-            start = history[0] if history else None
-            if start and start.get("lat") is not None:
-                moved = haversine_nm(live["lat"], live["lon"], start["lat"], start["lon"])
-                if moved > GROUND_MOVE_THRESHOLD_NM:
-                    return "Taxi-out"
-            return "Departing"
+        # On the ground. Which side of the flight depends on whether we
+        # have actually seen it airborne — an observed fact, not a guess.
+        ever_airborne = any(h.get("on_ground") is False for h in history)
+        if ever_airborne:
+            return "Taxi-in"
+        start = history[0] if history else None
+        if start and start.get("lat") is not None:
+            moved = haversine_nm(live["lat"], live["lon"], start["lat"], start["lon"])
+            if moved > GROUND_MOVE_THRESHOLD_NM:
+                return "Taxi-out"
+        return "Scheduled"
 
-        stable_from = _stable_since(history, live["lat"], live["lon"], now, GROUND_MOVE_THRESHOLD_NM)
-        if (now - stable_from).total_seconds() >= STILL_WINDOW_SECONDS:
-            return "Arrived"
-        return "Taxi-in"
-
-    # No live signal this poll.
-    if not ever_airborne:
-        return "Departing"
-    last = history[-1] if history else None
-    if last and last.get("on_ground"):
-        elapsed = (now - last["ts"]).total_seconds()
-        if elapsed >= max(poll_seconds * 2, MIN_SIGNAL_LOST_SECONDS):
-            return "Arrived"
-        return "Taxi-in"
-    # Last known state was airborne but the signal dropped — report the
-    # last confirmed state rather than guessing.
-    return "In Air"
+    # Not being tracked. Before departure that's simply the schedule
+    # speaking, which is honest. Afterwards we genuinely don't know.
+    if dep and now < dep:
+        return "Scheduled"
+    return "Unknown"
 
 
-def compute_progress(leg: FlightLeg, live: Optional[Dict[str, Any]], now: datetime) -> Optional[float]:
-    """Percent (0-100) along the route. Uses great-circle position when we
-    have a live lat/lon and both airports' coordinates; otherwise falls back
-    to elapsed-time-vs-scheduled-duration."""
-    dep = leg.dep_datetime_utc()
-    arr = leg.arr_datetime_utc()
+def last_tracked_at(history: List[Dict[str, Any]]) -> Optional[datetime]:
+    """When the aircraft was last seen, for the Unknown state."""
+    if not history:
+        return None
+    last = history[-1]
+    return last.get("ts")
+
+
+def compute_progress(leg: FlightLeg, live: Optional[Dict[str, Any]], now: datetime,
+                     departed: Optional[bool] = None,
+                     dep_override: Optional[datetime] = None,
+                     arr_override: Optional[datetime] = None) -> Optional[float]:
+    """Percent (0-100) along the route.
+
+    Great-circle position when there's a live fix; otherwise elapsed time
+    against the flight's duration.
+
+    Two guards on that fallback, both learned the hard way:
+
+    `departed=False` pins progress at zero. Without it, a flight delayed at
+    the gate showed "27.7% en route" simply because its SCHEDULED departure
+    had passed — the clock had moved even though the aeroplane hadn't.
+
+    `dep_override`/`arr_override` let the caller pass revised times, so a
+    known delay shifts the whole calculation instead of measuring against a
+    schedule everyone already knows is wrong.
+    """
+    if departed is False:
+        return 0.0
+    dep = dep_override or leg.dep_datetime_utc()
+    arr = arr_override or leg.arr_datetime_utc()
     if not dep or not arr or arr <= dep:
         return None
 
@@ -286,8 +304,11 @@ def compute_progress(leg: FlightLeg, live: Optional[Dict[str, Any]], now: dateti
         if total > 0:
             return round(max(0.0, min(100.0, done / total * 100)), 1)
 
-    pct = (now - dep).total_seconds() / (arr - dep).total_seconds() * 100
-    return round(max(0.0, min(100.0, pct)), 1)
+    # No live position means no progress figure. The old elapsed-time
+    # fallback measured the clock rather than the aeroplane, which is how a
+    # flight still at the gate reported 27% (and later 100%) en route.
+    # Better to show nothing than something invented.
+    return None
 
 
 def compute_distance_remaining_nm(leg: FlightLeg, live: Optional[Dict[str, Any]]) -> Optional[float]:
@@ -302,13 +323,14 @@ def compute_distance_remaining_nm(leg: FlightLeg, live: Optional[Dict[str, Any]]
     return round(haversine_nm(live["lat"], live["lon"], dest_info.lat, dest_info.lon), 1)
 
 
-def compute_remaining_minutes(leg: FlightLeg, live: Optional[Dict[str, Any]], now: datetime) -> Optional[float]:
+def compute_remaining_minutes(leg: FlightLeg, live: Optional[Dict[str, Any]], now: datetime,
+                              arr_override: Optional[datetime] = None) -> Optional[float]:
     """Minutes until arrival, from live groundspeed and distance-to-go when
     available, otherwise scheduled arrival minus now. Shared by both the
     "time remaining" and "arriving at" displays so they can never disagree.
     """
     dest_info = leg.dest_info
-    arr_utc = leg.arr_datetime_utc()
+    arr_utc = arr_override or leg.arr_datetime_utc()
 
     if (
         live
@@ -320,42 +342,18 @@ def compute_remaining_minutes(leg: FlightLeg, live: Optional[Dict[str, Any]], no
     ):
         remaining_nm = haversine_nm(live["lat"], live["lon"], dest_info.lat, dest_info.lon)
         return max(0.0, (remaining_nm / live["speed_kts"]) * 60)
-    if arr_utc:
-        return max(0.0, (arr_utc - now).total_seconds() / 60)
+    # Only when the caller supplied a REVISED arrival (the airline's
+    # estimate). The bare schedule isn't knowledge — a flight two hours
+    # late doesn't have 5 minutes to go just because the timetable says so.
+    if arr_override:
+        return max(0.0, (arr_override - now).total_seconds() / 60)
     return None
 
 
-def compute_eta(leg: FlightLeg, live: Optional[Dict[str, Any]], now: datetime,
-                time_format: str = "24") -> Optional[str]:
-    """Predicted arrival as a CLOCK TIME in the destination's local zone.
-
-    "Landing about 6:42 PM" is the thing a family member actually wants;
-    "1h 12m" makes them do arithmetic against a wall clock. Destination
-    local time matches the scheduled arrival already shown on the card, so
-    the two can be compared directly to see if a flight is running late.
-    """
-    remaining = compute_remaining_minutes(leg, live, now)
-    if remaining is None:
-        return None
-    dest_info = leg.dest_info
-    if not dest_info:
-        return None
-    eta_utc = now + timedelta(minutes=remaining)
-    try:
-        local = eta_utc.astimezone(ZoneInfo(dest_info.timezone))
-    except Exception:
-        return None
-    if time_format == "12":
-        time_str = local.strftime("%I:%M %p").lstrip("0")
-    else:
-        time_str = local.strftime("%H:%M")
-    abbr = local.tzname() or dest_info.timezone.split("/")[-1]
-    return f"{time_str} {abbr}"
-
-
-def compute_ete(leg: FlightLeg, live: Optional[Dict[str, Any]], now: datetime) -> Optional[str]:
+def compute_ete(leg: FlightLeg, live: Optional[Dict[str, Any]], now: datetime,
+                arr_override: Optional[datetime] = None) -> Optional[str]:
     """Time remaining (ETE), not a clock time. See compute_remaining_minutes."""
-    remaining_minutes = compute_remaining_minutes(leg, live, now)
+    remaining_minutes = compute_remaining_minutes(leg, live, now, arr_override)
     if remaining_minutes is None:
         return None
     total_minutes = int(round(max(0, remaining_minutes)))
