@@ -29,13 +29,36 @@ import os
 from .db import get_connection
 
 # Never query a leg more often than this, whatever the triggers say.
-MIN_QUERY_GAP = timedelta(minutes=8)
+MIN_QUERY_GAP = timedelta(minutes=20)
+# How many evenly spaced checks to make between departure and arrival. Any
+# that would land inside MIN_QUERY_GAP of the previous query are skipped,
+# so a short leg simply uses fewer.
+CRUISE_CHECKS = 3
 # Absolute ceiling per leg — a runaway loop can't cost more than this.
 # Raised from 10 to make room for the closeout pass, which is reserved
 # below so a chatty flight can't starve it.
-MAX_QUERIES_PER_LEG = 14
+MAX_QUERIES_PER_LEG = 10
+# Of that ceiling, held back purely for confirming gate-in, so a leg
+# that spent heavily on delays still has queries left to close out.
+CLOSEOUT_RESERVE = 2
 # Of that ceiling, how many are held back purely for hunting actual_in.
-CLOSEOUT_RESERVE = 4
+# Held back for CONFIRMING ARRIVAL — closeout, or the no-ADS-B fallback.
+# Both answer the same question ("has it blocked in?"), and that question
+# is the one that closes the leg, so it can't be starved by earlier
+# triggers.
+ARRIVAL_RESERVE = 2
+# Hard caps on the repeating triggers. Both loop on a timer until they get
+# an answer, and when gate-in simply never publishes — which happens — an
+# uncapped loop eats the whole per-leg budget waiting for something that
+# isn't coming. After these, the backstop closes the leg instead.
+MAX_CLOSEOUT_TRIES = 2
+MAX_ARRIVAL_FALLBACK_TRIES = 2
+# While a flight is stuck on the ground past its departure time, check back
+# on this cadence rather than letting the cruise checks fire — they're for
+# a flight that's actually flying. Capped, so a long ground delay can't
+# drain the leg's budget.
+DELAY_WATCH_GAP = timedelta(minutes=30)
+MAX_DELAY_WATCH_TRIES = 3
 # Once the aircraft is down, how often to ask whether gate-in has posted.
 CLOSEOUT_GAP = timedelta(minutes=10)
 # And for how long before giving up and letting the backstop close it.
@@ -52,8 +75,12 @@ MONTHLY_BUDGET_USD = float(os.environ.get("AEROAPI_MONTHLY_BUDGET", "4.50"))
 PREVIEW_BEFORE_DEP = timedelta(minutes=60)
 # If ADS-B has told us nothing by this far past scheduled departure, ask anyway.
 SILENT_DEP_FALLBACK = timedelta(minutes=15)
-# Start watching for arrival details this long before the estimate.
-ARRIVAL_WATCH = timedelta(minutes=25)
+# How long after touchdown to look for gate-in. Often the aircraft is on
+# stand within this, which closes the leg in one query instead of several.
+AFTER_LANDING = timedelta(minutes=5)
+# Fallback for legs with no ADS-B at all: one look after the estimated
+# arrival, since without a wheels-down event nothing else would ever fire.
+ARRIVAL_FALLBACK = timedelta(minutes=10)
 
 
 # --------------------------------------------------------------- storage
@@ -223,65 +250,147 @@ def is_finished(enr: Optional[Dict[str, Any]]) -> bool:
     return bool(enr.get("actual_in")) or bool(enr.get("cancelled"))
 
 
+def _cruise_checkpoints(leg, enr, dep_anchor: datetime) -> list:
+    """Evenly spaced mid-flight checks between departure and arrival.
+
+    Anchored to the ESTIMATED wheels-on where the airline has given one,
+    so the spacing follows the actual flight rather than the timetable.
+    Candidates falling inside MIN_QUERY_GAP of the previous query are
+    skipped by the caller, which is why a short leg quietly uses fewer.
+    """
+    end = None
+    for key in ("estimated_on", "scheduled_on", "estimated_in", "scheduled_in"):
+        end = _parse((enr or {}).get(key))
+        if end:
+            break
+    if end is None:
+        end = leg.arr_datetime_utc()
+    # If the only arrival figure we have predates the actual departure, it's
+    # stale — a delayed flight's scheduled arrival is already in the past.
+    # Project the scheduled block time forward from when it actually left,
+    # so cruise checks start straight away instead of waiting for the
+    # airline to publish a revised estimate (which needs a query we haven't
+    # got a reason to spend yet).
+    if end is None or end <= dep_anchor:
+        dep_sched, arr_sched = leg.dep_datetime_utc(), leg.arr_datetime_utc()
+        if dep_sched and arr_sched and arr_sched > dep_sched:
+            end = dep_anchor + (arr_sched - dep_sched)
+        else:
+            return []
+    span = (end - dep_anchor).total_seconds()
+    return [dep_anchor + timedelta(seconds=span * (i + 1) / (CRUISE_CHECKS + 1))
+            for i in range(CRUISE_CHECKS)]
+
+
 def should_query(enr: Optional[Dict[str, Any]], leg, now: datetime,
-                 adsb_changed: bool, queries_used: int,
-                 down: bool = False) -> Optional[str]:
-    """Why this leg deserves a query right now, or None to skip."""
+                 queries_used: int, down: bool = False,
+                 touchdown: Optional[datetime] = None,
+                 has_adsb: bool = False, departed: bool = False,
+                 took_off_at: Optional[datetime] = None) -> Optional[str]:
+    """Why this leg deserves a query right now, or None.
+
+    Deliberately mostly CLOCK-driven. An earlier version triggered on "a
+    position was stored", which sounds like a state change but is true on
+    nearly every poll of an airborne aircraft — it burned 8 queries mid-
+    cruise telling us nothing. ADS-B is now consulted only where it saves
+    a query (touchdown) or where its absence needs covering.
+    """
     if queries_used >= MAX_QUERIES_PER_LEG:
         return None
     if is_finished(enr):
         return None
 
-    # Ordinary triggers may only spend down to the closeout reserve; the
-    # last few queries are kept for confirming gate-in, which is the one
-    # thing that closes a leg on the airline's authority.
-    ordinary_budget = MAX_QUERIES_PER_LEG - CLOSEOUT_RESERVE
-    if queries_used >= ordinary_budget and not down:
-        return None
-
     dep = leg.dep_datetime_utc()
+    last = _parse((enr or {}).get("_fetched_at"))
+
+    # The final few queries belong to closeout alone, so a long flight
+    # can't leave nothing for confirming gate-in.
+    # Past this point only arrival-confirming triggers may spend.
+    reserve_only = queries_used >= (MAX_QUERIES_PER_LEG - ARRIVAL_RESERVE)
+
+    # 1. First look — gate assignment and any delay already published.
     if enr is None:
         if dep and now >= dep - PREVIEW_BEFORE_DEP:
-            return "first look before departure"
+            return "T-60: first look"
         return None
 
-    last = _parse(enr.get("_fetched_at"))
+    # Closeout is exempt from the ordinary rate floor; everything else
+    # respects it.
+    closeout_ready = (
+        down and not enr.get("actual_in")
+        and int(enr.get("_closeout_tries", 0)) < MAX_CLOSEOUT_TRIES
+        and (not last or (now - last) >= CLOSEOUT_GAP)
+    )
+    arr_ref = _parse(enr.get("estimated_in")) or _parse(enr.get("scheduled_in")) or leg.arr_datetime_utc()
+    if closeout_ready and arr_ref and now <= arr_ref + CLOSEOUT_WINDOW:
+        return "closeout: waiting on gate-in"
+
+    # The no-ADS-B fallback confirms arrival just as closeout does, so it
+    # shares the reserve rather than being locked out by it.
+    if (not has_adsb and not enr.get("actual_in") and arr_ref
+            and int(enr.get("_fallback_tries", 0)) < MAX_ARRIVAL_FALLBACK_TRIES
+            and now >= arr_ref + ARRIVAL_FALLBACK
+            and (not last or (now - last) >= MIN_QUERY_GAP)):
+        return "arrival due (no ADS-B)"
+
+    if reserve_only:
+        return None
     if last and (now - last) < MIN_QUERY_GAP:
         return None
 
-    # CLOSEOUT PASS. The aircraft is on the ground and stopped, but the
-    # airline hasn't posted gate-in yet. Without this the ordinary triggers
-    # can run out before actual_in appears, and the leg never closes on the
-    # airline's authority. Bounded in both rate and duration.
-    if down and not enr.get("actual_in"):
-        arr = leg.arr_datetime_utc()
-        if arr and now <= arr + CLOSEOUT_WINDOW:
-            if not last or (now - last) >= CLOSEOUT_GAP:
-                return "closeout: waiting on gate-in"
 
-    # Something visibly happened on ADS-B — worth confirming against the
-    # airline's own record.
-    if adsb_changed:
-        return "ADS-B state change"
+    # 3. Wheels down + 5 — often already on stand, which closes the leg in
+    #    one query rather than a string of closeout polls.
+    # Once only: fire just the first time, when nothing has been asked
+    # since the aircraft landed. Without this it re-fires after the
+    # closeout attempts run out and quietly doubles the arrival spend.
+    if (touchdown and not enr.get("actual_in")
+            and now >= touchdown + AFTER_LANDING
+            and (not last or last < touchdown)):
+        return "wheels down + 5"
 
-    # No ADS-B to react to (common at outstations with no receiver): fall
-    # back to the clock so a leg isn't left un-enriched.
-    if dep and not enr.get("actual_out") and now >= dep + SILENT_DEP_FALLBACK:
-        return "past scheduled departure with nothing from ADS-B"
+    # 2. Still on the ground past departure. One prompt check at T+15 to
+    #    see whether it has gone, then a much slower watch while it hasn't
+    #    — capped, so a four-hour ground delay can't drain the leg's
+    #    budget by asking the same question every fifteen minutes.
+    if (not departed and dep and now >= dep + SILENT_DEP_FALLBACK
+            and not enr.get("actual_off")):
+        tries = int(enr.get("_delay_tries", 0))
+        if tries == 0:
+            return "T+15: departure check"
+        if tries < MAX_DELAY_WATCH_TRIES and (not last or (now - last) >= DELAY_WATCH_GAP):
+            return f"still on the ground ({tries} of {MAX_DELAY_WATCH_TRIES - 1})"
 
-    est_on = _parse(enr.get("estimated_on")) or _parse(enr.get("scheduled_on"))
-    if est_on and not enr.get("actual_on") and now >= est_on - ARRIVAL_WATCH:
-        return "approaching arrival"
-
-    est_in = _parse(enr.get("estimated_in")) or _parse(enr.get("scheduled_in"))
-    if est_in and not enr.get("actual_in") and now >= est_in:
-        return "arrival due"
+    # 5. Cruise checkpoints, evenly spaced across the flight. Only once the
+    #    aircraft has ACTUALLY departed — an anchor alone isn't departure.
+    # Prefer the airline's wheels-off, but fall back to when ADS-B saw it
+    # get airborne. Without that, a departure detected between ground
+    # checks would sit idle until the airline caught up — the cruise
+    # checks had no anchor to measure from.
+    # Anchor on the airline's wheels-off where we have it, otherwise on
+    # what ADS-B saw. Without the fallback a flight that departs between
+    # ground checks has no anchor at all, so cruise checks couldn't begin
+    # until some later query happened to supply actual_off.
+    anchor = (_parse(enr.get("actual_off")) or took_off_at
+              or _parse(enr.get("actual_out")))
+    if departed and anchor and not enr.get("actual_on"):
+        # Take the LATEST checkpoint that's due, not the earliest. When the
+        # 15-minute floor holds a query back, the checkpoint it was holding
+        # is genuinely skipped rather than queued up and fired late — which
+        # is what "a short leg may not use them all" means in practice.
+        points = _cruise_checkpoints(leg, enr, anchor)
+        for i in range(len(points) - 1, -1, -1):
+            when = points[i]
+            if now >= when and (not last or last < when):
+                return f"cruise check {i + 1} of {CRUISE_CHECKS}"
 
     return None
 
 
-def refresh(user_id: int, leg, now: datetime, adsb_changed: bool = False,
-            down: bool = False) -> Optional[str]:
+def refresh(user_id: int, leg, now: datetime, down: bool = False,
+            touchdown: Optional[datetime] = None,
+            has_adsb: bool = False, departed: bool = False,
+            took_off_at: Optional[datetime] = None) -> Optional[str]:
     """Refresh this leg's enrichment if the budget rules allow.
 
     Returns the reason a query was spent, or None. Never raises — an
@@ -302,7 +411,10 @@ def refresh(user_id: int, leg, now: datetime, adsb_changed: bool = False,
 
     enr = get_enrichment(user_id, leg.id)
     used = int((enr or {}).get("_queries", 0))
-    reason = should_query(enr, leg, now, adsb_changed, used, down=down)
+    departed = departed or bool((enr or {}).get("actual_off"))
+    reason = should_query(enr, leg, now, used, down=down, touchdown=touchdown,
+                          has_adsb=has_adsb, departed=departed,
+                          took_off_at=took_off_at)
     if not reason:
         return None
 
@@ -325,6 +437,10 @@ def refresh(user_id: int, leg, now: datetime, adsb_changed: bool = False,
         return reason
 
     fresh["_queries"] = used + 1
+    prev = enr or {}
+    fresh["_closeout_tries"] = int(prev.get("_closeout_tries", 0)) + (1 if reason.startswith("closeout") else 0)
+    fresh["_fallback_tries"] = int(prev.get("_fallback_tries", 0)) + (1 if reason.startswith("arrival due") else 0)
+    fresh["_delay_tries"] = int(prev.get("_delay_tries", 0)) + (1 if (reason.startswith("T+15") or reason.startswith("still on the ground")) else 0)
     _store(user_id, leg.id, fresh, now, raw=raw)
     print(f"[enrichment] {leg.id}: refreshed ({reason})")
     return reason

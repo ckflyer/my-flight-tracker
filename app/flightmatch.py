@@ -78,6 +78,12 @@ ACQUIRE_BEFORE_DEP_MINUTES = float(os.environ.get("ACQUIRE_BEFORE_DEP_MINUTES", 
 # the alternate, which is correct, and it means completion never depends on
 # reaching the scheduled destination.
 GROUND_STOP_KTS = 5.0            # below this it's parked, not taxiing
+# Touchdown confirmation. A single frame reporting alt_baro="ground" while
+# the aircraft is actually on approach would otherwise fire "wheels down"
+# early, so it has to hold for this long AND be slow enough to be a real
+# rollout rather than a glitch at approach speed.
+LANDING_CONFIRM_SECONDS = 60.0
+LANDING_MAX_KTS = 90.0
 GROUND_COMPLETE_SECONDS = float(os.environ.get("GROUND_COMPLETE_SECONDS", "300"))
 
 
@@ -156,6 +162,45 @@ def took_off_again(leg: FlightLeg) -> bool:
         return False
 
 
+def airborne_at(leg: FlightLeg) -> Optional[datetime]:
+    """When ADS-B first saw this aircraft off the ground."""
+    row = _row(leg)
+    if not row or not row["airborne_at"]:
+        return None
+    try:
+        return datetime.fromisoformat(row["airborne_at"])
+    except Exception:
+        return None
+
+
+def took_off_at(leg: FlightLeg) -> Optional[datetime]:
+    """When ADS-B first saw this aircraft airborne."""
+    row = _row(leg)
+    if not row or not row["took_off_at"]:
+        return None
+    try:
+        return datetime.fromisoformat(row["took_off_at"])
+    except Exception:
+        return None
+
+
+def has_flown(leg: FlightLeg) -> bool:
+    """Has ADS-B actually seen this aircraft off the ground?"""
+    row = _row(leg)
+    return bool(row and row["airborne_seen"])
+
+
+def landed_at(leg: FlightLeg) -> Optional[datetime]:
+    """When the aircraft touched down, if we saw it."""
+    row = _row(leg)
+    if not row or not row["landed_at"]:
+        return None
+    try:
+        return datetime.fromisoformat(row["landed_at"])
+    except Exception:
+        return None
+
+
 def signal_gap_seconds(leg: FlightLeg, now: datetime) -> Optional[float]:
     """How long since we last had any live data for this leg's aircraft."""
     row = _row(leg)
@@ -231,6 +276,9 @@ def observe(leg: FlightLeg, state: Dict[str, Any], now: datetime) -> bool:
     airborne_seen = bool(row["airborne_seen"])
     landed_seen = bool(row["landed_seen"]) if "landed_seen" in row.keys() else False
     relaunched = False
+    newly_landed = False
+    newly_airborne = False
+    new_landing_since = row["landing_since"] if "landing_since" in row.keys() else None
     stopped_since = row["stopped_since"]
     last_squawk = row["last_squawk"]
 
@@ -242,11 +290,27 @@ def observe(leg: FlightLeg, state: Dict[str, Any], now: datetime) -> bool:
         # aircraft is flying the next one.
         if landed_seen:
             relaunched = True
+        if not airborne_seen:
+            newly_airborne = True
         airborne_seen = True
         new_stopped_since = None          # airborne: no ground timer running
+        new_landing_since = None          # any touchdown attempt is void
     else:
-        if airborne_seen:
-            landed_seen = True
+        # Touchdown has to be sustained before it counts.
+        if airborne_seen and not landed_seen:
+            plausible = speed is None or speed <= LANDING_MAX_KTS
+            if not plausible:
+                new_landing_since = None
+            elif new_landing_since is None:
+                new_landing_since = now.isoformat()
+            else:
+                try:
+                    held = (now - datetime.fromisoformat(new_landing_since)).total_seconds()
+                except Exception:
+                    held = 0
+                if held >= LANDING_CONFIRM_SECONDS:
+                    landed_seen = True
+                    newly_landed = True
         stopped = speed is not None and speed <= GROUND_STOP_KTS
         if stopped:
             if new_stopped_since is None:
@@ -267,7 +331,9 @@ def observe(leg: FlightLeg, state: Dict[str, Any], now: datetime) -> bool:
     try:
         conn.execute(
             "UPDATE flight_aircraft SET airborne_seen = ?, landed_seen = ?, stopped_since = ?, "
-            "last_squawk = COALESCE(?, last_squawk), last_signal_at = ?, completed_at = ? "
+            "last_squawk = COALESCE(?, last_squawk), last_signal_at = ?, "
+            "landing_since = ?, landed_at = COALESCE(?, landed_at), "
+            "took_off_at = COALESCE(?, took_off_at), completed_at = ? "
             "WHERE flight_key = ?",
             (
                 int(airborne_seen),
@@ -277,6 +343,11 @@ def observe(leg: FlightLeg, state: Dict[str, Any], now: datetime) -> bool:
                 # in-flight reassignment can't poison the comparison.
                 squawk if on_ground else None,
                 now.isoformat(),
+                new_landing_since,
+                # Backdate to when the wheels actually touched, not to when
+                # we finished confirming it.
+                new_landing_since if newly_landed else None,
+                now.isoformat() if newly_airborne else None,
                 now.isoformat() if (completed or relaunched) else row["completed_at"],
                 flight_key_for(leg),
             ),

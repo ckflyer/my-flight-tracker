@@ -282,6 +282,24 @@ def init_db() -> None:
         # When live data was last seen for this aircraft. A flight that has
         # actually blocked in goes quiet (transponder off); one parked on a
         # pad waiting for a gate keeps transmitting.
+        # When the aircraft first went back on the ground after flying —
+        # the anchor for the "wheels down + 5" poll.
+        # When on_ground first read true this time round. Touchdown is only
+        # confirmed once it has HELD, so a single bad frame can't trip it.
+        # When ADS-B first saw this aircraft off the ground. Used as the
+        # cruise-check anchor when the airline hasn't published actual_off
+        # yet, so a departure doesn't sit idle waiting for confirmation.
+        if "airborne_at" not in fa_cols:
+            conn.execute("ALTER TABLE flight_aircraft ADD COLUMN airborne_at TEXT")
+        # When ADS-B first saw it airborne. Cruise checks anchor on this
+        # when the API hasn't yet reported actual_off, so a flight that gets
+        # away between ground checks starts cruising immediately.
+        if "took_off_at" not in fa_cols:
+            conn.execute("ALTER TABLE flight_aircraft ADD COLUMN took_off_at TEXT")
+        if "landing_since" not in fa_cols:
+            conn.execute("ALTER TABLE flight_aircraft ADD COLUMN landing_since TEXT")
+        if "landed_at" not in fa_cols:
+            conn.execute("ALTER TABLE flight_aircraft ADD COLUMN landed_at TEXT")
         if "last_signal_at" not in fa_cols:
             conn.execute("ALTER TABLE flight_aircraft ADD COLUMN last_signal_at TEXT")
         if "completed_at" not in fa_cols:

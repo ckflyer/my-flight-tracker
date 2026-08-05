@@ -391,6 +391,51 @@ upgrades it.
 Every figure carries its source, so the card can say "arrival from airline"
 versus "observed" rather than presenting a guess as fact.
 
+## When AeroAPI is queried
+
+Deliberately almost all CLOCK-driven. An earlier version triggered on "a
+position was stored", which sounds like a state change but is true on
+nearly every poll of an airborne aircraft — it burned 8 queries mid-cruise
+telling us nothing, and hit the per-leg cap on an ordinary flight.
+
+  * **T-60** — first look: gate, and any delay already published.
+  * **T+15, then every 30 min** — while the aircraft is still ON THE
+    GROUND past its departure time. One prompt check, then a slower watch,
+    capped at 3 total. It stops the moment the aircraft is seen airborne,
+    handing straight over to the cruise checks rather than waiting for the
+    next 30-minute tick.
+  * **3 cruise checks** — evenly spaced between ACTUAL departure and
+    estimated wheels-on. They require the aircraft to genuinely be off the
+    ground: gated only on an anchor, they fired while a delayed flight sat
+    at the gate. Any falling inside the 15-minute floor are skipped
+    outright (the latest due checkpoint wins), so a short leg uses fewer
+    rather than firing them all late.
+  * **Wheels down + 5** — often already on stand, closing the leg in one
+    query instead of several. Fires once. Needs ADS-B. Touchdown is
+    DEBOUNCED: on_ground must hold for 60 seconds at under 90 kts before it
+    counts, so a single bad alt_baro frame on approach can't trigger it
+    early. The recorded time is backdated to the wheels-down moment, not to
+    when confirmation finished.
+  * **Closeout** — every 10 minutes until gate-in, capped at 3 attempts.
+  * **Arrival fallback** — for legs with NO ADS-B at all, where no
+    wheels-down event can ever fire. Capped at 2.
+
+Both repeating triggers are capped because they loop waiting for an answer
+that sometimes never comes; uncapped, a missing gate-in ate the whole
+per-leg budget. After the caps, the backstop closes the leg instead.
+
+Cruise checks anchor on the airline's wheels-off, or on ADS-B's observed
+takeoff when the API hasn't caught up — without that fallback a flight
+departing between ground checks has no anchor and cruise checks can't
+start at all.
+
+Every trigger has its own cap; none borrows from another. The reachable
+maximum is 10 with ADS-B and 9 without, against a hard ceiling of
+`MAX_QUERIES_PER_LEG = 10`, of which 2 are reserved for closeout alone.
+
+Typical 5 queries per leg, worst case 8. At 50 legs/month that's about
+$1.25, worst case $1.75.
+
 ## Cost control
 
 `/flights/{ident}` costs $0.005 per result set. At ~50 legs/month and

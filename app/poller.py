@@ -36,7 +36,8 @@ from .enrichment import refresh as refresh_enrichment, credentials, get_enrichme
 from .carrier import resolve as resolve_carrier, needs_resolution
 from .closure import maybe_close, is_closed
 from .flightmatch import (observed_gate_in, took_off_again,
-                          signal_gap_seconds, stopped_seconds)
+                          signal_gap_seconds, stopped_seconds, landed_at,
+                          has_flown, took_off_at)
 
 # How often to sweep for active flights. Matches the viewer's default poll
 # so a recorded track has the same resolution whether or not anyone was
@@ -93,7 +94,7 @@ def _owners_of(leg_id: str) -> List[int]:
         conn.close()
 
 
-def _settle(leg_id: str, leg, now, changed: bool) -> None:
+def _settle(leg_id: str, leg, now, has_adsb: bool) -> None:
     """Refresh enrichment and decide whether the leg is finished.
 
     Runs for every owner of the leg, since each pilot's own key pays for
@@ -103,6 +104,9 @@ def _settle(leg_id: str, leg, now, changed: bool) -> None:
     relaunched = took_off_again(leg)
     stopped_for = stopped_seconds(leg, now)
     signal_gap = signal_gap_seconds(leg, now)
+    touchdown = landed_at(leg)
+    departed = has_flown(leg)
+    wheels_up = took_off_at(leg)
     # "Down" gates the closeout pass: only worth hunting for gate-in once
     # the aircraft has actually stopped somewhere.
     down = observed_in is not None
@@ -110,7 +114,9 @@ def _settle(leg_id: str, leg, now, changed: bool) -> None:
         if is_closed(user_id, leg_id):
             continue
         try:
-            refresh_enrichment(user_id, leg, now, adsb_changed=changed, down=down)
+            refresh_enrichment(user_id, leg, now, down=down, touchdown=touchdown,
+                               has_adsb=has_adsb, departed=departed,
+                               took_off_at=wheels_up)
         except Exception as e:
             print(f"[poller] enrichment failed for {leg_id}/{user_id}: {e}")
         try:
@@ -162,21 +168,18 @@ def poll_once() -> int:
         if not state or state.get("lat") is None or state.get("lon") is None:
             # No ADS-B for this leg — precisely when the airline's own OOOI
             # matters most, so still give enrichment a chance.
-            _settle(leg_id, leg, now, False)
+            _settle(leg_id, leg, now, has_adsb=False)
             continue
         try:
-            before = len(history)
             record_position(leg_id, state["lat"], state["lon"], now, state.get("on_ground"))
             recorded += 1
-            # A stored point means the aircraft actually moved or changed
-            # ground state — the cheap signal that something happened, and
-            # the primary trigger for spending an AeroAPI query.
-            changed = len(get_position_history(leg_id)) > before
         except Exception as e:
             print(f"[poller] record failed for {leg_id}: {e}")
-            changed = False
 
-        _settle(leg_id, leg, now, changed)
+        # We have live data for this leg, so the ADS-B-dependent triggers
+        # (wheels down + 5, closeout) can do their job and the no-coverage
+        # fallback stays out of the way.
+        _settle(leg_id, leg, now, has_adsb=True)
     return recorded
 
 
