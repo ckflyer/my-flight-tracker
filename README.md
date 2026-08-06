@@ -117,6 +117,7 @@ flight-tracker/
 ├── docker-compose.yml    # Dockge-ready stack
 ├── update.sh             # pulls latest + forces a rebuild (see Updating below)
 ├── tests_past_leg_detail.py  # regression cover, runs against a scratch DB
+├── tests_query_schedule.py   # asserts the per-trigger AeroAPI caps hold
 ├── requirements.txt
 └── README.md
 ```
@@ -298,6 +299,26 @@ Enrichment also gives POSITIVE flight identification: AeroAPI knows which
 record corresponds to this origin/destination pair, so a turn's two
 directions are distinguished by data rather than inference.
 
+## The FFDO line is the source of truth
+
+Everything on the card is measured against the schedule the pilot pasted
+in, never against the airline's published one. `departure_delay` and
+`arrival_delay` both take `leg.dep_datetime_utc()` / `leg.arr_datetime_utc()`
+as their baseline; AeroAPI's `scheduled_out` / `scheduled_in` are stored
+but never used as a reference point.
+
+This matters because airlines amend published schedules mid-day. If a
+flight bid at 5:57 is republished at 6:40, that is a 43-minute DELAY and
+the card says so — it is not a new "scheduled" time, and the struck-through
+figure does not move. The same rule covers leaving early. The FFDO number
+lives in our own `legs` table where nothing external can revise it.
+
+An earlier design also snapshotted the airline's first published times
+(`flight_enrichment.first_seen`) so amended figures could be compared
+against what was originally advertised. That answered a question this app
+doesn't ask, and it's no longer written — the column remains only because
+SQLite column drops mean a table rebuild.
+
 ## Arrival times: fact before forecast
 
 Arrival is taken in this order: the airline's actual gate-in, then OUR OWN
@@ -355,12 +376,14 @@ thrown away.
 
 Progress is pinned to zero until there is evidence the aircraft actually
 left: a live fix showing not-on-ground, or a status of In Air or later.
-Without that guard, `compute_progress`'s elapsed-time fallback measured the
-clock against the SCHEDULE, so a flight still at the gate showed 27% (and,
-once past its scheduled arrival, 100%) en route. The guard applies with or
-without an AeroAPI key, because that fallback is exactly what a pilot with
-no key relies on. When revised times are known, progress and ETE are
-recomputed against those rather than the superseded schedule.
+`compute_progress` once fell back to measuring elapsed clock time against
+the SCHEDULE when there was no live fix, so a flight still at the gate
+showed 27% en route and, past its scheduled arrival, 100%. That fallback
+was removed in v4.0 — with no live position there is now no progress figure
+at all, and the bar simply isn't drawn. The guard is kept because it also
+covers the case where a fix exists but the aircraft hasn't moved. When
+revised times are known, progress and ETE are recomputed against those
+rather than the superseded schedule.
 
 ## Closing a leg out
 
@@ -418,14 +441,22 @@ telling us nothing, and hit the per-leg cap on an ordinary flight.
     `get_current_info`, because "current" also drives flight selection, the
     map and the card, and moving that boundary would change all of them.
   * **T+20, then every 30 min** — while the aircraft is still ON THE
-    GROUND past its departure time. One prompt check, then a slower watch,
-    capped at 3 total. It stops the moment the aircraft is seen airborne,
-    handing straight over to the cruise checks rather than waiting for the
-    next 30-minute tick.
+    GROUND past its departure time. One prompt check at T+20, then a slower
+    watch, `MAX_DELAY_WATCH_TRIES = 3` in total. It stops the moment the
+    aircraft is seen airborne, handing straight over to the cruise checks
+    rather than waiting for the next 30-minute tick.
+
+    The counter that enforces that cap keys off the trigger's reason
+    string, and through v4.5 it tested for "T+15" while the trigger
+    returned "T+20" — so the count never advanced, the first branch stayed
+    true, and a flight stuck at the gate re-asked the same question every
+    `MIN_QUERY_GAP` until the per-leg ceiling stopped it. Eight queries
+    where three were intended.
   * **3 cruise checks** — evenly spaced between ACTUAL departure and
     estimated wheels-on. They require the aircraft to genuinely be off the
     ground: gated only on an anchor, they fired while a delayed flight sat
-    at the gate. Any falling inside the 15-minute floor are skipped
+    at the gate. Any falling inside the `MIN_QUERY_GAP` floor (20 min)
+    are skipped
     outright (the latest due checkpoint wins), so a short leg uses fewer
     rather than firing them all late.
   * **Wheels down + 5** — often already on stand, closing the leg in one
@@ -434,7 +465,8 @@ telling us nothing, and hit the per-leg cap on an ordinary flight.
     counts, so a single bad alt_baro frame on approach can't trigger it
     early. The recorded time is backdated to the wheels-down moment, not to
     when confirmation finished.
-  * **Closeout** — every 10 minutes until gate-in, capped at 3 attempts.
+  * **Closeout** — every 10 minutes until gate-in, capped at 2 attempts
+    (`MAX_CLOSEOUT_TRIES`).
   * **Arrival fallback** — for legs with NO ADS-B at all, where no
     wheels-down event can ever fire. Capped at 2.
 
@@ -447,9 +479,13 @@ takeoff when the API hasn't caught up — without that fallback a flight
 departing between ground checks has no anchor and cruise checks can't
 start at all.
 
-Every trigger has its own cap; none borrows from another. The reachable
-maximum is 10 with ADS-B and 9 without, against a hard ceiling of
-`MAX_QUERIES_PER_LEG = 10`, of which 2 are reserved for closeout alone.
+Every trigger has its own cap and none borrows from another, but the caps
+added together (1 + 3 + 3 + 1 + 2 + 2) come to more than the ceiling, so
+`MAX_QUERIES_PER_LEG = 10` is what actually bounds a pathological leg —
+one that is delayed on the ground, then late, then never publishes a
+gate-in. `ARRIVAL_RESERVE = 2` of those ten are unavailable to anything
+except closeout and the no-ADS-B fallback, so a chatty leg cannot arrive
+at its own ending with nothing left to spend.
 
 Typical 5 queries per leg, worst case 8. At 50 legs/month that's about
 $1.25, worst case $1.75.
@@ -482,7 +518,11 @@ Everything — schedule legs, users/accounts, and live
 breadcrumb positions — lives in `data/flighttracker.db` (SQLite). If you're
 upgrading from a version that used `data/schedule.json` or
 `data/settings.json`, those get imported automatically and attached to
-whichever account you create first via `/setup`.
+whichever account you create first via `/setup`. The import runs ONCE:
+`schedule.json` is renamed to `schedule.json.imported` afterwards. Before
+v4.6 the guard was "no legs exist", which is also true right after a pilot
+deletes their whole schedule on purpose — so the old one silently came
+back on the next restart.
 
 `data/secret_key.txt` signs login session cookies. It's generated once and
 must stay stable — deleting it logs everyone out.
@@ -547,10 +587,14 @@ so `bash update.sh` is the safe way to invoke it either way.)
 ## Tests
 
 `tests_past_leg_detail.py` covers the past-leg and T-30 preview paths
-through `compute_live_payload`. Run it from this directory:
+through `compute_live_payload`. `tests_query_schedule.py` walks a flight
+that never leaves the gate and asserts the per-trigger caps hold — the
+counters in `refresh()` key off trigger REASON STRINGS, so a reworded
+trigger silently disables its own cap. Run both from this directory:
 
 ```bash
 python tests_past_leg_detail.py
+python tests_query_schedule.py
 ```
 
 It writes to a scratch database via the `PT_DB_FILE` environment variable

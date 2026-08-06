@@ -13,7 +13,7 @@ import binascii
 import hashlib
 import os
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -131,7 +131,7 @@ def create_user(username: str, password: str, email: str = "") -> int:
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             (username.strip(), hash_password(password), email.strip(), share_code,
-             1 if is_first else 0, datetime.utcnow().isoformat() + "Z"),
+             1 if is_first else 0, datetime.now(timezone.utc).isoformat()),
         )
         conn.commit()
         user_id = cur.lastrowid

@@ -5,7 +5,6 @@ import json
 import os
 import sqlite3
 from pathlib import Path
-from typing import Optional
 
 # Overridable so a test run can point at a scratch file instead of the real
 # database. Every suite previously shared this one path, which is what made
@@ -289,45 +288,53 @@ def init_db() -> None:
         # means nothing about whether the flight has ended.
         if "last_squawk" not in fa_cols:
             conn.execute("ALTER TABLE flight_aircraft ADD COLUMN last_squawk TEXT")
-        # Set once the leg is judged finished; blocks any re-acquisition.
         # Set once the aircraft has been seen on the ground after flying.
         # If it then goes airborne AGAIN, the leg is unambiguously over —
         # the cleanest closure signal ADS-B can give, and it costs nothing.
         if "landed_seen" not in fa_cols:
             conn.execute("ALTER TABLE flight_aircraft ADD COLUMN landed_seen INTEGER NOT NULL DEFAULT 0")
+        # When ADS-B first saw this aircraft off the ground.
+        if "airborne_at" not in fa_cols:
+            conn.execute("ALTER TABLE flight_aircraft ADD COLUMN airborne_at TEXT")
+        # The cruise-check anchor used when the airline hasn't published
+        # actual_off yet, so a flight that gets away between ground checks
+        # starts cruising immediately instead of sitting idle.
+        if "took_off_at" not in fa_cols:
+            conn.execute("ALTER TABLE flight_aircraft ADD COLUMN took_off_at TEXT")
+        # When on_ground first read true this time round. Touchdown is only
+        # confirmed once it has HELD, so a single bad frame can't trip it.
+        if "landing_since" not in fa_cols:
+            conn.execute("ALTER TABLE flight_aircraft ADD COLUMN landing_since TEXT")
+        # When the aircraft first went back on the ground after flying —
+        # the anchor for the "wheels down + 5" poll.
+        if "landed_at" not in fa_cols:
+            conn.execute("ALTER TABLE flight_aircraft ADD COLUMN landed_at TEXT")
         # When live data was last seen for this aircraft. A flight that has
         # actually blocked in goes quiet (transponder off); one parked on a
         # pad waiting for a gate keeps transmitting.
-        # When the aircraft first went back on the ground after flying —
-        # the anchor for the "wheels down + 5" poll.
-        # When on_ground first read true this time round. Touchdown is only
-        # confirmed once it has HELD, so a single bad frame can't trip it.
-        # When ADS-B first saw this aircraft off the ground. Used as the
-        # cruise-check anchor when the airline hasn't published actual_off
-        # yet, so a departure doesn't sit idle waiting for confirmation.
-        if "airborne_at" not in fa_cols:
-            conn.execute("ALTER TABLE flight_aircraft ADD COLUMN airborne_at TEXT")
-        # When ADS-B first saw it airborne. Cruise checks anchor on this
-        # when the API hasn't yet reported actual_off, so a flight that gets
-        # away between ground checks starts cruising immediately.
-        if "took_off_at" not in fa_cols:
-            conn.execute("ALTER TABLE flight_aircraft ADD COLUMN took_off_at TEXT")
-        if "landing_since" not in fa_cols:
-            conn.execute("ALTER TABLE flight_aircraft ADD COLUMN landing_since TEXT")
-        if "landed_at" not in fa_cols:
-            conn.execute("ALTER TABLE flight_aircraft ADD COLUMN landed_at TEXT")
         if "last_signal_at" not in fa_cols:
             conn.execute("ALTER TABLE flight_aircraft ADD COLUMN last_signal_at TEXT")
+        # Set once the leg is judged finished; blocks any re-acquisition.
         if "completed_at" not in fa_cols:
             conn.execute("ALTER TABLE flight_aircraft ADD COLUMN completed_at TEXT")
 
         # A leg's final, frozen record.
         #
         # Once closed, a leg stops polling, stops recomputing and stops
-        # accepting live data — its numbers never drift again. Kept
-        # alongside the flown track so a past flight can show what actually
-        # happened, with the SOURCE of each figure recorded rather than
-        # presented as uniform fact.
+        # accepting live data — so what a past flight shows is what was true
+        # when it ended, rather than something that quietly drifts as late
+        # data arrives. `closed_by` records WHICH source closed it, and the
+        # summary carries the source of each individual figure, so the card
+        # can be honest about whether an arrival time is the airline's own
+        # number or our observation of the aircraft stopping.
+        #
+        # There used to be a SECOND `CREATE TABLE IF NOT EXISTS
+        # flight_closeout` further down this function with a different
+        # schema — `payload` instead of `summary`, plus `closeout_queries`
+        # and `last_closeout_at`. Being IF NOT EXISTS it never applied, so
+        # those two columns did not exist on any database and nothing read
+        # them; closure.py has always used `summary`. Had the edits landed
+        # the other way round, every closeout write would have failed.
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS flight_closeout (
@@ -339,6 +346,9 @@ def init_db() -> None:
                 PRIMARY KEY (leg_id, user_id)
             )
             """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_closeout_user ON flight_closeout(user_id, closed_at)"
         )
 
         # Cached AeroAPI enrichment, one row per leg per pilot.
@@ -364,37 +374,17 @@ def init_db() -> None:
         # paying again later to re-fetch data we already had.
         if "raw" not in enr_cols:
             conn.execute("ALTER TABLE flight_enrichment ADD COLUMN raw TEXT")
-        # The first values we ever saw for this leg. Airlines amend
-        # published schedules, so without a snapshot the original times are
-        # simply lost and "was 11:55" becomes unanswerable.
+        # `first_seen` held a snapshot of the airline's originally published
+        # times, so an amended schedule could be compared against what was
+        # first advertised. It's no longer written: the FFDO line is the
+        # source of truth for "originally scheduled", so an airline schedule
+        # change is reported as a delay against the FFDO time rather than as
+        # a change in the airline's own numbers. The column stays because
+        # migrations here are append-only and dropping one in SQLite means a
+        # full table rebuild for no benefit — same reasoning as the disused
+        # opensky_* columns on `users`.
         if "first_seen" not in enr_cols:
             conn.execute("ALTER TABLE flight_enrichment ADD COLUMN first_seen TEXT")
-
-        # A finished leg, frozen.
-        #
-        # Once closed, a leg stops polling, stops recomputing, and stops
-        # accepting live data — so what you see on a past flight is what was
-        # true when it ended, not something that quietly drifts as late data
-        # arrives. `closed_by` records WHICH source closed it, so the card
-        # can be honest about whether an arrival time is the airline's own
-        # figure or our observation of the aircraft stopping.
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS flight_closeout (
-                leg_id TEXT NOT NULL,
-                user_id INTEGER NOT NULL,
-                closed_at TEXT NOT NULL,
-                closed_by TEXT NOT NULL,
-                payload TEXT NOT NULL,
-                closeout_queries INTEGER NOT NULL DEFAULT 0,
-                last_closeout_at TEXT,
-                PRIMARY KEY (leg_id, user_id)
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_closeout_user ON flight_closeout(user_id, closed_at)"
-        )
 
         # One-time migration of per-user history already recorded.
         # INSERT OR IGNORE collapses the duplicate (flight_key, ts) rows
@@ -422,9 +412,18 @@ def init_db() -> None:
 
 def _migrate_legacy_json_if_needed() -> None:
     """One-time import of the old data/schedule.json into SQLite, so upgrading
-    doesn't lose an existing pasted schedule. No-ops once legs already exist."""
+    doesn't lose an existing pasted schedule.
+
+    ONE-TIME means one time. The guard used to be "no legs exist", which is
+    also true after a pilot deletes every leg on purpose — so the old
+    schedule silently reappeared on the next restart and there was no way to
+    get rid of it short of deleting the file by hand. The file is renamed
+    once it has been consumed, which makes the import unrepeatable and
+    leaves the original on disk in case it's ever needed.
+    """
     if not LEGACY_SCHEDULE_JSON.exists():
         return
+    imported = False
     conn = get_connection()
     try:
         existing = conn.execute("SELECT COUNT(*) AS c FROM legs").fetchone()["c"]
@@ -464,5 +463,14 @@ def _migrate_legacy_json_if_needed() -> None:
             except Exception:
                 continue
         conn.commit()
+        imported = True
     finally:
         conn.close()
+
+    if imported:
+        try:
+            LEGACY_SCHEDULE_JSON.rename(
+                LEGACY_SCHEDULE_JSON.with_suffix(".json.imported"))
+            print("[db] imported legacy data/schedule.json and marked it consumed")
+        except Exception as e:
+            print(f"[db] legacy schedule imported but could not be renamed: {e}")

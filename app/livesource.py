@@ -108,13 +108,6 @@ def live_state(callsign: str, cache_ttl_s: float = DEFAULT_CACHE_TTL_S) -> Optio
         return state
 
 
-def live_summary(callsign: str, cache_ttl_s: float = DEFAULT_CACHE_TTL_S) -> Optional[Dict[str, Any]]:
-    """Backwards-compatible alias. The old OpenSky client exposed
-    live_summary(); keeping the name means main.py's call sites read the
-    same as before."""
-    return live_state(callsign, cache_ttl_s)
-
-
 def live_state_for_leg(leg, now, history=None):
     """Live state for a leg, or None if this isn't the leg's aircraft.
 
@@ -122,7 +115,7 @@ def live_state_for_leg(leg, now, history=None):
     goes through here, so the guard can't be applied in one path and
     forgotten in another.
     """
-    from .flightmatch import evaluate, observe, release_aircraft
+    from .flightmatch import evaluate, observe
 
     state = live_state(leg.callsign)
     if state is None:

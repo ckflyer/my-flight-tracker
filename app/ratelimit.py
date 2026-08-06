@@ -13,6 +13,8 @@ from typing import Deque, Dict, Tuple
 from fastapi import Request
 
 _buckets: Dict[Tuple[str, str], Deque[float]] = defaultdict(deque)
+SWEEP_INTERVAL_S = 300.0
+_last_sweep_at: float = 0.0
 
 
 def get_client_ip(request: Request) -> str:
@@ -40,4 +42,23 @@ def check_rate_limit(request: Request, bucket: str, max_attempts: int, window_se
     if len(dq) >= max_attempts:
         return False
     dq.append(now)
+    _sweep(now, window_seconds)
     return True
+
+
+def _sweep(now: float, window_seconds: int) -> None:
+    """Drop buckets whose entries have all expired.
+
+    `_buckets` is a defaultdict, so every distinct IP that ever hit an auth
+    endpoint left a deque behind forever — a slow leak on a long-running
+    process facing the open internet. Swept occasionally rather than on
+    every call, since the dict is small and the scan is only worth doing now
+    and then.
+    """
+    global _last_sweep_at
+    if now - _last_sweep_at < SWEEP_INTERVAL_S:
+        return
+    _last_sweep_at = now
+    for key in [k for k, dq in _buckets.items()
+                if not dq or now - dq[-1] > window_seconds]:
+        _buckets.pop(key, None)

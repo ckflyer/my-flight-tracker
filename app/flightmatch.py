@@ -47,7 +47,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from .db import get_connection
 from .geo import haversine_nm
@@ -499,13 +499,3 @@ def evaluate(leg: FlightLeg, state: Optional[Dict[str, Any]],
     return Verdict(False, f"{d_origin:.0f}nm from {leg.origin}, and past the departure "
                           f"window — waiting for an aircraft at the origin rather than "
                           f"adopting whatever is using this callsign")
-
-
-def is_plausible_for_leg(leg: FlightLeg, state: Optional[Dict[str, Any]],
-                         now: Optional[datetime] = None) -> bool:
-    return evaluate(leg, state, now).accepted
-
-
-def rejection_reason(leg: FlightLeg, state: Optional[Dict[str, Any]],
-                     now: Optional[datetime] = None) -> Optional[str]:
-    return evaluate(leg, state, now).reason

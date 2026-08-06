@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
+from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime, date, timedelta, time as dtime
 from zoneinfo import ZoneInfo
@@ -10,9 +11,9 @@ import calendar as cal_module
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from .schedule import load_schedule, get_current_info, delete_leg, save_schedule
-from .livesource import live_summary, live_state_for_leg
+from .livesource import live_state_for_leg
 from .enrichment import (get_enrichment, derive_status, departure_delay,
-                         arrival_delay, gate_info, diversion_info, query_stats,
+                         arrival_delay, gate_info, diversion_info,
                          budget_state)
 from .closure import get_closeout
 from .models import FlightLeg
@@ -38,7 +39,25 @@ jinja_env = Environment(
 )
 jinja_env.globals["version"] = VERSION
 
-app = FastAPI(title="Pilot Tracker")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Record tracks for active flights even with nobody watching.
+
+    The container runs a single uvicorn worker, so this is one poller per
+    deployment. If workers are ever added, this would start one per worker
+    and they'd poll the same flights redundantly — the shared cache in
+    livesource would absorb most of it, but the right fix then is to move
+    this to a separate process.
+
+    Was `@app.on_event("startup")`, which FastAPI deprecated; same
+    behaviour, no warning on boot.
+    """
+    from .poller import start as start_poller
+    start_poller()
+    yield
+
+
+app = FastAPI(title="Pilot Tracker", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
 app.add_middleware(
     SessionMiddleware,
@@ -47,20 +66,6 @@ app.add_middleware(
     max_age=60 * 60 * 24 * 365,  # a year — sessions are meant to be persistent
     same_site="lax",
 )
-
-
-@app.on_event("startup")
-async def _start_track_poller():
-    """Record tracks for active flights even with nobody watching.
-
-    The container runs a single uvicorn worker, so this is one poller per
-    deployment. If workers are ever added, this would start one per worker
-    and they'd poll the same flights redundantly — the shared cache in
-    livesource would absorb most of it, but the right fix then is to move
-    this to a separate process.
-    """
-    from .poller import start as start_poller
-    start_poller()
 
 
 # ---------------------------------------------------------------------------
@@ -677,9 +682,9 @@ def _finish_payload(user_id: int, selected_leg, live, extra, now: datetime,
             except Exception:
                 pass
 
-    # Departure guard, applied last so it sees the final status. Works with
-    # or without AeroAPI, since the elapsed-time fallback in
-    # compute_progress is exactly what a pilot with no key relies on.
+    # Departure guard, applied last so it sees the final status. A flight
+    # that isn't demonstrably airborne shows no progress bar and no
+    # distance-to-go, rather than a figure derived from a schedule.
     _airborne = (
         (live is not None and live.get("on_ground") is False)
         or extra.get("status") in ("In Air", "Landing", "Taxi-in", "Arrived", "Diverting")
@@ -694,7 +699,7 @@ def _finish_payload(user_id: int, selected_leg, live, extra, now: datetime,
     return live, extra
 
 
-def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now: datetime, poll_seconds: int, time_format: str = "24"):
+def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now: datetime, time_format: str = "24"):
     """Live ADS-B + progress/ETE/breadcrumb/aircraft/phase for the selected
     leg, if it's genuinely the active one. Shared by the full page render
     and the lightweight polling endpoint so the two never drift apart."""
@@ -756,7 +761,7 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now
     # overwrote every OOOI-derived status, including "Delayed". A flight
     # sitting at the gate two hours late still read "Departing" because the
     # airline's own view of it was computed and then thrown away.
-    extra["status"] = compute_phase(selected_leg, live, history, now, poll_seconds)
+    extra["status"] = compute_phase(selected_leg, live, history, now)
     # When the aircraft isn't being tracked, say so and say when it last
     # was, instead of guessing a phase.
     if extra["status"] == "Unknown":
@@ -804,7 +809,7 @@ async def viewer(request: Request, leg: Optional[str] = None):
 
     selected_leg, is_selected_live = resolve_selected_leg(info, leg)
     selected = leg_view(selected_leg, now, tf)
-    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, settings.poll_seconds, tf)
+    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, tf)
     if selected:
         selected.update(extra)
     settings_dict = settings.model_dump()
@@ -1196,7 +1201,7 @@ async def api_selected(request: Request, leg: Optional[str] = None):
     selected_leg, is_selected_live = resolve_selected_leg(info, leg)
     if not selected_leg:
         return {"error": "no flight"}
-    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, settings.poll_seconds, tf)
+    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, tf)
     return {
         "is_selected_live": is_selected_live,
         # Which leg the app currently considers active. The page compares
@@ -1258,7 +1263,7 @@ async def api_leg(request: Request, leg_id: str):
         return {"error": "no flight"}
 
     view = leg_view(selected_leg, now, tf)
-    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, settings.poll_seconds, tf)
+    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, tf)
     if view:
         view.update(extra)
     return {

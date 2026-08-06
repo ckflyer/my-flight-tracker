@@ -147,8 +147,8 @@ def fetch_state(callsign: str) -> Optional[Dict[str, Any]]:
 
     Returns None on any failure (offline, timeout, rate limited, malformed
     response). Callers treat "no data" and "lookup failed" identically —
-    both mean the page falls back to schedule-based status — so there's
-    nothing useful to distinguish here.
+    both mean the phase machine reports Unknown and the card says when the
+    aircraft was last seen — so there's nothing useful to distinguish here.
     """
     cs = (callsign or "").strip().upper()
     if not cs:

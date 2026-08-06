@@ -9,7 +9,6 @@ from __future__ import annotations
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional
 
 from .db import get_connection
@@ -185,27 +184,8 @@ def get_position_history(leg_id: str) -> List[Dict[str, Any]]:
     return out
 
 
-def _stable_since(history: List[Dict[str, Any]], anchor_lat: float, anchor_lon: float, now: datetime, threshold_nm: float) -> datetime:
-    """Walk backward through history from most-recent to oldest, and return
-    the earliest timestamp such that every point from there to now stayed
-    within threshold_nm of the current (anchor) position. This treats
-    "stopped for good" as sustained closeness over time, not instantaneous
-    speed — so a stop-and-go taxi queue doesn't look identical to parking
-    at the gate."""
-    stable_from = now
-    for p in reversed(history):
-        if p.get("lat") is None:
-            continue
-        d = haversine_nm(anchor_lat, anchor_lon, p["lat"], p["lon"])
-        if d > threshold_nm:
-            break
-        stable_from = p["ts"]
-    return stable_from
-
-
 def compute_phase(leg: FlightLeg, live: Optional[Dict[str, Any]],
-                  history: List[Dict[str, Any]], now: datetime,
-                  poll_seconds: int) -> str:
+                  history: List[Dict[str, Any]], now: datetime) -> str:
     """Flight phase, from what the aircraft is actually broadcasting.
 
     This deliberately does NOT guess. Earlier versions inferred a phase
@@ -268,20 +248,18 @@ def compute_progress(leg: FlightLeg, live: Optional[Dict[str, Any]], now: dateti
                      departed: Optional[bool] = None,
                      dep_override: Optional[datetime] = None,
                      arr_override: Optional[datetime] = None) -> Optional[float]:
-    """Percent (0-100) along the route.
+    """Percent (0-100) along the route, from the live position only.
 
-    Great-circle position when there's a live fix; otherwise elapsed time
-    against the flight's duration.
+    There is no time-based fallback. An earlier version measured elapsed
+    clock time against the scheduled duration, which is how a flight still
+    sitting at the gate reported "27% en route" and later 100% — the clock
+    had moved even though the aeroplane hadn't. With no live fix this
+    returns None and the bar is simply not drawn.
 
-    Two guards on that fallback, both learned the hard way:
-
-    `departed=False` pins progress at zero. Without it, a flight delayed at
-    the gate showed "27.7% en route" simply because its SCHEDULED departure
-    had passed — the clock had moved even though the aeroplane hadn't.
-
-    `dep_override`/`arr_override` let the caller pass revised times, so a
-    known delay shifts the whole calculation instead of measuring against a
-    schedule everyone already knows is wrong.
+    `departed=False` pins the figure at zero outright, and
+    `dep_override`/`arr_override` let the caller pass the airline's revised
+    times. Both are kept because callers still supply them and they remain
+    correct guards, not because anything falls back to the clock.
     """
     if departed is False:
         return 0.0
@@ -330,7 +308,6 @@ def compute_remaining_minutes(leg: FlightLeg, live: Optional[Dict[str, Any]], no
     "time remaining" and "arriving at" displays so they can never disagree.
     """
     dest_info = leg.dest_info
-    arr_utc = arr_override or leg.arr_datetime_utc()
 
     if (
         live

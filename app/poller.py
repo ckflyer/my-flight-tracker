@@ -33,7 +33,7 @@ from .livesource import live_state_for_leg
 from .schedule import get_current_info
 from .track import record_position, get_position_history
 from .enrichment import (refresh as refresh_enrichment, credentials,
-                         get_enrichment, refresh_usage)
+                         get_enrichment, refresh_usage, budget_state)
 from .carrier import resolve as resolve_carrier, needs_resolution
 from .closure import maybe_close, is_closed
 from .flightmatch import (observed_gate_in, took_off_again,
@@ -176,10 +176,27 @@ def poll_once() -> int:
         # when the aircraft squawks AAL4110 finds nothing. Resolved once
         # and stored on the leg, not repeated every sweep.
         if needs_resolution(leg):
-            key = next((credentials(uid) for uid in _owners_of(leg_id)
-                        if credentials(uid)), None)
+            # Pick an owner whose key is BOTH present and still inside its
+            # budget. Carrier resolution costs a real /schedules query, and
+            # it used to be issued without consulting the cap at all — so a
+            # pilot who had hit their monthly limit still spent on deadhead
+            # lookups while ordinary enrichment was paused.
+            payer, key = None, None
+            for uid in _owners_of(leg_id):
+                uid_key = credentials(uid)
+                if not uid_key:
+                    continue
+                try:
+                    if budget_state(uid)["exhausted"]:
+                        continue
+                except Exception:
+                    continue
+                payer, key = uid, uid_key
+                break
             try:
-                resolve_carrier(leg, key, now)
+                # With no usable key this still runs, falling back to the
+                # free ADS-B probe.
+                resolve_carrier(leg, key, now, user_id=payer)
             except Exception as e:
                 print(f"[poller] carrier resolution failed for {leg_id}: {e}")
         try:

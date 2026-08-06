@@ -33,7 +33,7 @@ from, so a past flight can say "arrived 4:11 (airline)" or "~4:11
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 from .db import get_connection

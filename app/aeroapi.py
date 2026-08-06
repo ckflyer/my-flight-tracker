@@ -25,7 +25,7 @@ Auth: x-apikey header. Docs: flightaware.com/aeroapi/portal/documentation
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import requests

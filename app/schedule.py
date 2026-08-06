@@ -2,8 +2,7 @@ from datetime import datetime, timedelta, date
 from typing import List, Optional
 from zoneinfo import ZoneInfo
 
-from .models import FlightLeg, Schedule, CurrentFlightInfo
-from .parser import parse_schedule_text
+from .models import FlightLeg, CurrentFlightInfo
 from .airports import enrich_leg
 from .db import get_connection, init_db
 
@@ -113,6 +112,22 @@ def legs_sharing_callsign(flight_number: str, on_date: date) -> List[FlightLeg]:
     return legs
 
 
+def _parse_stored_time(value: str):
+    """Leg times as stored in SQLite.
+
+    save_schedule writes "%H:%M:%S", but the legacy JSON import and any
+    hand-written row may carry "%H:%M". Reading only the long form meant a
+    short-form row raised, and load_schedule then dropped the leg silently.
+    """
+    text = (value or "").strip()
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            return datetime.strptime(text, fmt).time()
+        except ValueError:
+            continue
+    raise ValueError(f"unrecognised stored time {value!r}")
+
+
 def load_schedule(user_id: int) -> List[FlightLeg]:
     conn = get_connection()
     try:
@@ -134,8 +149,8 @@ def load_schedule(user_id: int) -> List[FlightLeg]:
                 flight_number=row["flight_number"],
                 origin=row["origin"],
                 destination=row["destination"],
-                dep_time_local=datetime.strptime(row["dep_time_local"], "%H:%M:%S").time(),
-                arr_time_local=datetime.strptime(row["arr_time_local"], "%H:%M:%S").time(),
+                dep_time_local=_parse_stored_time(row["dep_time_local"]),
+                arr_time_local=_parse_stored_time(row["arr_time_local"]),
                 is_deadhead=bool(row["is_deadhead"]),
                 trip_start=bool(row["trip_start"]) if "trip_start" in row.keys() else False,
                 operator_callsign=(row["operator_callsign"]
@@ -143,7 +158,12 @@ def load_schedule(user_id: int) -> List[FlightLeg]:
             )
             enrich_leg(leg)
             legs.append(leg)
-        except Exception:
+        except Exception as e:
+            # Was a bare `continue`. A leg that failed to parse vanished
+            # from the schedule with nothing written anywhere — the flight
+            # simply didn't exist and there was no way to find out why.
+            print(f"[schedule] dropping unparseable leg {row['id']!r} "
+                  f"for user {user_id}: {e}")
             continue
     return legs
 
