@@ -27,6 +27,8 @@
       --warn: #f59e0b;
       --border: #2a3548;
       --map-border: #334155;
+      /* Current-leg row shading: LIGHTER than the card on dark. */
+      --row-current: #24334a;
     }
     [data-theme="light"] {
       --bg: #f1f5f9;
@@ -39,6 +41,8 @@
       --warn: #d97706;
       --border: #e2e8f0;
       --map-border: #cbd5e1;
+      /* ...and DARKER than the white card on light, as asked for. */
+      --row-current: #e8ecf2;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -139,8 +143,15 @@
       font-size: 1.1rem;
       margin: 0 0.15rem;
     }
-    .times-row { display: flex; gap: 1.5rem; }
-    .time-chip { display: flex; align-items: center; gap: 0.4rem; }
+    /* The delay text ("6 min early") is a THIRD flex item inside the arrival
+       chip, so on a narrow screen it widened that chip until the whole
+       times-row wrapped and the codes stopped lining up with the times.
+       flex-basis:100% drops it onto its own line INSIDE the chip instead,
+       so DFW/GRK and their times stay on one row whether or not the delay
+       text is present. Top-aligning the row keeps both chips level when
+       only one of them has a second line. */
+    .times-row { display: flex; gap: 1.5rem; align-items: flex-start; flex-wrap: nowrap; }
+    .time-chip { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; min-width: 0; }
     .chip-icon {
       width: 19px; height: 19px; border-radius: 50%;
       background: var(--muted);
@@ -220,6 +231,11 @@
       margin-bottom: 0.75rem;
     }
     [data-theme="light"] .toggle { background: #e2e8f0; }
+    /* The active leg, listed among the others. Light grey against the
+       white rows, with the accent edge used elsewhere for selection. */
+    .upcoming-item.is-current-leg { background: var(--row-current); box-shadow: inset 2px 0 0 var(--accent); }
+    /* Destination code showing a diversion airport rather than the filed one. */
+    .chip-code.diverted-code { color: var(--bad); font-weight: 700; }
     #past-section { display: none; }
     #past-section.open { display: block; }
     .live-box {
@@ -395,7 +411,16 @@
       font-size: 0.82rem; font-weight: 600;
     }
     .chip-delay {
-      display: block; font-size: 0.72rem; font-weight: 600; margin-top: 0.1rem;
+      flex-basis: 100%; font-size: 0.72rem; font-weight: 600;
+      margin-top: 0.05rem; white-space: nowrap;
+    }
+    /* Mobile was "just a little cramped" — tighten the gap and the type a
+       notch rather than letting anything wrap. */
+    @media (max-width: 430px) {
+      .times-row { gap: 0.9rem; }
+      .collapsed-card .chip-code { font-size: 0.82rem; }
+      .collapsed-card .chip-time { font-size: 0.9rem; }
+      .chip-delay { font-size: 0.68rem; }
     }
     .chip-delay.early { color: var(--good); }
     .chip-delay.late { color: var(--bad); }
@@ -645,9 +670,9 @@
           <span class="k">Airline data</span>
           <span class="v" id="v-updated">{{ current.enriched_at or '' }}</span>
         </div>
-        <div class="detail-row" id="row-diverted" style="{{ '' if current.diversion else 'display:none' }}">
+        <div class="detail-row" id="row-diverted" style="{{ '' if (current.diversion and current.diversion.diverted_to) else 'display:none' }}">
           <span class="k">Diverted to</span>
-          <span class="v late" id="v-diverted">{{ current.diversion.diverted_to if current.diversion else '' }}</span>
+          <span class="v late" id="v-diverted">{{ current.diversion.diverted_to if (current.diversion and current.diversion.diverted_to) else '' }}</span>
         </div>
       </div>
       <div class="buttons">
@@ -663,6 +688,32 @@
   <div class="expand-hint" id="expand-hint">Tap for more &#9662;</div>
 
   <div class="expand-wrap" id="expand-wrap">
+    {% if current_row %}
+    {# The active leg is in NEITHER past_groups nor upcoming_groups — it
+       lives in the card at the top. So once you tapped a different flight
+       there was nothing in either list to tap to get back, and the only
+       route home was the "Back to active flight" link. Listing it here,
+       shaded, means the current flight is always one tap away and is
+       obvious at a glance among the white rows. #}
+    <div class="section-label">Current</div>
+    <div class="card day-card">
+      <div class="upcoming-item is-current-leg {% if current_row.id == selected_id %}selected-row{% endif %}">
+        <div class="list-item">
+          <a class="flight-row-link" data-leg-id="{{ current_row.id }}" href="/?leg={{ current_row.id }}">
+            <div class="row-flight-num">{{ current_row.callsign }}{% if current_row.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
+            <div class="row-city-route">{{ current_row.origin }} &rarr; {{ current_row.destination }}</div>
+            <div class="row-times-row">
+              <div class="row-chip"><span class="row-chip-time">{{ current_row.dep }}</span></div>
+              <div class="row-chip"><span class="row-chip-time">{{ current_row.arr }}</span></div>
+            </div>
+          </a>
+          <div style="text-align:right">
+            <span class="status {{ current_row.status|lower|replace(' ', '-') }}">{{ current_row.status }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
     {% if past_groups %}
     <button class="toggle" id="past-toggle" onclick="togglePast()">Show past flights ({{ past_count }})</button>
     <div id="past-section">
@@ -821,6 +872,7 @@
       let liveData = {{ live | tojson if live else 'null' }};
       let currentData = {{ current | tojson if current else 'null' }};
       let isSelectedLive = {{ 'true' if is_selected_live else 'false' }};
+      const PAST_COUNT = {{ past_count | tojson }};
       let selectedId = {{ selected_id | tojson if selected_id else 'null' }};
       // The leg the SERVER considers active. When this changes (one flight
       // ends, the next becomes current) the page follows it automatically,
@@ -1012,8 +1064,6 @@
                   const parts = ['<span>' + data.progress_pct + '% en route</span>'];
                   if (data.distance_nm != null) parts.push('<span>' + data.distance_nm + ' nm to go</span>');
                   if (data.ete) parts.push('<span>ETE ' + data.ete + '</span>');
-
-                  applyEnrichment(data);
                   progLabel.innerHTML = parts.join('');
                 }
               } else {
@@ -1040,6 +1090,20 @@
 
             if (currentData) currentData.breadcrumb = data.breadcrumb;
             liveData = data.live;
+
+            // Refresh every enrichment-driven element on EVERY poll.
+            //
+            // This call used to sit three levels deep — inside
+            // `if (progWrap)`, inside `if (data.progress_pct != null)`,
+            // inside `if (progLabel)` — so enrichment only refreshed when
+            // the flight had a live progress bar. On the ground, with no
+            // ADS-B coverage, or on a past leg, it never ran at all: the
+            // "Airline data" age froze at whatever the last full page load
+            // rendered, then jumped when you refreshed. It also explains
+            // why the delay and gate rows appeared to come alive only once
+            // the flight was airborne.
+            applyEnrichment(data);
+
             renderMap(currentData, liveData, false);
           })
           .catch(function() {});
@@ -1104,8 +1168,30 @@
         if (g.dest_gate) setText('v-gate-arr', g.dest_gate +
           (g.dest_terminal ? ' \u00b7 Terminal ' + g.dest_terminal : ''));
         if (g.baggage) setText('v-baggage', g.baggage);
-        setShown('row-diverted', !!data.diversion);
-        if (data.diversion) setText('v-diverted', data.diversion.diverted_to);
+        // Only claim a diversion airport once one is named. Guarding on
+        // data.diversion alone printed the literal string "None" in the row
+        // whenever the flag had flipped but the field hadn't caught up.
+        var dv = data.diversion && data.diversion.diverted_to;
+        setShown('row-diverted', !!dv);
+        if (dv) setText('v-diverted', dv);
+
+        // The card's destination code has to follow the aircraft. It stayed
+        // on the ORIGINAL airport through a diversion, so the card claimed
+        // he was going somewhere he was no longer going.
+        var destEl = document.getElementById('card-dest-code');
+        if (destEl) {
+          if (dv) {
+            destEl.textContent = dv;
+            destEl.classList.add('diverted-code');
+            destEl.title = 'Diverted from ' + (data.diversion.scheduled || '');
+          } else {
+            destEl.classList.remove('diverted-code');
+            destEl.removeAttribute('title');
+            if (currentData && currentData.destination) {
+              destEl.textContent = currentData.destination;
+            }
+          }
+        }
 
         // These four are in every /api/live payload but were never written
         // to the DOM, so they froze at whatever the last FULL page render
@@ -1307,6 +1393,27 @@
         });
       }
       applyExpanded();
+
+      // "Show past flights" was wired to onclick="togglePast()" in the
+      // markup, but no such function existed anywhere in the file — another
+      // handler lost in an edit. The button rendered and did nothing.
+      //
+      // Defined on `window` deliberately: everything else here lives inside
+      // an IIFE, and an inline onclick attribute can only reach globals. It
+      // would silently break again if it were declared with a bare
+      // `function` inside this closure.
+      var pastOpen = false;
+      window.togglePast = function togglePast() {
+        var section = document.getElementById('past-section');
+        var btn = document.getElementById('past-toggle');
+        if (!section) return;
+        pastOpen = !pastOpen;
+        section.classList.toggle('open', pastOpen);
+        if (btn) {
+          btn.textContent = (pastOpen ? 'Hide past flights' : 'Show past flights')
+            + ' (' + PAST_COUNT + ')';
+        }
+      };
 
       function selectLeg(legId, opts) {
         if (!legId) return;

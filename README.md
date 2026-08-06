@@ -315,6 +315,20 @@ can't.
 Both are measured against the FFDO line (see above), at zero tolerance —
 one minute late is late.
 
+## Trip breaks
+
+A blank line in the pasted FFDO schedule marks a new trip. On top of that,
+`apply_gap_trip_starts` suggests a break wherever the duty-day gap between
+one flying day and the next is at least `GAP_TRIP_THRESHOLD_HOURS` (32,
+lowered from 35 in v4.8 — a 33-hour break is a trip break in practice).
+
+Duty is measured as arrival + 15 min to next departure - 45 min, not
+block-to-block, so the gap reflects time actually off.
+
+Every one of these is only ever a SUGGESTION on the import review page.
+Nothing is saved until the pilot confirms it, and an explicit blank-line
+break from the paste is never removed by the heuristic — it only ever adds.
+
 ## The FFDO line is the source of truth
 
 Everything on the card is measured against the schedule the pilot pasted
@@ -517,16 +531,20 @@ gate-in, and `AEROAPI_MONTHLY_BUDGET` (default $4.50) is a hard monthly
 stop — queries cease entirely once it's reached, so the app can never
 quietly produce a bill.
 
-Note that the local estimate prices every query at the `/flights` rate, so
-a leg that needed a `/schedules` lookup is undercounted by about $0.015.
-That's one more reason to prefer FlightAware's own figure below.
+Spend comes from FlightAware's OWN meter and nowhere else.
+`GET /account/usage` is free and is polled at most every 20 minutes.
 
-Spend is taken from FlightAware's OWN meter where possible:
-`GET /account/usage` is free, is polled at most every 20 minutes, and
-replaces the local estimate. Their figure updates every 10 minutes rather
-than in real time, so anything older than six hours is treated as stale and
-the estimate takes over. Settings shows the poll count and dollars against
-the cap, when the figure was last pulled, and which source it came from.
+There used to be a local estimate alongside it — poll count times a
+published per-query rate — displayed for comparison. It was removed in
+v4.8: it was always going to disagree, since `/schedules` bills at four
+times the `/flights` rate, so any leg needing a deadhead lookup was
+under-counted. Reconciling two numbers that measure the same thing
+differently is work for no gain.
+
+Before the first reading lands, spend reads $0.00 and the source is
+`pending`, so the cap can't bite during that window. `refresh_usage` runs
+on every poller sweep, so it's at most one `USAGE_REFRESH` interval on a
+brand-new key.
 
 ## Storage
 
@@ -601,6 +619,25 @@ so `bash update.sh` is the safe way to invoke it either way.)
   upcoming lists live inside `#expand-wrap`, so that toggle is also what
   makes other flights selectable — if it ever breaks again, the symptom is
   "I can't click on any flight" rather than anything about expanding.
+- **`togglePast` is defined on `window` on purpose.** The button uses an
+  inline `onclick`, which can only reach globals; declared with a bare
+  `function` inside the page's IIFE it would silently stop working.
+- **The active leg is listed as well as carded.** It's in neither
+  `past_groups` nor `upcoming_groups`, so without its own "Current" row
+  there was no way back to it after tapping another flight. It's shaded
+  with `--row-current`, which is a theme variable — darker than the white
+  cards on light, lighter than the dark cards on dark.
+- **Enrichment refreshes on EVERY poll.** `applyEnrichment` is called at
+  the top level of the poll handler. It once sat nested inside the progress
+  bar's conditionals, so it only ran for a flight with a live position —
+  the "Airline data" age froze on the ground and jumped on refresh.
+- **Diversion beats cancellation.** A diverted flight often carries both
+  flags, and AeroAPI returns two records for the slot: the original pairing
+  (which the airline may mark cancelled) and the one that actually flew.
+  `pick_flight` ranks by schedule proximity, then evidence of flying, then
+  diverted over cancelled; `derive_status` checks diverted first. Getting
+  this backwards showed a diversion as "Cancelled", which reads as "he
+  never left".
 - Taxi-out/Taxi-in/Landing phase detection depends on each airport having
   enough ADS-B ground coverage to see it — busier fields (DFW) are reliable,
   smaller regional stations are a toss-up. When there's no coverage for a

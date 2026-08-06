@@ -76,13 +76,32 @@
     .sub-fields {
       margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid var(--border);
     }
-    .usage-line {
-      display: flex; justify-content: space-between; align-items: baseline;
-      font-size: 0.8rem; color: var(--muted); margin-top: 0.9rem;
-      padding-top: 0.7rem; border-top: 1px solid var(--border);
+    /* Usage panel: two figures side by side with one line of provenance
+       under them. Replaces a flex row plus three competing hint
+       paragraphs. */
+    .usage-panel {
+      margin-top: 0.9rem; padding: 0.85rem 0.9rem;
+      border: 1px solid var(--border); border-radius: 10px;
+      background: var(--panel, transparent);
     }
-    .usage-line strong { color: var(--text); font-size: 0.95rem; }
+    .usage-head {
+      display: flex; justify-content: space-between; align-items: baseline;
+      margin-bottom: 0.7rem;
+    }
+    .usage-title { font-size: 0.82rem; font-weight: 600; color: var(--text); }
+    .usage-period { font-size: 0.75rem; color: var(--muted); }
+    .usage-figures { display: flex; gap: 2rem; }
+    .usage-stat { display: flex; flex-direction: column; gap: 0.15rem; }
+    .usage-value { font-size: 1.25rem; font-weight: 700; color: var(--text); line-height: 1.1; }
+    .usage-value.over { color: var(--bad); }
+    .usage-label { font-size: 0.74rem; color: var(--muted); }
+    .usage-source {
+      margin-top: 0.75rem; padding-top: 0.6rem;
+      border-top: 1px solid var(--border);
+      font-size: 0.75rem; color: var(--muted); line-height: 1.45;
+    }
     .hint { font-size: 0.8rem; color: var(--muted); margin-top: -0.5rem; margin-bottom: 0.85rem; }
+    .hint.alert { color: var(--bad); font-weight: 600; margin-top: 0.75rem; }
     .topbar {
       display: flex;
       align-items: center;
@@ -180,20 +199,39 @@
         <input type="password" name="aeroapi_key" id="aeroapi-key" autocomplete="off"
                placeholder="{{ 'saved \u2014 leave blank to keep it' if s.aeroapi_key else 'paste your AeroAPI key' }}">
         <p class="hint">Your own key on your own FlightAware account. The Personal tier includes $5/month of free queries, or $10 if you feed ADS-B.</p>
-        <div class="usage-line">
-          <span>{% if aeroapi_stats.source == 'reported' %}Usage this month, per FlightAware{% else %}Estimated usage this month{% endif %} ({{ aeroapi_stats.period }})</span>
-          <strong{% if aeroapi_stats.over_budget %} style="color:var(--bad)"{% endif %}>{{ aeroapi_stats.reported_calls or aeroapi_stats.queries }} polls &middot; ${{ '%.2f'|format(aeroapi_stats.spent) }} of ${{ '%.2f'|format(aeroapi_stats.budget) }}</strong>
+
+        {# Usage panel. This was four hint paragraphs stacked on top of each
+           other, each half-repeating the next and two of them describing a
+           local cost estimate that no longer exists. One panel: the numbers
+           that matter, then a single line of context. #}
+        <div class="usage-panel">
+          <div class="usage-head">
+            <span class="usage-title">Usage this month</span>
+            <span class="usage-period">{{ aeroapi_stats.period }}</span>
+          </div>
+          <div class="usage-figures">
+            <div class="usage-stat">
+              <span class="usage-value{% if aeroapi_stats.over_budget %} over{% endif %}">${{ '%.2f'|format(aeroapi_stats.spent) }}</span>
+              <span class="usage-label">of ${{ '%.2f'|format(aeroapi_stats.budget) }} cap</span>
+            </div>
+            <div class="usage-stat">
+              <span class="usage-value">{{ aeroapi_stats.reported_calls if aeroapi_stats.reported_calls is not none else aeroapi_stats.queries }}</span>
+              <span class="usage-label">queries</span>
+            </div>
+          </div>
+          <div class="usage-source">
+            {% if aeroapi_stats.source == 'reported' %}
+              Reported by FlightAware{% if aeroapi_stats.usage_age %}, pulled {{ aeroapi_stats.usage_age }}{% endif %}. Their side updates every 10 minutes.
+            {% else %}
+              Waiting on FlightAware&rsquo;s first usage reading. Appears within {{ usage_refresh_min }} minutes of the first query.
+            {% endif %}
+          </div>
         </div>
-        {% if aeroapi_stats.source == 'reported' %}
-        <p class="hint">FlightAware&rsquo;s own figure{% if aeroapi_stats.usage_age %}, pulled {{ aeroapi_stats.usage_age }}{% endif %} &mdash; the free <code>/account/usage</code> call, so reading it costs nothing. Their side updates every 10 minutes, so it lags a little. Our local estimate for comparison is ${{ '%.2f'|format(aeroapi_stats.estimated) }} ({{ aeroapi_stats.queries }} queries).</p>
-        {% else %}
-        <p class="hint">Our own estimate ({{ aeroapi_stats.queries }} result sets &times; ${{ '%.3f'|format(aeroapi_stats.cost_per_query) }}). FlightAware&rsquo;s actual figure replaces this once the key has been used.</p>
-        {% endif %}
+
         {% if aeroapi_stats.exhausted %}
-        <p class="hint" style="color:var(--bad);font-weight:600;">
-          Cap reached &mdash; AeroAPI is paused for the rest of the month. Live ADS-B tracking is unaffected.
-        </p>
+        <p class="hint alert">Cap reached &mdash; AeroAPI is paused for the rest of the month. Live ADS-B tracking is unaffected.</p>
         {% endif %}
+
         <div class="switch-row" style="margin-top:0.9rem;">
           <span class="switch-label" style="font-weight:500;font-size:0.85rem;">Keep querying past ${{ '%.2f'|format(aeroapi_stats.budget) }}</span>
           <label class="switch">
@@ -202,16 +240,7 @@
             <span class="track"></span>
           </label>
         </div>
-        <p class="hint">Off by default. The Personal tier includes $5/month free, and the cap sits just under it so an estimate that&rsquo;s slightly off can&rsquo;t produce a bill. Turn this on only if you don&rsquo;t mind FlightAware billing you for the overage.</p>
-        <p class="hint" style="margin-top:0.5rem;">
-          {% if aeroapi_stats.source == 'reported' -%}
-            Cost reported by FlightAware, which updates about every 10 minutes. Query count is ours.
-          {%- else -%}
-            Cost estimated locally at ${{ '%.3f'|format(aeroapi_stats.cost_per_query) }}/query &mdash; FlightAware&rsquo;s own figure appears once its usage endpoint responds.
-          {%- endif %}
-          Capped at ${{ '%.2f'|format(aeroapi_stats.budget) }}/month &mdash; queries stop automatically at that point.
-          Roughly 5&ndash;8 per flight. Only the background tracker queries; opening or refreshing a page never does.
-        </p>
+        <p class="hint">Off by default, and the cap sits just under the $5 free tier so nothing can quietly produce a bill. Queries stop automatically at the cap &mdash; roughly 5&ndash;8 per flight, and only the background tracker spends them. Opening or refreshing a page never does.</p>
       </div>
     </div>
 

@@ -62,7 +62,6 @@ CLOSEOUT_WINDOW = timedelta(minutes=90)
 
 # What a /flights/{ident} call actually costs, per FlightAware's published
 # rate. Used only to show spend and to enforce the budget below.
-COST_PER_QUERY_USD = float(os.environ.get("AEROAPI_COST_PER_QUERY", "0.005"))
 # Hard monthly ceiling. The Personal tier includes $5/month free ($10 if
 # you feed ADS-B); defaulting under that means the app can never quietly
 # produce a bill. Raise it if you're on a paid tier.
@@ -247,18 +246,24 @@ def budget_state(user_id: int) -> Dict[str, Any]:
     allow_overage = bool(row["aeroapi_allow_overage"]) if row else False
 
     stats = query_stats(user_id)
-    estimated = round(stats["queries"] * COST_PER_QUERY_USD, 2)
 
-    # Prefer FlightAware's own meter when we have a recent reading — it's
-    # what actually gets billed, where ours is a count times a published
-    # rate. Their figure lags about 10 minutes, so anything older than a
-    # few hours is treated as stale and the estimate takes over.
+    # Spend comes from FlightAware's own meter, full stop.
+    #
+    # There used to be a local estimate alongside it — poll count times a
+    # published per-query rate — shown for comparison. It was always going
+    # to disagree: /schedules bills at four times the /flights rate, so any
+    # leg needing a deadhead lookup was under-counted, and reconciling two
+    # numbers that measure the same thing differently is work for no gain.
+    # /account/usage is free to read and is what actually gets billed.
+    #
+    # Before the first reading lands, spend reads as zero and `source` is
+    # "pending". refresh_usage runs on every poller sweep, so that window
+    # is at most one USAGE_REFRESH interval on a brand-new key.
     reported = row["aeroapi_reported_cost"] if row else None
     reported_at = _parse(row["aeroapi_usage_at"]) if row else None
-    spent, source = estimated, "estimated"
+    spent, source = 0.0, "pending"
     if reported is not None and reported_at is not None:
-        if (datetime.now(timezone.utc) - reported_at) < timedelta(hours=6):
-            spent, source = round(float(reported), 2), "reported"
+        spent, source = round(float(reported), 2), "reported"
 
     over = spent >= budget
     return {
@@ -266,7 +271,6 @@ def budget_state(user_id: int) -> Dict[str, Any]:
         "reported_calls": (row["aeroapi_reported_calls"] if row else None),
         "period": stats["period"],
         "source": source,
-        "estimated": estimated,
         "spent": spent,
         "usage_at": reported_at.isoformat() if reported_at else None,
         # Human-readable so the settings page can say how current
@@ -278,7 +282,6 @@ def budget_state(user_id: int) -> Dict[str, Any]:
         "over_budget": over,
         # Only actually stops when the pilot hasn't opted into overage.
         "exhausted": over and not allow_overage,
-        "cost_per_query": COST_PER_QUERY_USD,
     }
 
 
@@ -579,6 +582,14 @@ def derive_status(enr: Optional[Dict[str, Any]], adsb_status: Optional[str]) -> 
     So: rank both and take the more advanced. Whichever notices first
     wins, and neither can drag the flight backwards.
     """
+    # Diversion is checked FIRST. A diverted flight sometimes carries the
+    # cancelled flag too — the original origin/destination pairing is dead,
+    # so FlightAware may mark it cancelled while the aircraft is very much
+    # airborne and going somewhere else. Testing cancelled first meant a
+    # diversion displayed as "Cancelled", which is both wrong and alarming
+    # for anyone watching from home: it reads as "he never left".
+    if enr and enr.get("diverted"):
+        return _ooi_phase(enr) or "Diverting"
     if enr and enr.get("cancelled"):
         return "Cancelled"
 
@@ -749,7 +760,20 @@ def diversion_info(enr: Optional[Dict[str, Any]], scheduled_dest: str) -> Option
     """Where it's actually going, if that stopped being the plan."""
     if not enr or not enr.get("diverted"):
         return None
-    actual_dest = enr.get("destination")
-    if actual_dest and actual_dest != (scheduled_dest or "").upper():
-        return {"diverted_to": actual_dest, "scheduled": scheduled_dest}
+    sched = (scheduled_dest or "").upper()
+    # Where it actually went. AeroAPI amends `destination` on a diversion,
+    # but not always at the same moment the `diverted` flag flips, and some
+    # records carry the new field only. Take the first one that names an
+    # airport which isn't the original.
+    for key in ("destination", "diverted_to", "actual_destination"):
+        code = (enr.get(key) or "")
+        code = code.get("code") if isinstance(code, dict) else code
+        code = (code or "").strip().upper()
+        if code and code != sched:
+            return {"diverted_to": code, "scheduled": scheduled_dest}
+    # Diverted, but nothing yet says where. Returning diverted_to=None used
+    # to render the literal word "None" in the detail row — worse than
+    # saying nothing. The caller now hides the row until a field names an
+    # airport, while the DIVERTED STATUS still shows, because "he's not
+    # going where he was going" is the part worth knowing immediately.
     return {"diverted_to": None, "scheduled": scheduled_dest}

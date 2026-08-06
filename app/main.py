@@ -14,7 +14,7 @@ from .schedule import load_schedule, get_current_info, delete_leg, save_schedule
 from .livesource import live_state_for_leg
 from .enrichment import (get_enrichment, derive_status, departure_delay,
                          arrival_delay, gate_info, diversion_info,
-                         budget_state)
+                         budget_state, USAGE_REFRESH)
 from .closure import get_closeout
 from .models import FlightLeg
 from .parser import parse_schedule_text
@@ -280,7 +280,11 @@ def group_legs_by_day(legs: list, day_numbers: dict, now: datetime, time_format:
     return groups
 
 
-GAP_TRIP_THRESHOLD_HOURS = 35.0
+# A gap this long between duty days means a new trip. Lowered from 35 to
+# 32 on the pilot's call — a 33-hour break is a trip break in practice.
+# Only ever a SUGGESTION on the import review page; the pilot confirms
+# every one before anything is saved.
+GAP_TRIP_THRESHOLD_HOURS = 32.0
 
 
 def apply_gap_trip_starts(legs: list, threshold_hours: float = GAP_TRIP_THRESHOLD_HOURS) -> None:
@@ -828,6 +832,7 @@ async def viewer(request: Request, leg: Optional[str] = None):
         # upcoming/past lists, so without this there's no row to tap to
         # return to it.
         "current_leg_id": info.current.id if info.current else None,
+        "current_row": leg_view(info.current, now, tf),
         "upcoming_groups": group_legs_by_day(info.upcoming, day_numbers, now, tf),
         "past_groups": group_legs_by_day(info.past, day_numbers, now, tf),
         "past_count": len(info.past),
@@ -898,6 +903,13 @@ async def calendar_page(request: Request):
     for leg in legs:
         by_date.setdefault(leg.date, []).append(leg)
     trips = build_trip_spans(legs, settings.time_format)
+    # Which leg is airborne (or next up) right now, so the agenda can shade
+    # it. Cheap — get_current_info is already reading the same schedule.
+    try:
+        current_leg_id = get_current_info(user_id).current
+        current_leg_id = current_leg_id.id if current_leg_id else None
+    except Exception:
+        current_leg_id = None
 
     def trip_for_day(d):
         for trip in trips:
@@ -971,6 +983,7 @@ async def calendar_page(request: Request):
         request=request,
         month_blocks=month_blocks,
         settings=settings.model_dump(),
+        current_leg_id=current_leg_id,
         is_pilot=pilot is not None,
     ))
 
@@ -1105,7 +1118,8 @@ async def settings_page(request: Request):
     s = load_settings(pilot["id"])
     template = jinja_env.get_template("settings.html")
     ctx = {"request": request, "s": s, "saved": False, "is_admin": bool(pilot["is_admin"]),
-           "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"])}
+           "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"]),
+           "usage_refresh_min": int(USAGE_REFRESH.total_seconds() // 60)}
     if pilot["is_admin"]:
         ctx["all_users"] = list_all_users()
     return HTMLResponse(template.render(**ctx))
@@ -1141,7 +1155,8 @@ async def settings_save(
     save_settings(pilot["id"], s)
     template = jinja_env.get_template("settings.html")
     ctx = {"request": request, "s": s, "saved": True, "is_admin": bool(pilot["is_admin"]),
-           "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"])}
+           "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"]),
+           "usage_refresh_min": int(USAGE_REFRESH.total_seconds() // 60)}
     if pilot["is_admin"]:
         ctx["all_users"] = list_all_users()
     return HTMLResponse(template.render(**ctx))
