@@ -24,7 +24,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List
 from zoneinfo import ZoneInfo
 
@@ -32,7 +32,8 @@ from .db import get_connection
 from .livesource import live_state_for_leg
 from .schedule import get_current_info
 from .track import record_position, get_position_history
-from .enrichment import refresh as refresh_enrichment, credentials, get_enrichment
+from .enrichment import (refresh as refresh_enrichment, credentials,
+                         get_enrichment, refresh_usage)
 from .carrier import resolve as resolve_carrier, needs_resolution
 from .closure import maybe_close, is_closed
 from .flightmatch import (observed_gate_in, took_off_again,
@@ -43,6 +44,11 @@ from .flightmatch import (observed_gate_in, took_off_again,
 # so a recorded track has the same resolution whether or not anyone was
 # watching at the time.
 INTERVAL_S = int(os.environ.get("TRACK_POLLER_INTERVAL_S", "20"))
+
+# How early a not-yet-current leg gets swept. Five minutes wider than
+# enrichment's PREVIEW_BEFORE_DEP (T-30) so the first look is reachable
+# with margin rather than depending on a sweep landing exactly on it.
+PREVIEW_WINDOW = timedelta(minutes=35)
 
 # Escape hatch: set TRACK_POLLER_ENABLED=0 to run request-driven only.
 ENABLED = os.environ.get("TRACK_POLLER_ENABLED", "1") not in ("0", "false", "False")
@@ -72,6 +78,7 @@ def active_flights() -> Dict[str, str]:
     origin and destination.
     """
     found: Dict[str, object] = {}
+    now = datetime.now(ZoneInfo("UTC"))
     for user_id in _all_user_ids():
         try:
             info = get_current_info(user_id)
@@ -81,6 +88,19 @@ def active_flights() -> Dict[str, str]:
         leg = info.current
         if leg and leg.callsign:
             found[leg.id] = leg
+        # A leg doesn't become info.current until T-20, but the query
+        # schedule wants its first look at T-30 — so that branch was
+        # unreachable and no gate, revised arrival, or published delay ever
+        # arrived before pushback. By T-30 the flight plan is filed and all
+        # three exist, which is exactly when they're worth having.
+        #
+        # Widened here rather than in get_current_info on purpose: "current"
+        # drives flight selection, the map, and the card everywhere else,
+        # and moving that boundary would change all of it as a side effect.
+        for leg in info.upcoming:
+            dep = leg.dep_datetime_utc()
+            if leg.callsign and dep and now >= dep - PREVIEW_WINDOW:
+                found.setdefault(leg.id, leg)
     return found
 
 
@@ -119,6 +139,12 @@ def _settle(leg_id: str, leg, now, has_adsb: bool) -> None:
                                took_off_at=wheels_up)
         except Exception as e:
             print(f"[poller] enrichment failed for {leg_id}/{user_id}: {e}")
+        try:
+            # /account/usage is free, so this costs nothing and keeps the
+            # spend figure honest. Throttled inside refresh_usage.
+            refresh_usage(user_id, now)
+        except Exception as e:
+            print(f"[poller] usage refresh failed for {user_id}: {e}")
         try:
             enr = get_enrichment(user_id, leg_id)
             # "Fresh" enrichment means the airline is still telling us

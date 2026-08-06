@@ -577,6 +577,123 @@ def resolve_selected_leg(info, leg_id: Optional[str]):
     return selected_leg, is_selected_live
 
 
+def _finish_payload(user_id: int, selected_leg, live, extra, now: datetime,
+                    time_format: str, is_live: bool):
+    """Closeout record, airline enrichment, and the final status word.
+
+    Split out of compute_live_payload so BOTH paths run it — the live leg
+    and the selected-but-not-live one. Everything here reads from the
+    database and never spends an AeroAPI query, which is what makes it
+    safe to run on a page render for any leg the user taps.
+
+    `is_live` gates only the things that are meaningless without a live
+    aircraft: recomputing time-to-go and progress. A past flight keeps its
+    stored actual times, gates and closeout record.
+    """
+    # Read-only: page renders must never spend one of the pilot's queries.
+    # A closed leg reports its FROZEN record. Nothing recomputes, so the
+    # numbers a past flight shows never drift.
+    closeout = get_closeout(user_id, selected_leg.id)
+    if closeout:
+        extra["closed"] = True
+        # A closed leg's status comes from the closure record, so there is
+        # exactly one definition of "arrived" rather than the phase machine
+        # having its own. Diverted and Cancelled are API-only facts.
+        if closeout.get("cancelled"):
+            extra["final_status"] = "Cancelled"
+        elif closeout.get("diverted"):
+            extra["final_status"] = "Diverted"
+        else:
+            extra["final_status"] = "Arrived"
+        extra["closed_by"] = closeout.get("closed_by")
+        extra["arrival_source"] = closeout.get("arrival_source")
+        extra["closeout"] = closeout
+
+    enr = get_enrichment(user_id, selected_leg.id)
+    if enr:
+        extra["status"] = derive_status(enr, extra.get("status"))
+        # Departure and arrival are answered separately: "is he getting
+        # out?" and "when does he get there?" are different questions, and
+        # a late pushback doesn't always become a late arrival.
+        status_now = extra["status"]
+        # Our own observed gate stop, used when the airline hasn't published
+        # actual_in yet — a fact beats a stale forecast.
+        try:
+            from .flightmatch import observed_gate_in
+            obs_in = observed_gate_in(selected_leg)
+        except Exception:
+            obs_in = None
+        extra["dep_delay"] = departure_delay(enr, selected_leg, time_format, status=status_now)
+        extra["arr_delay"] = arrival_delay(enr, selected_leg, time_format,
+                                           status=status_now, observed_in=obs_in)
+
+        # Status is already final here, so this is a reliable read.
+        airborne = bool(enr.get("actual_off")) or status_now in (
+            "In Air", "Landing", "Taxi-in", "Arrived", "Diverting")
+
+        # Recompute time-to-go against the REVISED arrival, so a known delay
+        # is reflected instead of counting down to a schedule that's already
+        # been superseded.
+        revised_arr = None
+        for key in ("actual_in", "estimated_in", "actual_on", "estimated_on"):
+            parsed = _parse_iso(enr.get(key))
+            if parsed:
+                revised_arr = parsed
+                break
+        # Time-to-go and progress only mean anything while the flight is
+        # actually the live one. A past leg that kept recomputing these
+        # would show a countdown to an arrival that already happened.
+        if revised_arr and is_live:
+            extra["ete"] = compute_ete(selected_leg, live, now, arr_override=revised_arr)
+            if airborne:
+                extra["progress_pct"] = compute_progress(
+                    selected_leg, live, now, departed=True,
+                    dep_override=_parse_iso(enr.get("actual_off")) or _parse_iso(enr.get("actual_out")),
+                    arr_override=revised_arr)
+        # THE BUG THIS FIXES: the card used to print the FFDO scheduled
+        # time and then a note saying "18 min early" beside it, so the two
+        # never agreed. When there's an actual or estimated time, that is
+        # what gets shown, with the scheduled time kept as "was ...".
+        if extra["dep_delay"] and extra["dep_delay"].get("time"):
+            extra["dep_shown"] = extra["dep_delay"]["time"]
+        if extra["arr_delay"] and extra["arr_delay"].get("time"):
+            extra["arr_shown"] = extra["arr_delay"]["time"]
+        extra["gates"] = gate_info(enr)
+        extra["diversion"] = diversion_info(enr, selected_leg.destination)
+        extra["ooi"] = {
+            "out": enr.get("actual_out"), "off": enr.get("actual_off"),
+            "on": enr.get("actual_on"), "in": enr.get("actual_in"),
+        }
+        extra["enriched"] = True
+        # So it's visible how fresh the airline data is, and how rarely it
+        # actually needs fetching.
+        fetched = enr.get("_fetched_at")
+        if fetched:
+            try:
+                age = (now - datetime.fromisoformat(fetched)).total_seconds() / 60
+                extra["enriched_at"] = ("just now" if age < 1.5
+                                        else f"{int(age)} min ago" if age < 90
+                                        else f"{int(age // 60)}h ago")
+            except Exception:
+                pass
+
+    # Departure guard, applied last so it sees the final status. Works with
+    # or without AeroAPI, since the elapsed-time fallback in
+    # compute_progress is exactly what a pilot with no key relies on.
+    _airborne = (
+        (live is not None and live.get("on_ground") is False)
+        or extra.get("status") in ("In Air", "Landing", "Taxi-in", "Arrived", "Diverting")
+    )
+    if not _airborne:
+        extra["progress_pct"] = None
+        extra["distance_nm"] = None
+
+    # Closure has the final word on status.
+    if extra.get("final_status"):
+        extra["status"] = extra["final_status"]
+    return live, extra
+
+
 def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now: datetime, poll_seconds: int, time_format: str = "24"):
     """Live ADS-B + progress/ETE/breadcrumb/aircraft/phase for the selected
     leg, if it's genuinely the active one. Shared by the full page render
@@ -591,7 +708,15 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now
         # have a stored track from when it WAS flying. Hand that back so
         # the map can draw the real flown path.
         extra["breadcrumb"] = get_breadcrumb(selected_leg.id)
-        return live, extra
+        # Deliberately NOT returning here. This used to return early, which
+        # meant the closeout and enrichment blocks below never ran for a
+        # leg that wasn't the live one — so the moment a flight aged out of
+        # the 3-hour grace window, its actual times, gates and closeout
+        # record vanished from the card. The data was on disk the whole
+        # time; nothing ever read it. It also blanked the not-yet-departed
+        # leg, which is precisely what the T-30 first look exists to fill.
+        return _finish_payload(user_id, selected_leg, live, extra, now,
+                               time_format, is_live=False)
 
     dep_utc = selected_leg.dep_datetime_utc()
     arr_utc = selected_leg.arr_datetime_utc()
@@ -644,105 +769,8 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now
                 tz = getattr(selected_leg.dest_info, "timezone", None)
                 extra["last_tracked"] = _fmt_utc_local(seen, tz, time_format)
 
-    # Read-only: page renders must never spend one of the pilot's queries.
-    # A closed leg reports its FROZEN record. Nothing recomputes, so the
-    # numbers a past flight shows never drift.
-    closeout = get_closeout(user_id, selected_leg.id)
-    if closeout:
-        extra["closed"] = True
-        # A closed leg's status comes from the closure record, so there is
-        # exactly one definition of "arrived" rather than the phase machine
-        # having its own. Diverted and Cancelled are API-only facts.
-        if closeout.get("cancelled"):
-            extra["final_status"] = "Cancelled"
-        elif closeout.get("diverted"):
-            extra["final_status"] = "Diverted"
-        else:
-            extra["final_status"] = "Arrived"
-        extra["closed_by"] = closeout.get("closed_by")
-        extra["arrival_source"] = closeout.get("arrival_source")
-        extra["closeout"] = closeout
-
-    enr = get_enrichment(user_id, selected_leg.id)
-    if enr:
-        extra["status"] = derive_status(enr, extra.get("status"))
-        # Departure and arrival are answered separately: "is he getting
-        # out?" and "when does he get there?" are different questions, and
-        # a late pushback doesn't always become a late arrival.
-        status_now = extra["status"]
-        # Our own observed gate stop, used when the airline hasn't published
-        # actual_in yet — a fact beats a stale forecast.
-        try:
-            from .flightmatch import observed_gate_in
-            obs_in = observed_gate_in(selected_leg)
-        except Exception:
-            obs_in = None
-        extra["dep_delay"] = departure_delay(enr, selected_leg, time_format, status=status_now)
-        extra["arr_delay"] = arrival_delay(enr, selected_leg, time_format,
-                                           status=status_now, observed_in=obs_in)
-
-        # Status is already final here, so this is a reliable read.
-        airborne = bool(enr.get("actual_off")) or status_now in (
-            "In Air", "Landing", "Taxi-in", "Arrived", "Diverting")
-
-        # Recompute time-to-go against the REVISED arrival, so a known delay
-        # is reflected instead of counting down to a schedule that's already
-        # been superseded.
-        revised_arr = None
-        for key in ("actual_in", "estimated_in", "actual_on", "estimated_on"):
-            parsed = _parse_iso(enr.get(key))
-            if parsed:
-                revised_arr = parsed
-                break
-        if revised_arr:
-            extra["ete"] = compute_ete(selected_leg, live, now, arr_override=revised_arr)
-            if airborne:
-                extra["progress_pct"] = compute_progress(
-                    selected_leg, live, now, departed=True,
-                    dep_override=_parse_iso(enr.get("actual_off")) or _parse_iso(enr.get("actual_out")),
-                    arr_override=revised_arr)
-        # THE BUG THIS FIXES: the card used to print the FFDO scheduled
-        # time and then a note saying "18 min early" beside it, so the two
-        # never agreed. When there's an actual or estimated time, that is
-        # what gets shown, with the scheduled time kept as "was ...".
-        if extra["dep_delay"] and extra["dep_delay"].get("time"):
-            extra["dep_shown"] = extra["dep_delay"]["time"]
-        if extra["arr_delay"] and extra["arr_delay"].get("time"):
-            extra["arr_shown"] = extra["arr_delay"]["time"]
-        extra["gates"] = gate_info(enr)
-        extra["diversion"] = diversion_info(enr, selected_leg.destination)
-        extra["ooi"] = {
-            "out": enr.get("actual_out"), "off": enr.get("actual_off"),
-            "on": enr.get("actual_on"), "in": enr.get("actual_in"),
-        }
-        extra["enriched"] = True
-        # So it's visible how fresh the airline data is, and how rarely it
-        # actually needs fetching.
-        fetched = enr.get("_fetched_at")
-        if fetched:
-            try:
-                age = (now - datetime.fromisoformat(fetched)).total_seconds() / 60
-                extra["enriched_at"] = ("just now" if age < 1.5
-                                        else f"{int(age)} min ago" if age < 90
-                                        else f"{int(age // 60)}h ago")
-            except Exception:
-                pass
-
-    # Departure guard, applied last so it sees the final status. Works with
-    # or without AeroAPI, since the elapsed-time fallback in
-    # compute_progress is exactly what a pilot with no key relies on.
-    _airborne = (
-        (live is not None and live.get("on_ground") is False)
-        or extra.get("status") in ("In Air", "Landing", "Taxi-in", "Arrived", "Diverting")
-    )
-    if not _airborne:
-        extra["progress_pct"] = None
-        extra["distance_nm"] = None
-
-    # Closure has the final word on status.
-    if extra.get("final_status"):
-        extra["status"] = extra["final_status"]
-    return live, extra
+    return _finish_payload(user_id, selected_leg, live, extra, now,
+                           time_format, is_live=True)
 
 
 @app.get("/", response_class=HTMLResponse)

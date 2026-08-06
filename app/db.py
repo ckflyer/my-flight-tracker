@@ -2,11 +2,18 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Optional
 
-DB_FILE = Path(__file__).resolve().parent.parent / "data" / "flighttracker.db"
+# Overridable so a test run can point at a scratch file instead of the real
+# database. Every suite previously shared this one path, which is what made
+# them order-dependent and made login rate-limiting leak between runs.
+# Production ignores it and uses data/flighttracker.db as before.
+DB_FILE = Path(os.environ.get(
+    "PT_DB_FILE",
+    Path(__file__).resolve().parent.parent / "data" / "flighttracker.db"))
 LEGACY_SCHEDULE_JSON = Path(__file__).resolve().parent.parent / "data" / "schedule.json"
 
 
@@ -138,6 +145,15 @@ def init_db() -> None:
         # who doesn't mind the overage.
         if "aeroapi_allow_overage" not in user_cols:
             conn.execute("ALTER TABLE users ADD COLUMN aeroapi_allow_overage INTEGER NOT NULL DEFAULT 0")
+        # FlightAware's own spend figure, cached. Free to fetch, and more
+        # trustworthy than our estimate — but it lags ~10 minutes, so
+        # there's no point asking on every request.
+        if "aeroapi_reported_cost" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN aeroapi_reported_cost REAL")
+        if "aeroapi_reported_calls" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN aeroapi_reported_calls INTEGER")
+        if "aeroapi_usage_at" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN aeroapi_usage_at TEXT")
         if "aeroapi_period" not in user_cols:
             conn.execute("ALTER TABLE users ADD COLUMN aeroapi_period TEXT")
 

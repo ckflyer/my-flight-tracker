@@ -98,6 +98,12 @@ flight-tracker/
 │   ├── track.py         # breadcrumb positions, flight-phase state machine, progress/ETE math
 │   ├── airplaneslive.py # Airplanes.live provider (swap this to change source)
 │   ├── livesource.py    # provider-agnostic front door: shared cache + rate limit
+│   ├── flightmatch.py   # which aircraft is actually this leg (hex lock, arbitration)
+│   ├── aeroapi.py       # FlightAware AeroAPI client (/flights, /schedules, /account/usage)
+│   ├── enrichment.py    # OOOI, delays, gates, query schedule, spend tracking
+│   ├── closure.py       # positive closeout: frozen arrival record
+│   ├── carrier.py       # deadhead operator resolution
+│   ├── poller.py        # background track recorder + T-30 preview sweep
 │   └── settings.py      # per-user settings (stored on the users table)
 ├── templates/
 │   ├── viewer.html      # mobile-friendly tracker view (map, breadcrumb, progress, radar)
@@ -110,6 +116,7 @@ flight-tracker/
 ├── Dockerfile
 ├── docker-compose.yml    # Dockge-ready stack
 ├── update.sh             # pulls latest + forces a rebuild (see Updating below)
+├── tests_past_leg_detail.py  # regression cover, runs against a scratch DB
 ├── requirements.txt
 └── README.md
 ```
@@ -398,8 +405,19 @@ position was stored", which sounds like a state change but is true on
 nearly every poll of an airborne aircraft — it burned 8 queries mid-cruise
 telling us nothing, and hit the per-leg cap on an ordinary flight.
 
-  * **T-60** — first look: gate, and any delay already published.
-  * **T+15, then every 30 min** — while the aircraft is still ON THE
+  * **T-30** — first look: gate, revised arrival, and any delay already
+    published. By then the flight plan is filed, so all three exist; an
+    hour out they usually don't yet.
+
+    This one needs the background poller to reach the leg BEFORE it becomes
+    the current flight. A leg isn't `current` until T-20, so the poller
+    carries its own `PREVIEW_WINDOW` (35 min) and sweeps imminent upcoming
+    legs too. Without that the T-30 branch is simply unreachable and no
+    airline data arrives before pushback — which is exactly what happened
+    up to v4.4. The window is deliberately in the poller rather than in
+    `get_current_info`, because "current" also drives flight selection, the
+    map and the card, and moving that boundary would change all of them.
+  * **T+20, then every 30 min** — while the aircraft is still ON THE
     GROUND past its departure time. One prompt check, then a slower watch,
     capped at 3 total. It stops the moment the aircraft is seen airborne,
     handing straight over to the cruise checks rather than waiting for the
@@ -438,13 +456,25 @@ $1.25, worst case $1.75.
 
 ## Cost control
 
-`/flights/{ident}` costs $0.005 per result set. At ~50 legs/month and
-6-10 queries per leg that's roughly $1.50-$2.50/month, inside the Personal
-tier's $5 free credit. `MAX_QUERIES_PER_LEG` (14) caps any single leg,
-`CLOSEOUT_RESERVE` (4) of those are held for confirming gate-in, and
-`AEROAPI_MONTHLY_BUDGET` (default $4.50) is a hard monthly stop — queries
-cease entirely once it's reached, so the app can never quietly produce a
-bill. Settings shows queries and dollars spent against the cap.
+`/flights/{ident}` costs $0.005 per result set; `/schedules` costs $0.02,
+which is why deadhead carrier resolution is done once per leg and stored.
+At ~50 legs/month and 5-8 queries per leg that's roughly $1.25-$1.75/month,
+inside the Personal tier's $5 free credit. `MAX_QUERIES_PER_LEG` (10) caps
+any single leg, `ARRIVAL_RESERVE` (2) of those are held for confirming
+gate-in, and `AEROAPI_MONTHLY_BUDGET` (default $4.50) is a hard monthly
+stop — queries cease entirely once it's reached, so the app can never
+quietly produce a bill.
+
+Note that the local estimate prices every query at the `/flights` rate, so
+a leg that needed a `/schedules` lookup is undercounted by about $0.015.
+That's one more reason to prefer FlightAware's own figure below.
+
+Spend is taken from FlightAware's OWN meter where possible:
+`GET /account/usage` is free, is polled at most every 20 minutes, and
+replaces the local estimate. Their figure updates every 10 minutes rather
+than in real time, so anything older than six hours is treated as stale and
+the estimate takes over. Settings shows the poll count and dollars against
+the cap, when the figure was last pulled, and which source it came from.
 
 ## Storage
 
@@ -499,9 +529,31 @@ so `bash update.sh` is the safe way to invoke it either way.)
 
 - All times shown are **local to the airport** + timezone abbreviation.
 - Callsigns / tracking links use the **ENY** prefix.
+- **On time means exactly on time.** `ON_TIME_TOLERANCE_MIN` is 0, so a
+  one-minute-late departure reads as late and is tinted red. An earlier
+  5-minute grace meant the card printed 5:59 beside a crossed-out 5:57 and
+  called it on time, which is an argument with itself.
+- **Past flights keep their detail.** Actual times, gates and the frozen
+  closeout record stay visible after a leg ages out of the current window
+  — useful when a spouse is driving to the airport for a pickup. Nothing
+  recomputes and no query is spent; it's all read from disk.
 - Taxi-out/Taxi-in/Landing phase detection depends on each airport having
   enough ADS-B ground coverage to see it — busier fields (DFW) are reliable,
   smaller regional stations are a toss-up. When there's no coverage for a
   phase, it's skipped silently rather than guessed.
 - No payments, public signup, or email/SMTP integration yet — those are
   intentionally deferred, not missing by accident.
+
+## Tests
+
+`tests_past_leg_detail.py` covers the past-leg and T-30 preview paths
+through `compute_live_payload`. Run it from this directory:
+
+```bash
+python tests_past_leg_detail.py
+```
+
+It writes to a scratch database via the `PT_DB_FILE` environment variable
+and never touches `data/flighttracker.db`. **Keep test files inside this
+folder** — the earlier suites lived one directory up and were lost when the
+project was packaged, which is why there's only one here.

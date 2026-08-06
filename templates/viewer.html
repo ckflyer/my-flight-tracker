@@ -292,13 +292,6 @@
       border-top: 2px dashed var(--muted);
       margin: 0.5rem 0 1.5rem;
     }
-    .preview-map {
-      display: none;
-      height: 160px;
-      border-radius: 10px;
-      margin: 0 0 0.85rem;
-      border: 1px solid var(--map-border);
-    }
 
     /* --- Full-bleed map + overlay + collapsed/expand redesign --- */
     .map-wrap {
@@ -681,19 +674,8 @@
             </a>
             <div style="text-align:right">
               <span class="status {{ leg.status|lower|replace(' ', '-') }}">{{ leg.status }}</span>
-              {% if leg.origin_lat is not none or leg.dest_lat is not none %}
-              <div style="margin-top:0.5rem">
-                <a href="#" data-preview-toggle="past-prev-{{ leg.id }}" style="color:var(--muted);font-size:0.85rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">Map</a>
-              </div>
-              {% endif %}
             </div>
           </div>
-          {% if leg.origin_lat is not none or leg.dest_lat is not none %}
-          <div class="preview-map" id="past-prev-{{ leg.id }}"
-               data-origin-lat="{{ leg.origin_lat }}" data-origin-lon="{{ leg.origin_lon }}"
-               data-dest-lat="{{ leg.dest_lat }}" data-dest-lon="{{ leg.dest_lon }}"
-               data-origin="{{ leg.origin }}" data-dest="{{ leg.destination }}"></div>
-          {% endif %}
         </div>
         {% endfor %}
       </div>
@@ -735,19 +717,9 @@
               {% if settings.show_fr24 %}
               <a data-fr24-link href="{{ leg.links.fr24 }}" target="_blank" rel="noopener" style="color:var(--muted);font-size:0.85rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">FR24</a>
               {% endif %}
-              {% if leg.origin_lat is not none or leg.dest_lat is not none %}
-              <span style="color:var(--muted)">·</span>
-              <a href="#" data-preview-toggle="prev-{{ leg.id }}" style="color:var(--muted);font-size:0.85rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">Map</a>
-              {% endif %}
             </div>
           </div>
         </div>
-        {% if leg.origin_lat is not none or leg.dest_lat is not none %}
-        <div class="preview-map" id="prev-{{ leg.id }}"
-             data-origin-lat="{{ leg.origin_lat }}" data-origin-lon="{{ leg.origin_lon }}"
-             data-dest-lat="{{ leg.dest_lat }}" data-dest-lon="{{ leg.dest_lon }}"
-             data-origin="{{ leg.origin }}" data-dest="{{ leg.destination }}"></div>
-        {% endif %}
       </div>
       {% endfor %}
     </div>
@@ -788,86 +760,6 @@
       });
     })();
 
-    // Collapsible origin/destination preview map for upcoming/past flights
-    document.querySelectorAll('[data-preview-toggle]').forEach(function(link) {
-      link.addEventListener('click', function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-        var el = document.getElementById(link.getAttribute('data-preview-toggle'));
-        if (!el) return;
-        var isOpen = el.style.display === 'block';
-        if (isOpen) {
-          el.style.display = 'none';
-          return;
-        }
-        el.style.display = 'block';
-        if (!el._leafletMap) {
-          var oLat = parseFloat(el.dataset.originLat), oLon = parseFloat(el.dataset.originLon);
-          var dLat = parseFloat(el.dataset.destLat), dLon = parseFloat(el.dataset.destLon);
-          var map = L.map(el, { zoomControl: false });
-          var mapTheme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light_all' : 'dark_all';
-          L.tileLayer('https://{s}.basemaps.cartocdn.com/' + mapTheme + '/{z}/{x}/{y}{r}.png', {
-            maxZoom: 18, attribution: '&copy; OpenStreetMap &copy; CARTO'
-          }).addTo(map);
-          var pts = [];
-          if (!isNaN(oLat) && !isNaN(oLon)) {
-            L.circleMarker([oLat, oLon], { radius: 5, color: '#f59e0b', fill: false, weight: 2.5 })
-              .addTo(map).bindPopup('Origin: ' + el.dataset.origin);
-            pts.push([oLat, oLon]);
-          }
-          if (!isNaN(dLat) && !isNaN(dLon)) {
-            L.circleMarker([dLat, dLon], { radius: 6, color: '#f59e0b', fillColor: '#f59e0b', fillOpacity: 1, weight: 2 })
-              .addTo(map).bindPopup('Destination: ' + el.dataset.dest);
-            pts.push([dLat, dLon]);
-          }
-          if (pts.length === 2) {
-            L.polyline(pts, { color: '#94a3b8', weight: 2, opacity: 0.85, dashArray: '4 6' }).addTo(map);
-            map.fitBounds(pts, { padding: [28, 28], maxZoom: 8 });
-          } else if (pts.length === 1) {
-            map.setView(pts[0], 6);
-          }
-          el._leafletMap = map;
-        }
-        setTimeout(function() { el._leafletMap.invalidateSize(); }, 30);
-      });
-    });
-
-    function togglePast() {
-      const sec = document.getElementById('past-section');
-      const btn = document.getElementById('past-toggle');
-      sec.classList.toggle('open');
-      if (sec.classList.contains('open')) {
-        btn.textContent = 'Hide past flights';
-      } else {
-        btn.textContent = 'Show past flights ({{ past_count }})';
-      }
-    }
-
-    // Tap the collapsed card (or the hint text below it) to reveal full
-    // details + the flight list
-    (function() {
-      var header = document.getElementById('collapsed-card-header');
-      var details = document.getElementById('expand-details');
-      var wrap = document.getElementById('expand-wrap');
-      var hint = document.getElementById('expand-hint');
-      if (!header || !wrap) return;
-      var cardEl = document.getElementById('collapsed-card');
-      function toggle() {
-        wrap.classList.toggle('open');
-        if (details) details.classList.toggle('open');
-        if (cardEl) cardEl.classList.toggle('expanded', wrap.classList.contains('open'));
-        hint.innerHTML = wrap.classList.contains('open') ? 'Tap to collapse &#9652;' : 'Tap for more &#9662;';
-        if (wrap.classList.contains('open')) {
-          setTimeout(function() {
-            var mapEl = document.getElementById('flight-map');
-            if (mapEl && mapEl._leafletInstance) mapEl._leafletInstance.invalidateSize();
-          }, 50);
-        }
-      }
-      header.style.cursor = 'pointer';
-      header.addEventListener('click', toggle);
-      if (hint) hint.addEventListener('click', toggle);
-    })();
 
     // Map layer toggle popover (live overlay + radar), preferences kept in
     // localStorage since the map keeps refreshing in place and the choice
@@ -1207,6 +1099,26 @@
         if (g.baggage) setText('v-baggage', g.baggage);
         setShown('row-diverted', !!data.diversion);
         if (data.diversion) setText('v-diverted', data.diversion.diverted_to);
+
+        // These four are in every /api/live payload but were never written
+        // to the DOM, so they froze at whatever the last FULL page render
+        // put there — which is why "Airline data" could read 28 min ago and
+        // then 14 min ago after a manual refresh, with nothing else having
+        // changed. Rendered here, they tick along with the ADS-B position.
+        setShown('row-updated', !!data.enriched_at);
+        setText('v-updated', data.enriched_at);
+
+        setShown('row-closed', !!data.closed_by);
+        setText('v-closed', (data.closed_by || '').replace(/_/g, ' '));
+
+        setShown('row-arrsrc', !!data.arrival_source);
+        setText('v-arrsrc', data.arrival_source);
+
+        var lt = document.getElementById('last-tracked');
+        if (lt) {
+          lt.style.display = data.last_tracked ? '' : 'none';
+          lt.textContent = data.last_tracked ? 'last tracked ' + data.last_tracked : '';
+        }
       }
 
       function applyLegPayload(data) {
@@ -1283,6 +1195,13 @@
           arr_delay: cur.arr_delay || null,
           gates: cur.gates || null,
           diversion: cur.diversion || null,
+          // Carried through so tapping a PAST flight shows its stored
+          // closeout and airline times rather than inheriting the rows
+          // left over from whichever leg was on screen before.
+          enriched_at: cur.enriched_at || null,
+          closed_by: cur.closed_by || null,
+          arrival_source: cur.arrival_source || null,
+          last_tracked: cur.last_tracked || null,
         });
         renderMap(currentData, liveData, true);
 

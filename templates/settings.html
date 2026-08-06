@@ -181,9 +181,14 @@
                placeholder="{{ 'saved \u2014 leave blank to keep it' if s.aeroapi_key else 'paste your AeroAPI key' }}">
         <p class="hint">Your own key on your own FlightAware account. The Personal tier includes $5/month of free queries, or $10 if you feed ADS-B.</p>
         <div class="usage-line">
-          <span>Estimated spend this month ({{ aeroapi_stats.period }})</span>
-          <strong{% if aeroapi_stats.over_budget %} style="color:var(--bad)"{% endif %}>${{ '%.2f'|format(aeroapi_stats.spent) }} of ${{ '%.2f'|format(aeroapi_stats.budget) }}</strong>
+          <span>{% if aeroapi_stats.source == 'reported' %}Usage this month, per FlightAware{% else %}Estimated usage this month{% endif %} ({{ aeroapi_stats.period }})</span>
+          <strong{% if aeroapi_stats.over_budget %} style="color:var(--bad)"{% endif %}>{{ aeroapi_stats.reported_calls or aeroapi_stats.queries }} polls &middot; ${{ '%.2f'|format(aeroapi_stats.spent) }} of ${{ '%.2f'|format(aeroapi_stats.budget) }}</strong>
         </div>
+        {% if aeroapi_stats.source == 'reported' %}
+        <p class="hint">FlightAware&rsquo;s own figure{% if aeroapi_stats.usage_age %}, pulled {{ aeroapi_stats.usage_age }}{% endif %} &mdash; the free <code>/account/usage</code> call, so reading it costs nothing. Their side updates every 10 minutes, so it lags a little. Our local estimate for comparison is ${{ '%.2f'|format(aeroapi_stats.estimated) }} ({{ aeroapi_stats.queries }} queries).</p>
+        {% else %}
+        <p class="hint">Our own estimate ({{ aeroapi_stats.queries }} result sets &times; ${{ '%.3f'|format(aeroapi_stats.cost_per_query) }}). FlightAware&rsquo;s actual figure replaces this once the key has been used.</p>
+        {% endif %}
         {% if aeroapi_stats.exhausted %}
         <p class="hint" style="color:var(--bad);font-weight:600;">
           Cap reached &mdash; AeroAPI is paused for the rest of the month. Live ADS-B tracking is unaffected.
@@ -199,9 +204,13 @@
         </div>
         <p class="hint">Off by default. The Personal tier includes $5/month free, and the cap sits just under it so an estimate that&rsquo;s slightly off can&rsquo;t produce a bill. Turn this on only if you don&rsquo;t mind FlightAware billing you for the overage.</p>
         <p class="hint" style="margin-top:0.5rem;">
+          {% if aeroapi_stats.source == 'reported' -%}
+            Cost reported by FlightAware, which updates about every 10 minutes. Query count is ours.
+          {%- else -%}
+            Cost estimated locally at ${{ '%.3f'|format(aeroapi_stats.cost_per_query) }}/query &mdash; FlightAware&rsquo;s own figure appears once its usage endpoint responds.
+          {%- endif %}
           Capped at ${{ '%.2f'|format(aeroapi_stats.budget) }}/month &mdash; queries stop automatically at that point.
-          Roughly 6&ndash;10 per flight at ${{ '%.3f'|format(aeroapi_stats.cost_per_query) }} each.
-          Only the background tracker queries; opening or refreshing a page never does.
+          Roughly 5&ndash;8 per flight. Only the background tracker queries; opening or refreshing a page never does.
         </p>
       </div>
     </div>

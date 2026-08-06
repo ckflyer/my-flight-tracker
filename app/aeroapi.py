@@ -238,3 +238,72 @@ def resolve_operator(api_key: str, flight_number: str, origin: str,
         if ident:
             return str(ident).strip().upper()
     return None
+
+
+def fetch_usage(api_key: str, start: Optional[str] = None,
+                end: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """FlightAware's OWN figure for what this key has spent.
+
+    GET /account/usage costs nothing, so this replaces our estimate with
+    the authoritative number. Two caveats from FlightAware's docs: the
+    figure updates every 10 minutes rather than in real time, and it
+    doesn't account for monthly minimums (irrelevant on the Personal tier,
+    which has none).
+
+    The response shape isn't something this code can verify from here, so
+    it reads defensively and hands back the raw payload alongside whatever
+    it managed to parse — a caller that gets `cost: None` should fall back
+    to the local estimate rather than assume zero spend.
+    """
+    if not api_key:
+        return None
+    params = {}
+    if start:
+        params["start"] = start
+    if end:
+        params["end"] = end
+    try:
+        r = requests.get(f"{BASE_URL}/account/usage",
+                         headers={"x-apikey": api_key},
+                         params=params or None, timeout=REQUEST_TIMEOUT)
+    except Exception as e:
+        print(f"[aeroapi] usage lookup failed: {e}")
+        return None
+    if r.status_code != 200:
+        print(f"[aeroapi] usage lookup returned {r.status_code}")
+        return None
+    try:
+        data = r.json()
+    except Exception:
+        return None
+
+    def _dig(obj, keys):
+        """Pull the first matching key, at the top level or one level down."""
+        for k in keys:
+            if isinstance(obj, dict) and obj.get(k) is not None:
+                return obj[k]
+        if isinstance(obj, dict):
+            for v in obj.values():
+                if isinstance(v, dict):
+                    found = _dig(v, keys)
+                    if found is not None:
+                        return found
+                elif isinstance(v, list) and v and isinstance(v[0], dict):
+                    total = 0.0
+                    hit = False
+                    for row in v:
+                        got = _dig(row, keys)
+                        if isinstance(got, (int, float)):
+                            total += got
+                            hit = True
+                    if hit:
+                        return total
+        return None
+
+    cost = _dig(data, ["total_cost", "cost", "total_charges", "charges"])
+    calls = _dig(data, ["total_calls", "calls", "total_queries", "queries", "count"])
+    return {
+        "cost": float(cost) if isinstance(cost, (int, float)) else None,
+        "calls": int(calls) if isinstance(calls, (int, float)) else None,
+        "raw": data,
+    }

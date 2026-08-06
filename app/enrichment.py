@@ -71,10 +71,15 @@ COST_PER_QUERY_USD = float(os.environ.get("AEROAPI_COST_PER_QUERY", "0.005"))
 # you feed ADS-B); defaulting under that means the app can never quietly
 # produce a bill. Raise it if you're on a paid tier.
 MONTHLY_BUDGET_USD = float(os.environ.get("AEROAPI_MONTHLY_BUDGET", "4.50"))
-# How early to take a first look (gate assignment and any pre-departure delay).
-PREVIEW_BEFORE_DEP = timedelta(minutes=60)
-# If ADS-B has told us nothing by this far past scheduled departure, ask anyway.
-SILENT_DEP_FALLBACK = timedelta(minutes=15)
+# How stale FlightAware's own usage figure may be before we refresh it.
+# Their number updates roughly every 10 minutes, and the call is free.
+USAGE_REFRESH = timedelta(minutes=20)
+# How early to take a first look. T-30 rather than T-60: by then the flight
+# plan is filed, so the revised arrival, any published delay, and the gate
+# all exist. An hour out they usually don't yet.
+PREVIEW_BEFORE_DEP = timedelta(minutes=30)
+# How long past scheduled departure before asking whether it has actually gone.
+SILENT_DEP_FALLBACK = timedelta(minutes=20)
 # How long after touchdown to look for gate-in. Often the aircraft is on
 # stand within this, which closes the leg in one query instead of several.
 AFTER_LANDING = timedelta(minutes=5)
@@ -184,6 +189,64 @@ def query_stats(user_id: int) -> Dict[str, Any]:
     return {"period": row["aeroapi_period"], "queries": row["aeroapi_queries"] or 0}
 
 
+def refresh_usage(user_id: int, now: datetime) -> bool:
+    """Pull FlightAware's own spend figure. Free, so not budget-limited.
+
+    Rate-limited to USAGE_REFRESH only because there's no point asking more
+    often — their figure updates every 10 minutes.
+    """
+    api_key = credentials(user_id)
+    if not api_key:
+        return False
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT aeroapi_usage_at FROM users WHERE id = ?",
+                           (user_id,)).fetchone()
+    finally:
+        conn.close()
+    if row and row["aeroapi_usage_at"]:
+        try:
+            if (now - datetime.fromisoformat(row["aeroapi_usage_at"])) < USAGE_REFRESH:
+                return False
+        except Exception:
+            pass
+
+    from .aeroapi import fetch_usage
+    period_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    usage = fetch_usage(api_key, start=period_start.strftime("%Y-%m-%d"),
+                        end=now.strftime("%Y-%m-%d"))
+    if not usage:
+        return False
+    if usage.get("cost") is None:
+        # Shape wasn't what we expected; log it once so it can be adapted
+        # rather than silently reporting zero spend.
+        print(f"[enrichment] /account/usage returned an unrecognised shape: "
+              f"{str(usage.get('raw'))[:300]}")
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE users SET aeroapi_reported_cost = ?, aeroapi_reported_calls = ?, "
+            "aeroapi_usage_at = ? WHERE id = ?",
+            (usage.get("cost"), usage.get("calls"), now.isoformat(), user_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return True
+
+
+def _ago(when: Optional[datetime]) -> Optional[str]:
+    """'12 min ago' / '3h ago', or None if we've never had a reading."""
+    if not when:
+        return None
+    mins = (datetime.now(timezone.utc) - when).total_seconds() / 60
+    if mins < 1.5:
+        return "just now"
+    if mins < 90:
+        return f"{int(mins)} min ago"
+    return f"{int(mins // 60)}h ago"
+
+
 def budget_state(user_id: int) -> Dict[str, Any]:
     """Estimated spend this month, and whether we've hit the cap.
 
@@ -195,7 +258,8 @@ def budget_state(user_id: int) -> Dict[str, Any]:
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT aeroapi_budget, aeroapi_allow_overage FROM users WHERE id = ?",
+            "SELECT aeroapi_budget, aeroapi_allow_overage, aeroapi_reported_cost, "
+            "aeroapi_reported_calls, aeroapi_usage_at FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
     finally:
@@ -204,12 +268,32 @@ def budget_state(user_id: int) -> Dict[str, Any]:
     allow_overage = bool(row["aeroapi_allow_overage"]) if row else False
 
     stats = query_stats(user_id)
-    spent = stats["queries"] * COST_PER_QUERY_USD
+    estimated = round(stats["queries"] * COST_PER_QUERY_USD, 2)
+
+    # Prefer FlightAware's own meter when we have a recent reading — it's
+    # what actually gets billed, where ours is a count times a published
+    # rate. Their figure lags about 10 minutes, so anything older than a
+    # few hours is treated as stale and the estimate takes over.
+    reported = row["aeroapi_reported_cost"] if row else None
+    reported_at = _parse(row["aeroapi_usage_at"]) if row else None
+    spent, source = estimated, "estimated"
+    if reported is not None and reported_at is not None:
+        if (datetime.now(timezone.utc) - reported_at) < timedelta(hours=6):
+            spent, source = round(float(reported), 2), "reported"
+
     over = spent >= budget
     return {
         "queries": stats["queries"],
+        "reported_calls": (row["aeroapi_reported_calls"] if row else None),
         "period": stats["period"],
-        "spent": round(spent, 2),
+        "source": source,
+        "estimated": estimated,
+        "spent": spent,
+        "usage_at": reported_at.isoformat() if reported_at else None,
+        # Human-readable so the settings page can say how current
+        # FlightAware's own number is. Theirs lags ~10 min on their side and
+        # we only ask every USAGE_REFRESH, so "as of" matters.
+        "usage_age": _ago(reported_at),
         "budget": round(budget, 2),
         "allow_overage": allow_overage,
         "over_budget": over,
@@ -311,7 +395,7 @@ def should_query(enr: Optional[Dict[str, Any]], leg, now: datetime,
     # 1. First look — gate assignment and any delay already published.
     if enr is None:
         if dep and now >= dep - PREVIEW_BEFORE_DEP:
-            return "T-60: first look"
+            return "T-30: first look"
         return None
 
     # Closeout is exempt from the ordinary rate floor; everything else
@@ -357,7 +441,7 @@ def should_query(enr: Optional[Dict[str, Any]], leg, now: datetime,
             and not enr.get("actual_off")):
         tries = int(enr.get("_delay_tries", 0))
         if tries == 0:
-            return "T+15: departure check"
+            return "T+20: departure check"
         if tries < MAX_DELAY_WATCH_TRIES and (not last or (now - last) >= DELAY_WATCH_GAP):
             return f"still on the ground ({tries} of {MAX_DELAY_WATCH_TRIES - 1})"
 
@@ -450,7 +534,11 @@ def refresh(user_id: int, leg, now: datetime, down: bool = False,
 # How far from schedule still counts as "on time" and stays the normal
 # colour. Airlines conventionally use 15 minutes; 5 is tighter, because a
 # family member watching wants to know sooner than the DOT does.
-ON_TIME_TOLERANCE_MIN = 5
+# Zero tolerance, by the pilot's own call: one minute late IS late, and a
+# card that prints 5:59 beside a crossed-out 5:57 and calls it "on time"
+# is arguing with itself. Only an exact match reads as on time now, so any
+# non-zero delta gets both the words and the red/green tint.
+ON_TIME_TOLERANCE_MIN = 0
 
 
 # How far along a flight each phase is. Used to combine two sources that
