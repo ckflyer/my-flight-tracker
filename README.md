@@ -299,6 +299,22 @@ Enrichment also gives POSITIVE flight identification: AeroAPI knows which
 record corresponds to this origin/destination pair, so a turn's two
 directions are distinguished by data rather than inference.
 
+## What the card says about delays
+
+Departure and arrival are treated differently on purpose.
+
+**Departure** gets no words. The departure chip is tinted red when he left
+late and green when he left early, and that's all — a "Departed 2 min late"
+line underneath repeats in a sentence what the colour already said.
+
+**Arrival** keeps its wording *and* the tint: "Arrived 6 min early" beside a
+green 6:46 PM. When someone is driving to the airport, how early or late he
+gets in is the whole question, and a number answers it in a way a colour
+can't.
+
+Both are measured against the FFDO line (see above), at zero tolerance —
+one minute late is late.
+
 ## The FFDO line is the source of truth
 
 Everything on the card is measured against the schedule the pilot pasted
@@ -573,10 +589,18 @@ so `bash update.sh` is the safe way to invoke it either way.)
   one-minute-late departure reads as late and is tinted red. An earlier
   5-minute grace meant the card printed 5:59 beside a crossed-out 5:57 and
   called it on time, which is an argument with itself.
-- **Past flights keep their detail.** Actual times, gates and the frozen
-  closeout record stay visible after a leg ages out of the current window
-  — useful when a spouse is driving to the airport for a pickup. Nothing
-  recomputes and no query is spent; it's all read from disk.
+- **Past flights keep their detail.** Actual times, gates, the frozen
+  closeout record and the airline-data age all stay visible after a leg
+  ages out of the current window — useful when a spouse is driving to the
+  airport for a pickup. Everything a live flight shows is there except the
+  live ADS-B readout and the progress bar, which are the only two things
+  that genuinely mean "right now". Nothing recomputes and no query is
+  spent; it's all read from disk.
+- **Tap the card to expand it.** `#expand-hint` toggles `.expanded` on the
+  card, `.open` on `#expand-details` and `#expand-wrap`. The past and
+  upcoming lists live inside `#expand-wrap`, so that toggle is also what
+  makes other flights selectable — if it ever breaks again, the symptom is
+  "I can't click on any flight" rather than anything about expanding.
 - Taxi-out/Taxi-in/Landing phase detection depends on each airport having
   enough ADS-B ground coverage to see it — busier fields (DFW) are reliable,
   smaller regional stations are a toss-up. When there's no coverage for a

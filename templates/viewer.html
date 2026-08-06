@@ -594,13 +594,25 @@
           {% if current.ete %}<span>ETE {{ current.ete }}</span>{% endif %}
         </div>
       </div>
+      </div>
+      {# live-section closes HERE, above the detail block.
+         It used to wrap Flight detail as well, and applyLegPayload hides
+         live-section outright for any leg that isn't the active one — so
+         selecting a past flight hid its gates, its actual times, its
+         closeout record and its airline-data age along with the live box.
+         The data was fetched, stored and returned in the payload; the
+         markup just had it inside a container that got switched off.
+         Only the live ADS-B readout and the progress bar belong to
+         "is this flying right now". Everything below is history and
+         should survive the flight. #}
 
       <div class="detail-block" id="flight-detail" style="{{ '' if current.enriched else 'display:none' }}">
         <h3>Flight detail</h3>
-        <div class="detail-row" id="row-dep-delay" style="{{ '' if current.dep_delay else 'display:none' }}">
-          <span class="k">Departure</span>
-          <span class="v {{ current.dep_delay.state if current.dep_delay else '' }}" id="v-dep-delay">{{ current.dep_delay.text if current.dep_delay else '' }}</span>
-        </div>
+        {# No "Departed 2 min late" row. Whether he got out on time is
+           answered by the departure chip above being red or green; spelling
+           it out again in words is noise. Arrival keeps its wording,
+           because WHEN HE GETS THERE is the thing being waited on and
+           "6 min early" says something a colour can't. #}
         <div class="detail-row" id="row-arr-delay" style="{{ '' if current.arr_delay else 'display:none' }}">
           <span class="k">Arrival</span>
           <span class="v {{ current.arr_delay.state if current.arr_delay else '' }}" id="v-arr-delay">{{ current.arr_delay.text if current.arr_delay else '' }}</span>
@@ -637,7 +649,6 @@
           <span class="k">Diverted to</span>
           <span class="v late" id="v-diverted">{{ current.diversion.diverted_to if current.diversion else '' }}</span>
         </div>
-      </div>
       </div>
       <div class="buttons">
         {% if settings.show_flightaware %}
@@ -1074,15 +1085,11 @@
           arrChip.style.display = showChip ? '' : 'none';
         }
 
-        // Expanded detail block.
+        // Expanded detail block. The departure row is deliberately absent —
+        // see the note in the template. Departure state still reaches the
+        // user through the chip tint applied above.
         setShown('flight-detail', !!(data.dep_delay || data.arr_delay || data.gates));
-        setShown('row-dep-delay', !!data.dep_delay);
         setShown('row-arr-delay', !!data.arr_delay);
-        if (data.dep_delay) {
-          setText('v-dep-delay', data.dep_delay.text);
-          var dv = document.getElementById('v-dep-delay');
-          if (dv) dv.className = 'v ' + (data.dep_delay.state || '');
-        }
         if (data.arr_delay) {
           setText('v-arr-delay', data.arr_delay.text);
           var av = document.getElementById('v-arr-delay');
@@ -1158,6 +1165,15 @@
         setText('card-dep-time', cur.dep);
         setText('card-dest-code', cur.destination);
         setText('card-arr-time', cur.arr);
+        // The struck-through FFDO line. Never updated on a leg switch, so
+        // a past flight showed the PREVIOUS flight's scheduled times under
+        // its own actuals.
+        setText('v-sched', (cur.dep || '') + ' \u2192 ' + (cur.arr || ''));
+        // Gate labels are per-airport, so they move with the leg too.
+        var kDep = document.querySelector('#row-gate-dep .k');
+        if (kDep) kDep.textContent = (cur.origin || '') + ' gate';
+        var kArr = document.querySelector('#row-gate-arr .k');
+        if (kArr) kArr.textContent = (cur.destination || '') + ' gate';
 
         const statusBadge = document.getElementById('status-badge');
         if (statusBadge && cur.status) {
@@ -1230,6 +1246,67 @@
           selectLeg(knownCurrentLegId, { automatic: true });
         });
       }
+
+      // ---------------------------------------------------------------
+      // Expand / collapse.
+      //
+      // The markup and CSS for this have always been here — #collapsed-card
+      // has an .expanded state, #expand-details and #expand-wrap have .open
+      // states, and #expand-hint says "Tap for more". Nothing ever added
+      // those classes. The handler was lost in an edit somewhere before
+      // v4.4, which left the flight detail, the past list and the upcoming
+      // list permanently display:none with a hint inviting you to tap
+      // something that did nothing.
+      //
+      // #expand-wrap holds the past and upcoming lists, so this is also why
+      // no other flight could be selected: the links were in the DOM (the
+      // click delegation below works fine) but never visible to tap.
+      var CARD_EXPANDED_KEY = 'pt_card_expanded';
+      var cardExpanded = false;
+      try {
+        cardExpanded = window.localStorage.getItem(CARD_EXPANDED_KEY) === '1';
+      } catch (e) { /* private mode, or storage disabled — default closed */ }
+
+      function applyExpanded() {
+        var card = document.getElementById('collapsed-card');
+        var details = document.getElementById('expand-details');
+        var wrap = document.getElementById('expand-wrap');
+        var hint = document.getElementById('expand-hint');
+        if (card) card.classList.toggle('expanded', cardExpanded);
+        if (details) details.classList.toggle('open', cardExpanded);
+        if (wrap) wrap.classList.toggle('open', cardExpanded);
+        if (hint) {
+          hint.innerHTML = cardExpanded
+            ? 'Tap to collapse &#9652;'
+            : 'Tap for more &#9662;';
+        }
+      }
+
+      function setExpanded(next) {
+        cardExpanded = !!next;
+        try {
+          window.localStorage.setItem(CARD_EXPANDED_KEY, cardExpanded ? '1' : '0');
+        } catch (e) { /* not fatal — the state just won't survive a reload */ }
+        applyExpanded();
+      }
+
+      var expandHintEl = document.getElementById('expand-hint');
+      if (expandHintEl) {
+        expandHintEl.addEventListener('click', function() {
+          setExpanded(!cardExpanded);
+        });
+      }
+      // Tapping the card header itself expands too, which is the gesture
+      // most people try first. Collapsing stays on the hint alone, so a
+      // stray tap on the card can't shut the detail you just opened.
+      var cardHeaderEl = document.getElementById('collapsed-card-header');
+      if (cardHeaderEl) {
+        cardHeaderEl.addEventListener('click', function(e) {
+          if (e.target.closest && e.target.closest('a')) return;
+          if (!cardExpanded) setExpanded(true);
+        });
+      }
+      applyExpanded();
 
       function selectLeg(legId, opts) {
         if (!legId) return;
