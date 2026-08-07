@@ -90,9 +90,11 @@
       <h2>Pilot login</h2>
       <form method="post" action="/login/pilot">
         <label for="username">Username</label>
-        <input type="text" id="username" name="username" autocomplete="username" required>
+        <input type="text" id="username" name="username" autocomplete="username"
+               value="{{ username|default('', true)|e }}" required>
         <label for="password">Password</label>
-        <input type="password" id="password" name="password" autocomplete="current-password" required>
+        <input type="password" id="password" name="password" autocomplete="current-password"
+               {% if username %}autofocus{% endif %} required>
         <button type="submit">Log in</button>
       </form>
       <p style="text-align:center; font-size:0.8rem; color:var(--muted); margin-top:0.85rem;">

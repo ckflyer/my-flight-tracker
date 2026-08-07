@@ -187,13 +187,17 @@
                placeholder="{{ 'saved \u2014 leave blank to keep it' if s.aeroapi_key else 'paste your AeroAPI key' }}">
         <p class="hint">Your own key on your own FlightAware account. The Personal tier includes $5/month of free queries, or $10 if you feed ADS-B.</p>
         <div class="usage-line">
-          <span>{% if aeroapi_stats.source == 'reported' %}Usage this month, per FlightAware{% else %}Estimated usage this month{% endif %} ({{ aeroapi_stats.period }})</span>
-          <strong{% if aeroapi_stats.over_budget %} style="color:var(--bad)"{% endif %}>{{ aeroapi_stats.reported_calls or aeroapi_stats.queries }} polls &middot; ${{ '%.2f'|format(aeroapi_stats.spent) }} of ${{ '%.2f'|format(aeroapi_stats.budget) }}</strong>
+          <span>Usage this month ({{ aeroapi_stats.period }})</span>
+          {% if aeroapi_stats.has_reading %}
+          <strong{% if aeroapi_stats.over_budget %} style="color:var(--bad)"{% endif %}>{{ aeroapi_stats.reported_calls or aeroapi_stats.queries }} calls &middot; ${{ '%.2f'|format(aeroapi_stats.spent) }} of ${{ '%.2f'|format(aeroapi_stats.budget) }}</strong>
+          {% else %}
+          <strong style="color:var(--muted)">&mdash; of ${{ '%.2f'|format(aeroapi_stats.budget) }}</strong>
+          {% endif %}
         </div>
-        {% if aeroapi_stats.source == 'reported' %}
-        <p class="hint">FlightAware&rsquo;s own figure{% if aeroapi_stats.usage_age %}, pulled {{ aeroapi_stats.usage_age }}{% endif %} &mdash; the free <code>/account/usage</code> call, so reading it costs nothing. Their side updates every 10 minutes, so it lags a little. Our local estimate for comparison is ${{ '%.2f'|format(aeroapi_stats.estimated) }} ({{ aeroapi_stats.queries }} queries).</p>
+        {% if aeroapi_stats.has_reading %}
+        <p class="hint">FlightAware&rsquo;s own figure{% if aeroapi_stats.usage_age %}, pulled {{ aeroapi_stats.usage_age }}{% endif %}. Read hourly through the free <code>/account/usage</code> call, so checking costs nothing. Their side updates about every 10 minutes.{% if not aeroapi_stats.reading_fresh %} This reading is out of date &mdash; the usage endpoint hasn&rsquo;t responded in a while, so the limit is being enforced against a local count until it does.{% endif %}</p>
         {% else %}
-        <p class="hint">Our own estimate ({{ aeroapi_stats.queries }} result sets &times; ${{ '%.3f'|format(aeroapi_stats.cost_per_query) }}). FlightAware&rsquo;s actual figure replaces this once the key has been used.</p>
+        <p class="hint">No reading yet. FlightAware&rsquo;s figure appears here within an hour of the key being used; until then the limit is enforced against a local count.</p>
         {% endif %}
         {% if aeroapi_stats.exhausted %}
         <p class="hint" style="color:var(--bad);font-weight:600;">
@@ -201,21 +205,13 @@
           {%- else %}Limit reached &mdash; AeroAPI is paused until the month rolls over. Live ADS-B tracking is unaffected.{% endif %}
         </p>
         {% endif %}
-        <label for="aeroapi-budget" style="margin-top:0.9rem;">Monthly spend limit (USD)</label>
+        <label for="aeroapi-budget" style="margin-top:1rem;">Monthly spend limit (USD)</label>
         <div class="budget-input">
           <span class="budget-prefix">$</span>
           <input type="number" name="aeroapi_budget" id="aeroapi-budget" step="0.25" min="0" max="500"
                  value="{{ '%.2f'|format(s.aeroapi_budget) }}">
         </div>
-        <p class="hint">Queries stop for the rest of the month once spend reaches this. The Personal tier includes $5/month free, so the $4.50 default sits just under it &mdash; an estimate that&rsquo;s slightly off can&rsquo;t produce a bill. Raise it if you&rsquo;re on a paid tier and don&rsquo;t mind being billed; set it to 0 to stop querying entirely while keeping your key saved. Live ADS-B tracking is free and never stops.</p>
-        <p class="hint" style="margin-top:0.5rem;">
-          {% if aeroapi_stats.source == 'reported' -%}
-            Cost reported by FlightAware, which updates about every 10 minutes. Query count is ours.
-          {%- else -%}
-            Cost estimated locally at ${{ '%.3f'|format(aeroapi_stats.cost_per_query) }}/query &mdash; FlightAware&rsquo;s own figure appears once its usage endpoint responds.
-          {%- endif %}
-          Roughly 5&ndash;8 queries per flight. Only the background tracker queries; opening or refreshing a page never does.
-        </p>
+        <p class="hint">Queries stop for the rest of the month once spend reaches this. The Personal tier includes $5/month free, so the $4.50 default sits just under it. Set it to 0 to stop querying entirely while keeping your key saved. Roughly 5&ndash;8 queries per flight, and only the background tracker queries &mdash; opening or refreshing a page never does. Live ADS-B tracking is free and never stops.</p>
       </div>
     </div>
 

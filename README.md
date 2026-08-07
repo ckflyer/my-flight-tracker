@@ -471,6 +471,20 @@ $5 free credit, so an estimate that's slightly off can't produce a bill.
 value. A limit of $0 stops all AeroAPI queries while keeping the key saved;
 live ADS-B tracking is free and is never affected.
 
+Spend shown in Settings is **FlightAware's own figure and nothing else**,
+read hourly from the free `GET /account/usage`. A local estimate used to be
+shown beside it, but two numbers for one thing invites the question of which
+to believe, and the estimate was the wrong one — it prices every query at
+the `/flights` rate and undercounts any leg that needed `/schedules`. Until
+a reading arrives the page says so rather than showing a number.
+
+Enforcement is separate and more paranoid than the display: a fresh reading
+is used as-is, and a stale or missing one falls back to the higher of the
+last reading and the local count. A stale figure is a floor, not a ceiling
+— querying has continued since. That fallback never reaches the screen, and
+it exists so an unreachable usage endpoint can't quietly disable the one
+control that prevents a bill.
+
 The limit is **always enforced**. The old "keep querying past $X" toggle
 was removed in v4.6: the one setting that exists to prevent a surprise bill
 should not itself be switchable off. Anyone on a paid tier who doesn't mind
@@ -537,6 +551,46 @@ on the host and never pushed.
 (First run: `chmod +x update.sh` if you want to run it as `./update.sh`
 instead — GitHub's browser uploader doesn't preserve the executable bit,
 so `bash update.sh` is the safe way to invoke it either way.)
+
+## v4.7
+
+* **Never package `data/secret_key.txt`.** The v4.6 zip shipped one, which
+  overwrites the key that signs session cookies and logs out the pilot and
+  every share-link viewer at once. `.gitignore` covers the file, but that
+  only helps if it isn't already tracked — check with
+  `git log --oneline -- data/secret_key.txt`. If it has ever been
+  committed, `git rm --cached data/secret_key.txt`, push, delete it on the
+  box and restart so a fresh key is generated.
+* **A wrong password no longer clears the login form.** The username is
+  re-rendered and focus moves to the password field. The password itself is
+  deliberately not echoed — it would land in the page source, browser cache
+  and any proxy log, and the browser's password manager refills it anyway.
+* **Calendar agenda rows stay on one line.** They were printing full zoned
+  times ("5:15 PM MST"), which overflowed a phone and wrapped the route
+  onto a second line. Short times now, with the flight side truncating
+  before the times do.
+* **Days within a trip are separated again.** `seamless-after` removed the
+  gap so a multi-day trip read as one continuous bar, which is right, but
+  with no divider the days ran into a single slab. A hairline rule and more
+  padding separate them without breaking the bar.
+* **Expand/collapse and the past-flights toggle work again** — see below.
+* **Spend is FlightAware's number only.** The local estimate is gone from
+  the UI, `/account/usage` is polled hourly, and the settings block that
+  showed two competing figures has been rebuilt as one line.
+
+## Restored missing JavaScript (v4.7)
+
+`togglePast()` and the card expand/collapse handler had no code behind them
+as of v4.5: the markup and CSS were intact, but nothing set the `.open` and
+`.expanded` classes and the button's inline `onclick` pointed at a function
+that no longer existed. Both were rewritten against the CSS contract, which
+specifies them exactly (`.expand-details.open`, `.expand-wrap.open`,
+`.collapsed-card.expanded`, `#past-section.open`).
+
+The card header is now a tap target as well as the small hint text, and
+taps on anything interactive inside it — a time bubble, the FR24 button, a
+flight row — are excluded so they don't collapse the card underneath the
+finger.
 
 ## v4.6
 

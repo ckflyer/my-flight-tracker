@@ -79,9 +79,42 @@
     .agenda-day.in-trip { border-left: 4px solid var(--accent); padding-left: calc(1.1rem - 4px); }
     .agenda-day.in-trip:not(.trip-start) { border-top-left-radius: 0; }
     .agenda-day.in-trip:not(.trip-end) { border-bottom-left-radius: 0; }
-    .agenda-day.seamless-after { margin-bottom: 0; }
+    /* Consecutive working days in one trip share a continuous accent bar,
+       which is the point — it shows the trip as one unit. But with no gap
+       and no divider they ran together into a single slab of text, so the
+       day boundaries disappeared. A hairline rule and a little more
+       breathing room separate the days WITHOUT breaking the bar; days off
+       still get the full gap between cards. */
+    .agenda-day.seamless-after { margin-bottom: 0; padding-bottom: 1rem; }
+    .agenda-day.in-trip:not(.trip-start) {
+      border-top: 1px solid var(--border);
+      padding-top: 1rem;
+    }
     .agenda-label { font-size: 0.8rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 0.5rem; }
-    .agenda-leg { display: flex; justify-content: space-between; align-items: baseline; padding: 0.3rem 0; font-size: 0.9rem; }
+    /* One line per flight, always. The times used to carry their zone
+       suffix ("5:15 PM MST"), which on a phone pushed the row past the
+       card width and wrapped the route onto a second line. Zones live on
+       the tracker card's tap bubble now, so the agenda can use the short
+       form. The flight side truncates before the times do — a clipped
+       city pair is readable, a wrapped row is not. */
+    .agenda-leg {
+      display: flex; justify-content: space-between; align-items: baseline;
+      gap: 0.5rem; padding: 0.3rem 0; font-size: 0.9rem;
+    }
+    .agenda-leg-main {
+      min-width: 0; flex: 1 1 auto;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .agenda-route { color: var(--muted); font-weight: 600; }
+    .agenda-leg-times {
+      flex: 0 0 auto; white-space: nowrap;
+      font-size: 0.78rem; font-variant-numeric: tabular-nums;
+    }
+    @media (max-width: 430px) {
+      .agenda-leg { font-size: 0.85rem; }
+      .agenda-leg-times { font-size: 0.72rem; }
+      .agenda-leg-main strong { font-size: 0.85rem; }
+    }
     .agenda-empty { color: var(--muted); font-size: 0.85rem; }
     .dh {
       display: inline-block; padding: 0.1rem 0.4rem; border-radius: 6px; font-size: 0.65rem; font-weight: 600;
@@ -151,11 +184,11 @@
     {% if day.legs %}
       {% for leg in day.legs %}
       <div class="agenda-leg">
-        <div>
+        <div class="agenda-leg-main">
           <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
-          {{ leg.origin }} &rarr; {{ leg.destination }}
+          <span class="agenda-route">{{ leg.origin }} &rarr; {{ leg.destination }}</span>
         </div>
-        <div class="meta">{{ leg.dep }} &ndash; {{ leg.arr }}</div>
+        <div class="meta agenda-leg-times">{{ leg.dep_short or leg.dep }}&ndash;{{ leg.arr_short or leg.arr }}</div>
       </div>
       {% endfor %}
     {% else %}

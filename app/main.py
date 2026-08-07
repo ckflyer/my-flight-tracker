@@ -465,11 +465,18 @@ async def register_post(
 async def login_pilot(request: Request, username: str = Form(...), password: str = Form(...)):
     if not check_rate_limit(request, "login_pilot", max_attempts=8, window_seconds=600):
         template = jinja_env.get_template("login.html")
-        return HTMLResponse(template.render(request=request, error="Too many attempts. Try again in a few minutes."), status_code=429)
+        return HTMLResponse(template.render(request=request, username=username,
+                                           error="Too many attempts. Try again in a few minutes."),
+                            status_code=429)
     user = get_user_by_username(username)
     if not user or not verify_password(password, user["password_hash"]):
         template = jinja_env.get_template("login.html")
-        return HTMLResponse(template.render(request=request, error="Incorrect username or password."))
+        # Hand the username back so a mistyped password doesn't cost you the
+        # whole form. The password is deliberately NOT echoed: it would end
+        # up in the page source, browser cache and any proxy log, and the
+        # browser's own password manager refills it anyway.
+        return HTMLResponse(template.render(request=request, username=username,
+                                           error="Incorrect username or password."))
     request.session["user_id"] = user["id"]
     request.session.pop("viewer_user_id", None)
     request.session.pop("viewer_code", None)

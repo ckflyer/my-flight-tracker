@@ -73,7 +73,15 @@ COST_PER_QUERY_USD = float(os.environ.get("AEROAPI_COST_PER_QUERY", "0.005"))
 MONTHLY_BUDGET_USD = float(os.environ.get("AEROAPI_MONTHLY_BUDGET", "4.50"))
 # How stale FlightAware's own usage figure may be before we refresh it.
 # Their number updates roughly every 10 minutes, and the call is free.
-USAGE_REFRESH = timedelta(minutes=20)
+# Hourly. /account/usage is free, so the only cost of asking is a little
+# network traffic; FlightAware's own figure only updates every 10 minutes,
+# and an hour keeps the reading current enough that at most an hour of
+# querying (a few cents) can slip past the cap between readings.
+USAGE_REFRESH = timedelta(hours=1)
+# A reading older than this is treated as a floor rather than the truth —
+# see budget_state(). Three hours is three missed hourly polls, which means
+# something is actually wrong rather than one request having failed.
+USAGE_STALE_AFTER = timedelta(hours=3)
 # How early to take a first look. T-30 rather than T-60: by then the flight
 # plan is filed, so the revised arrival, any published delay, and the gate
 # all exist. An hour out they usually don't yet.
@@ -192,8 +200,8 @@ def query_stats(user_id: int) -> Dict[str, Any]:
 def refresh_usage(user_id: int, now: datetime) -> bool:
     """Pull FlightAware's own spend figure. Free, so not budget-limited.
 
-    Rate-limited to USAGE_REFRESH only because there's no point asking more
-    often — their figure updates every 10 minutes.
+    Rate-limited to USAGE_REFRESH (hourly) only because there's no point
+    asking more often — their figure updates every 10 minutes on their side.
     """
     api_key = credentials(user_id)
     if not api_key:
@@ -248,13 +256,21 @@ def _ago(when: Optional[datetime]) -> Optional[str]:
 
 
 def budget_state(user_id: int) -> Dict[str, Any]:
-    """Estimated spend this month, and whether we've hit the cap.
+    """Spend this month per FlightAware, and whether we've hit the cap.
 
-    Prefers FlightAware's own reported figure when it's recent; falls back
-    to our tally of result sets times the published rate. The default cap
-    sits under the $5 free credit precisely so an estimate being slightly
-    off doesn't produce a bill. The pilot can raise or lower it in
-    settings, and it is always enforced.
+    The displayed figure is FlightAware's own and nothing else. We used to
+    show a local estimate — result sets times the published rate — beside
+    it, but two numbers for one thing invites the question of which to
+    believe, and the estimate was the wrong one: it prices every query at
+    the /flights rate and so undercounts any leg that needed /schedules.
+    Until a reading arrives, `spent` is None and the page says so rather
+    than showing a number nobody should act on.
+
+    ENFORCEMENT is separate and deliberately more paranoid than the
+    display. If the reading is fresh we use it. If it's stale or missing,
+    we fall back to the local count so that the usage endpoint being
+    unreachable can't quietly disable the one control that prevents a bill.
+    That fallback never reaches the screen.
     """
     conn = get_connection()
     try:
@@ -270,25 +286,36 @@ def budget_state(user_id: int) -> Dict[str, Any]:
     stats = query_stats(user_id)
     estimated = round(stats["queries"] * COST_PER_QUERY_USD, 2)
 
-    # Prefer FlightAware's own meter when we have a recent reading — it's
-    # what actually gets billed, where ours is a count times a published
-    # rate. Their figure lags about 10 minutes, so anything older than a
-    # few hours is treated as stale and the estimate takes over.
     reported = row["aeroapi_reported_cost"] if row else None
     reported_at = _parse(row["aeroapi_usage_at"]) if row else None
-    spent, source = estimated, "estimated"
+    fresh = False
+    spent = None
     if reported is not None and reported_at is not None:
-        if (datetime.now(timezone.utc) - reported_at) < timedelta(hours=6):
-            spent, source = round(float(reported), 2), "reported"
+        spent = round(float(reported), 2)
+        fresh = (datetime.now(timezone.utc) - reported_at) < USAGE_STALE_AFTER
 
-    over = spent >= budget
+    # What we ENFORCE on. A fresh reading is the truth. Otherwise take
+    # whichever is higher of the last reading and our own count: a stale
+    # figure is a floor, not a ceiling, and querying has continued since.
+    # Erring high stops early; erring low produces a bill.
+    if fresh:
+        enforce = spent
+    else:
+        enforce = max(spent or 0.0, estimated)
+
+    over = enforce >= budget
     return {
         "queries": stats["queries"],
         "reported_calls": (row["aeroapi_reported_calls"] if row else None),
         "period": stats["period"],
-        "source": source,
-        "estimated": estimated,
+        # True once FlightAware has told us something. The settings page
+        # shows a waiting state rather than a number until then.
+        "has_reading": spent is not None,
+        "reading_fresh": fresh,
         "spent": spent,
+        # Enforcement-side only; not shown. Kept in the dict so the cap can
+        # be reasoned about in tests without reaching into internals.
+        "enforced_spend": round(enforce, 2),
         "usage_at": reported_at.isoformat() if reported_at else None,
         # Human-readable so the settings page can say how current
         # FlightAware's own number is. Theirs lags ~10 min on their side and
@@ -490,8 +517,12 @@ def refresh(user_id: int, leg, now: datetime, down: bool = False,
     # Hard stop: never spend past the monthly budget.
     budget = budget_state(user_id)
     if budget["exhausted"]:
+        # enforced_spend, not spent: `spent` is None until FlightAware has
+        # reported something, and the log needs to show the number the stop
+        # was actually made on.
         print(f"[enrichment] monthly cap reached "
-              f"(~${budget['spent']:.2f} of ${budget['budget']:.2f}) — "
+              f"(${budget['enforced_spend']:.2f} of ${budget['budget']:.2f}, "
+              f"{'per FlightAware' if budget['reading_fresh'] else 'local count'}) — "
               f"AeroAPI paused, ADS-B tracking continues")
         return None
 

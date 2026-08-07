@@ -805,6 +805,67 @@
     })();
 
 
+    // ---- Card expand/collapse + past-flights toggle ----------------------
+    // These two behaviours lost their JavaScript somewhere before v4.5: the
+    // markup and CSS survived intact, but nothing set the .open / .expanded
+    // classes and togglePast() was called by an inline onclick that pointed
+    // at a function which no longer existed. Rewritten here against the CSS
+    // contract, which specifies them exactly:
+    //   .expand-details.open      -> display: block
+    //   .expand-wrap.open         -> display: block
+    //   .collapsed-card.expanded  -> city name wraps instead of truncating
+    //   #past-section.open        -> display: block
+    (function() {
+      var card = document.getElementById('collapsed-card');
+      var details = document.getElementById('expand-details');
+      var wrap = document.getElementById('expand-wrap');
+      var hint = document.getElementById('expand-hint');
+      if (!card || !details || !wrap || !hint) return;
+
+      function setExpanded(open) {
+        details.classList.toggle('open', open);
+        wrap.classList.toggle('open', open);
+        card.classList.toggle('expanded', open);
+        hint.innerHTML = open ? 'Tap to collapse &#9652;' : 'Tap for more &#9662;';
+        hint.setAttribute('aria-expanded', open ? 'true' : 'false');
+      }
+
+      function toggle() { setExpanded(!details.classList.contains('open')); }
+
+      hint.addEventListener('click', toggle);
+
+      // The whole card header is the tap target too — the hint is a 0.72rem
+      // line of text and a poor one on a phone. Anything interactive inside
+      // the card (a time bubble, the FR24 button, a flight row) must not
+      // collapse the card out from under the tap.
+      var header = document.getElementById('collapsed-card-header');
+      if (header) {
+        header.addEventListener('click', function(e) {
+          if (e.target.closest('a, button, input, label, .chip-time[data-full]')) return;
+          toggle();
+        });
+        header.style.cursor = 'pointer';
+      }
+
+      setExpanded(false);
+    })();
+
+    // Called by the inline onclick on #past-toggle, so it has to be a real
+    // global — a function declared inside an IIFE would not be reachable
+    // from the attribute and the button would silently do nothing.
+    function togglePast() {
+      var section = document.getElementById('past-section');
+      var btn = document.getElementById('past-toggle');
+      if (!section || !btn) return;
+      var open = section.classList.toggle('open');
+      // The count comes from the button's own current label rather than a
+      // template variable, so this keeps working after the poll swaps legs
+      // and the number changes.
+      var count = (btn.textContent.match(/\((\d+)\)/) || [])[1] || '';
+      btn.textContent = (open ? 'Hide past flights (' : 'Show past flights (') + count + ')';
+    }
+    window.togglePast = togglePast;
+
     // Tap a time to reveal which zone it's in. Times on the card are local
     // to their own airport and deliberately printed without a zone suffix —
     // repeating "MST"/"CDT" on every one is what made these rows wrap. This

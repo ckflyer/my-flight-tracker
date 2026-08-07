@@ -109,6 +109,7 @@ def main():
     check("budget_state reflects the pilot's number",
           enrichment.budget_state(uid)["budget"] == 12.75)
     check("allow_overage key is gone", "allow_overage" not in enrichment.budget_state(uid))
+    check("no estimate is surfaced", "estimated" not in enrichment.budget_state(uid))
 
     print("\nCap arithmetic")
     save_settings(uid, AppSettings(aeroapi_enabled=True, aeroapi_key="fake-key-for-test",
@@ -157,16 +158,37 @@ def main():
         set_spend(uid, 0)
         set_reported(uid, 9.99, age_hours=0.0)
         st = enrichment.budget_state(uid)
-        check("reported spend is the source when fresh", st["source"] == "reported")
+        check("reported spend is what's displayed", st["spent"] == 9.99 and st["has_reading"])
         before = spy.calls
         enrichment.refresh(uid, leg, now, has_adsb=False)
         check("reported spend over limit blocks queries", spy.calls == before,
               f"calls={spy.calls}")
 
-        # A stale reported figure must not keep us capped forever.
+        # A stale reading is a FLOOR, not a ceiling. It must keep blocking
+        # (querying has only continued since), and the local count takes
+        # over if it has climbed higher.
         set_reported(uid, 9.99, age_hours=48.0)
         st = enrichment.budget_state(uid)
-        check("stale reported figure falls back to estimate", st["source"] == "estimated")
+        check("stale reading still blocks", st["exhausted"] is True)
+        check("stale reading still shown, flagged not fresh",
+              st["has_reading"] is True and st["reading_fresh"] is False)
+
+        # No reading at all: the cap must still work off the local count,
+        # or an unreachable usage endpoint would disable the one control
+        # that prevents a bill.
+        conn = get_connection()
+        conn.execute("UPDATE users SET aeroapi_reported_cost = NULL, "
+                     "aeroapi_usage_at = NULL WHERE id = ?", (uid,))
+        conn.commit(); conn.close()
+        save_settings(uid, AppSettings(aeroapi_enabled=True, aeroapi_key="fake-key-for-test",
+                                       aeroapi_budget=1.00))
+        set_spend(uid, int(5.00 / cpq))
+        st = enrichment.budget_state(uid)
+        check("no reading: nothing displayed", st["has_reading"] is False and st["spent"] is None)
+        check("no reading: local count still enforces", st["exhausted"] is True)
+        before = spy.calls
+        enrichment.refresh(uid, leg, now, has_adsb=False)
+        check("no reading: queries still blocked", spy.calls == before)
     finally:
         enrichment.fetch_leg = real_fetch
 
