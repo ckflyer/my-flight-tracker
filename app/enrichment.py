@@ -34,14 +34,18 @@ MIN_QUERY_GAP = timedelta(minutes=20)
 # that would land inside MIN_QUERY_GAP of the previous query are skipped,
 # so a short leg simply uses fewer.
 CRUISE_CHECKS = 3
-# Absolute ceiling per leg — a runaway loop can't cost more than this,
-# whatever the triggers below decide. ARRIVAL_RESERVE of these are held
-# back so a chatty flight can't starve the closeout pass.
+# Absolute ceiling per leg — a runaway loop can't cost more than this.
+# Raised from 10 to make room for the closeout pass, which is reserved
+# below so a chatty flight can't starve it.
 MAX_QUERIES_PER_LEG = 10
-# Of that ceiling, how many are held back purely for CONFIRMING ARRIVAL —
-# closeout, or the no-ADS-B fallback. Both answer the same question ("has
-# it blocked in?"), and that question is the one that closes the leg, so it
-# can't be starved by earlier triggers.
+# Of that ceiling, held back purely for confirming gate-in, so a leg
+# that spent heavily on delays still has queries left to close out.
+CLOSEOUT_RESERVE = 2
+# Of that ceiling, how many are held back purely for hunting actual_in.
+# Held back for CONFIRMING ARRIVAL — closeout, or the no-ADS-B fallback.
+# Both answer the same question ("has it blocked in?"), and that question
+# is the one that closes the leg, so it can't be starved by earlier
+# triggers.
 ARRIVAL_RESERVE = 2
 # Hard caps on the repeating triggers. Both loop on a timer until they get
 # an answer, and when gate-in simply never publishes — which happens — an
@@ -62,6 +66,7 @@ CLOSEOUT_WINDOW = timedelta(minutes=90)
 
 # What a /flights/{ident} call actually costs, per FlightAware's published
 # rate. Used only to show spend and to enforce the budget below.
+COST_PER_QUERY_USD = float(os.environ.get("AEROAPI_COST_PER_QUERY", "0.005"))
 # Hard monthly ceiling. The Personal tier includes $5/month free ($10 if
 # you feed ADS-B); defaulting under that means the app can never quietly
 # produce a bill. Raise it if you're on a paid tier.
@@ -107,23 +112,40 @@ def _store(user_id: int, leg_id: str, payload: Dict[str, Any], now: datetime,
            raw: Optional[Dict[str, Any]] = None) -> None:
     conn = get_connection()
     try:
-        # No snapshot of the airline's originally published times is kept.
-        # The FFDO line is the source of truth for "originally scheduled",
-        # and it lives in our own legs table where no airline can amend it.
-        # When the airline moves a flight, that shows up here as a revised
-        # estimate and the card reports it as a delay (or an early
-        # departure) against the FFDO time — which is the whole question.
-        # An airline-vs-airline comparison would answer something nobody
-        # asked, so first_seen is written no more.
+        existing = conn.execute(
+            "SELECT first_seen FROM flight_enrichment WHERE leg_id = ? AND user_id = ?",
+            (leg_id, user_id),
+        ).fetchone()
+        # Snapshot the first values seen and never overwrite them — that's
+        # the only record of the ORIGINAL schedule once an airline amends it.
+        first_seen = existing["first_seen"] if existing and existing["first_seen"] else json.dumps(payload)
         conn.execute(
             "INSERT OR REPLACE INTO flight_enrichment "
-            "(leg_id, user_id, fetched_at, payload, raw) VALUES (?, ?, ?, ?, ?)",
+            "(leg_id, user_id, fetched_at, payload, raw, first_seen) VALUES (?, ?, ?, ?, ?, ?)",
             (leg_id, user_id, now.isoformat(), json.dumps(payload),
-             json.dumps(raw) if raw is not None else None),
+             json.dumps(raw) if raw is not None else None, first_seen),
         )
         conn.commit()
     finally:
         conn.close()
+
+
+def get_first_seen(user_id: int, leg_id: str) -> Optional[Dict[str, Any]]:
+    """The earliest snapshot of this leg, before any schedule amendments."""
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT first_seen FROM flight_enrichment WHERE leg_id = ? AND user_id = ?",
+            (leg_id, user_id),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row or not row["first_seen"]:
+        return None
+    try:
+        return json.loads(row["first_seen"])
+    except Exception:
+        return None
 
 
 def _count_query(user_id: int, now: datetime, billed: int = 1) -> None:
@@ -228,42 +250,36 @@ def _ago(when: Optional[datetime]) -> Optional[str]:
 def budget_state(user_id: int) -> Dict[str, Any]:
     """Estimated spend this month, and whether we've hit the cap.
 
-    ESTIMATED is the operative word: FlightAware's meter isn't visible to
-    us, so this is our own tally of result sets multiplied by the published
-    rate. The default cap sits under the $5 free credit precisely so an
-    estimate being slightly off doesn't produce a bill.
+    Prefers FlightAware's own reported figure when it's recent; falls back
+    to our tally of result sets times the published rate. The default cap
+    sits under the $5 free credit precisely so an estimate being slightly
+    off doesn't produce a bill. The pilot can raise or lower it in
+    settings, and it is always enforced.
     """
     conn = get_connection()
     try:
         row = conn.execute(
-            "SELECT aeroapi_budget, aeroapi_allow_overage, aeroapi_reported_cost, "
+            "SELECT aeroapi_budget, aeroapi_reported_cost, "
             "aeroapi_reported_calls, aeroapi_usage_at FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
     finally:
         conn.close()
     budget = float(row["aeroapi_budget"]) if row and row["aeroapi_budget"] is not None else MONTHLY_BUDGET_USD
-    allow_overage = bool(row["aeroapi_allow_overage"]) if row else False
 
     stats = query_stats(user_id)
+    estimated = round(stats["queries"] * COST_PER_QUERY_USD, 2)
 
-    # Spend comes from FlightAware's own meter, full stop.
-    #
-    # There used to be a local estimate alongside it — poll count times a
-    # published per-query rate — shown for comparison. It was always going
-    # to disagree: /schedules bills at four times the /flights rate, so any
-    # leg needing a deadhead lookup was under-counted, and reconciling two
-    # numbers that measure the same thing differently is work for no gain.
-    # /account/usage is free to read and is what actually gets billed.
-    #
-    # Before the first reading lands, spend reads as zero and `source` is
-    # "pending". refresh_usage runs on every poller sweep, so that window
-    # is at most one USAGE_REFRESH interval on a brand-new key.
+    # Prefer FlightAware's own meter when we have a recent reading — it's
+    # what actually gets billed, where ours is a count times a published
+    # rate. Their figure lags about 10 minutes, so anything older than a
+    # few hours is treated as stale and the estimate takes over.
     reported = row["aeroapi_reported_cost"] if row else None
     reported_at = _parse(row["aeroapi_usage_at"]) if row else None
-    spent, source = 0.0, "pending"
+    spent, source = estimated, "estimated"
     if reported is not None and reported_at is not None:
-        spent, source = round(float(reported), 2), "reported"
+        if (datetime.now(timezone.utc) - reported_at) < timedelta(hours=6):
+            spent, source = round(float(reported), 2), "reported"
 
     over = spent >= budget
     return {
@@ -271,6 +287,7 @@ def budget_state(user_id: int) -> Dict[str, Any]:
         "reported_calls": (row["aeroapi_reported_calls"] if row else None),
         "period": stats["period"],
         "source": source,
+        "estimated": estimated,
         "spent": spent,
         "usage_at": reported_at.isoformat() if reported_at else None,
         # Human-readable so the settings page can say how current
@@ -278,10 +295,13 @@ def budget_state(user_id: int) -> Dict[str, Any]:
         # we only ask every USAGE_REFRESH, so "as of" matters.
         "usage_age": _ago(reported_at),
         "budget": round(budget, 2),
-        "allow_overage": allow_overage,
         "over_budget": over,
-        # Only actually stops when the pilot hasn't opted into overage.
-        "exhausted": over and not allow_overage,
+        # The cap is the pilot's own number and is always enforced. There
+        # is no opt-out: the previous allow-overage toggle meant the one
+        # setting that exists to prevent a surprise bill could be switched
+        # off, which is exactly backwards.
+        "exhausted": over,
+        "cost_per_query": COST_PER_QUERY_USD,
     }
 
 
@@ -415,7 +435,7 @@ def should_query(enr: Optional[Dict[str, Any]], leg, now: datetime,
             and (not last or last < touchdown)):
         return "wheels down + 5"
 
-    # 2. Still on the ground past departure. One prompt check at T+20 to
+    # 2. Still on the ground past departure. One prompt check at T+15 to
     #    see whether it has gone, then a much slower watch while it hasn't
     #    — capped, so a four-hour ground delay can't drain the leg's
     #    budget by asking the same question every fifteen minutes.
@@ -504,41 +524,32 @@ def refresh(user_id: int, leg, now: datetime, down: bool = False,
 
     fresh["_queries"] = used + 1
     prev = enr or {}
-    # These three counters are what enforce the per-trigger caps, so the
-    # prefixes MUST match the strings should_query actually returns. This
-    # line used to test for "T+15" while the trigger returned "T+20:
-    # departure check" — so _delay_tries never left 0, the `tries == 0`
-    # branch in should_query stayed true, and the "one prompt check then a
-    # slow watch, capped at 3" became a query every MIN_QUERY_GAP for as
-    # long as the aircraft sat on the ground, until the per-leg ceiling
-    # stopped it. A long gate delay could quietly spend most of a leg's
-    # budget on the same question.
     fresh["_closeout_tries"] = int(prev.get("_closeout_tries", 0)) + (1 if reason.startswith("closeout") else 0)
     fresh["_fallback_tries"] = int(prev.get("_fallback_tries", 0)) + (1 if reason.startswith("arrival due") else 0)
-    fresh["_delay_tries"] = int(prev.get("_delay_tries", 0)) + (1 if (reason.startswith("T+20") or reason.startswith("still on the ground")) else 0)
+    fresh["_delay_tries"] = int(prev.get("_delay_tries", 0)) + (1 if (reason.startswith("T+15") or reason.startswith("still on the ground")) else 0)
     _store(user_id, leg.id, fresh, now, raw=raw)
     print(f"[enrichment] {leg.id}: refreshed ({reason})")
     return reason
 
 
 # ------------------------------------------------------- status & delay
+# How far from schedule still counts as "on time" and stays the normal
+# colour. Airlines conventionally use 15 minutes; 5 is tighter, because a
+# family member watching wants to know sooner than the DOT does.
 # Zero tolerance, by the pilot's own call: one minute late IS late, and a
 # card that prints 5:59 beside a crossed-out 5:57 and calls it "on time"
-# is arguing with itself. Airlines conventionally allow 15 minutes and this
-# app allowed 5; neither matches what a family member watching the card
-# actually wants to know. Only an exact match reads as on time now, so any
+# is arguing with itself. Only an exact match reads as on time now, so any
 # non-zero delta gets both the words and the red/green tint.
 ON_TIME_TOLERANCE_MIN = 0
 
 
+# How far along a flight each phase is. Used to combine two sources that
+# each go stale in different ways, rather than letting either one win
+# outright.
 # How far past schedule a departure estimate has to move before the card
 # says "Delayed" rather than "Departing".
 DELAY_STATUS_MIN = 10
 
-# How far along a flight each phase is. Used to combine two sources that
-# each go stale in different ways (OOOI runs late, ADS-B runs blind),
-# rather than letting either one win outright — derive_status takes the
-# more advanced of the two.
 PHASE_ORDER = {
     "Unknown": -1, "Scheduled": 0, "Delayed": 0, "Cancelled": 0,
     "Departing": 1, "Taxi-out": 1,
@@ -582,14 +593,6 @@ def derive_status(enr: Optional[Dict[str, Any]], adsb_status: Optional[str]) -> 
     So: rank both and take the more advanced. Whichever notices first
     wins, and neither can drag the flight backwards.
     """
-    # Diversion is checked FIRST. A diverted flight sometimes carries the
-    # cancelled flag too — the original origin/destination pairing is dead,
-    # so FlightAware may mark it cancelled while the aircraft is very much
-    # airborne and going somewhere else. Testing cancelled first meant a
-    # diversion displayed as "Cancelled", which is both wrong and alarming
-    # for anyone watching from home: it reads as "he never left".
-    if enr and enr.get("diverted"):
-        return _ooi_phase(enr) or "Diverting"
     if enr and enr.get("cancelled"):
         return "Cancelled"
 
@@ -760,20 +763,7 @@ def diversion_info(enr: Optional[Dict[str, Any]], scheduled_dest: str) -> Option
     """Where it's actually going, if that stopped being the plan."""
     if not enr or not enr.get("diverted"):
         return None
-    sched = (scheduled_dest or "").upper()
-    # Where it actually went. AeroAPI amends `destination` on a diversion,
-    # but not always at the same moment the `diverted` flag flips, and some
-    # records carry the new field only. Take the first one that names an
-    # airport which isn't the original.
-    for key in ("destination", "diverted_to", "actual_destination"):
-        code = (enr.get(key) or "")
-        code = code.get("code") if isinstance(code, dict) else code
-        code = (code or "").strip().upper()
-        if code and code != sched:
-            return {"diverted_to": code, "scheduled": scheduled_dest}
-    # Diverted, but nothing yet says where. Returning diverted_to=None used
-    # to render the literal word "None" in the detail row — worse than
-    # saying nothing. The caller now hides the row until a field names an
-    # airport, while the DIVERTED STATUS still shows, because "he's not
-    # going where he was going" is the part worth knowing immediately.
+    actual_dest = enr.get("destination")
+    if actual_dest and actual_dest != (scheduled_dest or "").upper():
+        return {"diverted_to": actual_dest, "scheduled": scheduled_dest}
     return {"diverted_to": None, "scheduled": scheduled_dest}

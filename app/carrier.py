@@ -45,38 +45,17 @@ def needs_resolution(leg) -> bool:
     return bool(leg.is_deadhead) and not leg.operator_callsign
 
 
-def resolve_via_aeroapi(leg, api_key: str, user_id: Optional[int] = None) -> Optional[str]:
-    """One AeroAPI /schedules lookup. Costs real money — $0.02, four times
-    the /flights rate — so the caller is expected to have checked the
-    budget first.
-
-    The query is recorded against the pilot's monthly tally whether or not
-    it found anything. It previously wasn't recorded at all, which meant
-    deadhead resolutions were invisible to both the spend estimate and the
-    cap: the estimate under-reported, and an exhausted budget still spent.
-    """
+def resolve_via_aeroapi(leg, api_key: str) -> Optional[str]:
     from .aeroapi import AeroApiError, resolve_operator
     try:
         ident = resolve_operator(api_key, leg.flight_number, leg.origin,
                                  leg.destination, leg.date)
     except AeroApiError as e:
         print(f"[carrier] {leg.id}: schedules lookup failed: {e}")
-        _record_query(user_id)
         return None
-    _record_query(user_id)
     if ident:
         print(f"[carrier] {leg.id}: operated by {ident} (AeroAPI schedules)")
     return ident
-
-
-def _record_query(user_id: Optional[int]) -> None:
-    if user_id is None:
-        return
-    try:
-        from .enrichment import _count_query
-        _count_query(user_id, datetime.now(timezone.utc), 1)
-    except Exception as e:
-        print(f"[carrier] could not record query for user {user_id}: {e}")
 
 
 def resolve_via_adsb(leg, now: Optional[datetime] = None) -> Optional[str]:
@@ -112,20 +91,16 @@ def resolve_via_adsb(leg, now: Optional[datetime] = None) -> Optional[str]:
 
 
 def resolve(leg, api_key: Optional[str] = None,
-            now: Optional[datetime] = None,
-            user_id: Optional[int] = None) -> Optional[str]:
+            now: Optional[datetime] = None) -> Optional[str]:
     """Resolve and persist the operating callsign for a leg.
 
     Returns the callsign if one was found. Stored on the leg, so this runs
     once rather than on every poll.
-
-    `user_id` is whose key is paying, used only to record the query. The
-    free ADS-B probe doesn't need it.
     """
     if not needs_resolution(leg):
         return leg.operator_callsign
 
-    ident = resolve_via_aeroapi(leg, api_key, user_id) if api_key else None
+    ident = resolve_via_aeroapi(leg, api_key) if api_key else None
     if not ident:
         ident = resolve_via_adsb(leg, now)
     if not ident:

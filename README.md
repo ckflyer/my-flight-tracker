@@ -117,7 +117,6 @@ flight-tracker/
 ├── docker-compose.yml    # Dockge-ready stack
 ├── update.sh             # pulls latest + forces a rebuild (see Updating below)
 ├── tests_past_leg_detail.py  # regression cover, runs against a scratch DB
-├── tests_query_schedule.py   # asserts the per-trigger AeroAPI caps hold
 ├── requirements.txt
 └── README.md
 ```
@@ -299,56 +298,6 @@ Enrichment also gives POSITIVE flight identification: AeroAPI knows which
 record corresponds to this origin/destination pair, so a turn's two
 directions are distinguished by data rather than inference.
 
-## What the card says about delays
-
-Departure and arrival are treated differently on purpose.
-
-**Departure** gets no words. The departure chip is tinted red when he left
-late and green when he left early, and that's all — a "Departed 2 min late"
-line underneath repeats in a sentence what the colour already said.
-
-**Arrival** keeps its wording *and* the tint: "Arrived 6 min early" beside a
-green 6:46 PM. When someone is driving to the airport, how early or late he
-gets in is the whole question, and a number answers it in a way a colour
-can't.
-
-Both are measured against the FFDO line (see above), at zero tolerance —
-one minute late is late.
-
-## Trip breaks
-
-A blank line in the pasted FFDO schedule marks a new trip. On top of that,
-`apply_gap_trip_starts` suggests a break wherever the duty-day gap between
-one flying day and the next is at least `GAP_TRIP_THRESHOLD_HOURS` (32,
-lowered from 35 in v4.8 — a 33-hour break is a trip break in practice).
-
-Duty is measured as arrival + 15 min to next departure - 45 min, not
-block-to-block, so the gap reflects time actually off.
-
-Every one of these is only ever a SUGGESTION on the import review page.
-Nothing is saved until the pilot confirms it, and an explicit blank-line
-break from the paste is never removed by the heuristic — it only ever adds.
-
-## The FFDO line is the source of truth
-
-Everything on the card is measured against the schedule the pilot pasted
-in, never against the airline's published one. `departure_delay` and
-`arrival_delay` both take `leg.dep_datetime_utc()` / `leg.arr_datetime_utc()`
-as their baseline; AeroAPI's `scheduled_out` / `scheduled_in` are stored
-but never used as a reference point.
-
-This matters because airlines amend published schedules mid-day. If a
-flight bid at 5:57 is republished at 6:40, that is a 43-minute DELAY and
-the card says so — it is not a new "scheduled" time, and the struck-through
-figure does not move. The same rule covers leaving early. The FFDO number
-lives in our own `legs` table where nothing external can revise it.
-
-An earlier design also snapshotted the airline's first published times
-(`flight_enrichment.first_seen`) so amended figures could be compared
-against what was originally advertised. That answered a question this app
-doesn't ask, and it's no longer written — the column remains only because
-SQLite column drops mean a table rebuild.
-
 ## Arrival times: fact before forecast
 
 Arrival is taken in this order: the airline's actual gate-in, then OUR OWN
@@ -406,14 +355,12 @@ thrown away.
 
 Progress is pinned to zero until there is evidence the aircraft actually
 left: a live fix showing not-on-ground, or a status of In Air or later.
-`compute_progress` once fell back to measuring elapsed clock time against
-the SCHEDULE when there was no live fix, so a flight still at the gate
-showed 27% en route and, past its scheduled arrival, 100%. That fallback
-was removed in v4.0 — with no live position there is now no progress figure
-at all, and the bar simply isn't drawn. The guard is kept because it also
-covers the case where a fix exists but the aircraft hasn't moved. When
-revised times are known, progress and ETE are recomputed against those
-rather than the superseded schedule.
+Without that guard, `compute_progress`'s elapsed-time fallback measured the
+clock against the SCHEDULE, so a flight still at the gate showed 27% (and,
+once past its scheduled arrival, 100%) en route. The guard applies with or
+without an AeroAPI key, because that fallback is exactly what a pilot with
+no key relies on. When revised times are known, progress and ETE are
+recomputed against those rather than the superseded schedule.
 
 ## Closing a leg out
 
@@ -471,22 +418,14 @@ telling us nothing, and hit the per-leg cap on an ordinary flight.
     `get_current_info`, because "current" also drives flight selection, the
     map and the card, and moving that boundary would change all of them.
   * **T+20, then every 30 min** — while the aircraft is still ON THE
-    GROUND past its departure time. One prompt check at T+20, then a slower
-    watch, `MAX_DELAY_WATCH_TRIES = 3` in total. It stops the moment the
-    aircraft is seen airborne, handing straight over to the cruise checks
-    rather than waiting for the next 30-minute tick.
-
-    The counter that enforces that cap keys off the trigger's reason
-    string, and through v4.5 it tested for "T+15" while the trigger
-    returned "T+20" — so the count never advanced, the first branch stayed
-    true, and a flight stuck at the gate re-asked the same question every
-    `MIN_QUERY_GAP` until the per-leg ceiling stopped it. Eight queries
-    where three were intended.
+    GROUND past its departure time. One prompt check, then a slower watch,
+    capped at 3 total. It stops the moment the aircraft is seen airborne,
+    handing straight over to the cruise checks rather than waiting for the
+    next 30-minute tick.
   * **3 cruise checks** — evenly spaced between ACTUAL departure and
     estimated wheels-on. They require the aircraft to genuinely be off the
     ground: gated only on an anchor, they fired while a delayed flight sat
-    at the gate. Any falling inside the `MIN_QUERY_GAP` floor (20 min)
-    are skipped
+    at the gate. Any falling inside the 15-minute floor are skipped
     outright (the latest due checkpoint wins), so a short leg uses fewer
     rather than firing them all late.
   * **Wheels down + 5** — often already on stand, closing the leg in one
@@ -495,8 +434,7 @@ telling us nothing, and hit the per-leg cap on an ordinary flight.
     counts, so a single bad alt_baro frame on approach can't trigger it
     early. The recorded time is backdated to the wheels-down moment, not to
     when confirmation finished.
-  * **Closeout** — every 10 minutes until gate-in, capped at 2 attempts
-    (`MAX_CLOSEOUT_TRIES`).
+  * **Closeout** — every 10 minutes until gate-in, capped at 3 attempts.
   * **Arrival fallback** — for legs with NO ADS-B at all, where no
     wheels-down event can ever fire. Capped at 2.
 
@@ -509,13 +447,9 @@ takeoff when the API hasn't caught up — without that fallback a flight
 departing between ground checks has no anchor and cruise checks can't
 start at all.
 
-Every trigger has its own cap and none borrows from another, but the caps
-added together (1 + 3 + 3 + 1 + 2 + 2) come to more than the ceiling, so
-`MAX_QUERIES_PER_LEG = 10` is what actually bounds a pathological leg —
-one that is delayed on the ground, then late, then never publishes a
-gate-in. `ARRIVAL_RESERVE = 2` of those ten are unavailable to anything
-except closeout and the no-ADS-B fallback, so a chatty leg cannot arrive
-at its own ending with nothing left to spend.
+Every trigger has its own cap; none borrows from another. The reachable
+maximum is 10 with ADS-B and 9 without, against a hard ceiling of
+`MAX_QUERIES_PER_LEG = 10`, of which 2 are reserved for closeout alone.
 
 Typical 5 queries per leg, worst case 8. At 50 legs/month that's about
 $1.25, worst case $1.75.
@@ -527,24 +461,33 @@ which is why deadhead carrier resolution is done once per leg and stored.
 At ~50 legs/month and 5-8 queries per leg that's roughly $1.25-$1.75/month,
 inside the Personal tier's $5 free credit. `MAX_QUERIES_PER_LEG` (10) caps
 any single leg, `ARRIVAL_RESERVE` (2) of those are held for confirming
-gate-in, and `AEROAPI_MONTHLY_BUDGET` (default $4.50) is a hard monthly
-stop — queries cease entirely once it's reached, so the app can never
-quietly produce a bill.
+gate-in, and the per-pilot monthly limit is a hard stop — queries cease
+entirely once it's reached, so the app can never quietly produce a bill.
 
-Spend comes from FlightAware's OWN meter and nowhere else.
-`GET /account/usage` is free and is polled at most every 20 minutes.
+That limit is set by each pilot in Settings ("Monthly spend limit"), stored
+on the `users` row, and defaults to $4.50 —  just under the Personal tier's
+$5 free credit, so an estimate that's slightly off can't produce a bill.
+`AEROAPI_MONTHLY_BUDGET` only supplies the fallback for a row that has no
+value. A limit of $0 stops all AeroAPI queries while keeping the key saved;
+live ADS-B tracking is free and is never affected.
 
-There used to be a local estimate alongside it — poll count times a
-published per-query rate — displayed for comparison. It was removed in
-v4.8: it was always going to disagree, since `/schedules` bills at four
-times the `/flights` rate, so any leg needing a deadhead lookup was
-under-counted. Reconciling two numbers that measure the same thing
-differently is work for no gain.
+The limit is **always enforced**. The old "keep querying past $X" toggle
+was removed in v4.6: the one setting that exists to prevent a surprise bill
+should not itself be switchable off. Anyone on a paid tier who doesn't mind
+the overage raises the number instead, which is the same outcome stated
+honestly. The `aeroapi_allow_overage` column remains on the table because
+migrations here are append-only; nothing reads it.
 
-Before the first reading lands, spend reads $0.00 and the source is
-`pending`, so the cap can't bite during that window. `refresh_usage` runs
-on every poller sweep, so it's at most one `USAGE_REFRESH` interval on a
-brand-new key.
+Note that the local estimate prices every query at the `/flights` rate, so
+a leg that needed a `/schedules` lookup is undercounted by about $0.015.
+That's one more reason to prefer FlightAware's own figure below.
+
+Spend is taken from FlightAware's OWN meter where possible:
+`GET /account/usage` is free, is polled at most every 20 minutes, and
+replaces the local estimate. Their figure updates every 10 minutes rather
+than in real time, so anything older than six hours is treated as stale and
+the estimate takes over. Settings shows the poll count and dollars against
+the cap, when the figure was last pulled, and which source it came from.
 
 ## Storage
 
@@ -552,11 +495,7 @@ Everything — schedule legs, users/accounts, and live
 breadcrumb positions — lives in `data/flighttracker.db` (SQLite). If you're
 upgrading from a version that used `data/schedule.json` or
 `data/settings.json`, those get imported automatically and attached to
-whichever account you create first via `/setup`. The import runs ONCE:
-`schedule.json` is renamed to `schedule.json.imported` afterwards. Before
-v4.6 the guard was "no legs exist", which is also true right after a pilot
-deletes their whole schedule on purpose — so the old one silently came
-back on the next restart.
+whichever account you create first via `/setup`.
 
 `data/secret_key.txt` signs login session cookies. It's generated once and
 must stay stable — deleting it logs everyone out.
@@ -599,45 +538,54 @@ on the host and never pushed.
 instead — GitHub's browser uploader doesn't preserve the executable bit,
 so `bash update.sh` is the safe way to invoke it either way.)
 
+## v4.6
+
+* **Monthly spend limit is now a number the pilot sets**, replacing the
+  keep-querying-past-the-cap toggle. See Cost control above.
+* **Times no longer wrap mid-chip.** `.chip-delay` used to be a fourth flex
+  sibling inside `.time-chip`, so a long note like "1h 46m late" widened the
+  arrival chip until flex shrank both chips and their text wrapped — which
+  is what split "PHX" from "7:03 PM" onto separate lines. Code and time now
+  sit in a `white-space: nowrap` `.chip-line`, with the delay note stacked
+  beneath inside `.chip-body`. If a card is ever genuinely too narrow the
+  whole arrival chip drops to the next line, which stays readable.
+* **Tap a time to see its zone.** Card times are local to their own airport
+  and printed without a zone suffix on purpose — repeating MST/CDT on every
+  one is what crowded these rows originally. A small bubble now puts the
+  zone one tap away. It reuses the zoned strings already computed for the
+  detail rows, so there is no extra AeroAPI cost. `applyTime()` refreshes
+  `data-full` alongside the visible text; otherwise a delayed flight would
+  pop its ORIGINAL scheduled time.
+
 ## Notes
 
-- All times shown are **local to the airport** + timezone abbreviation.
+- **`viewer.html` is missing JavaScript as of v4.5 — see below.** Two
+  behaviours have no code behind them: nothing toggles `#expand-details` /
+  `#expand-wrap`, and `togglePast()` is called by an inline `onclick` but
+  never defined. The markup and CSS for both are intact. A quick audit,
+  worth repeating after any large template edit:
+
+  ```bash
+  grep -c "function togglePast" templates/viewer.html   # must be 1
+  grep -c "expand-details'" templates/viewer.html       # must be >0
+  ```
+
+  A related trace of the same failure sits above `applyEnrichment()`, where
+  the docstring for `selectLeg()` has been absorbed into the following
+  comment block. This is the recurring colliding-edit mode: verify after
+  every multi-part edit.
+- All times shown are **local to the airport**. On the collapsed card the
+  zone abbreviation is behind a tap (see v4.6); the expanded detail rows
+  still print it inline.
 - Callsigns / tracking links use the **ENY** prefix.
 - **On time means exactly on time.** `ON_TIME_TOLERANCE_MIN` is 0, so a
   one-minute-late departure reads as late and is tinted red. An earlier
   5-minute grace meant the card printed 5:59 beside a crossed-out 5:57 and
   called it on time, which is an argument with itself.
-- **Past flights keep their detail.** Actual times, gates, the frozen
-  closeout record and the airline-data age all stay visible after a leg
-  ages out of the current window — useful when a spouse is driving to the
-  airport for a pickup. Everything a live flight shows is there except the
-  live ADS-B readout and the progress bar, which are the only two things
-  that genuinely mean "right now". Nothing recomputes and no query is
-  spent; it's all read from disk.
-- **Tap the card to expand it.** `#expand-hint` toggles `.expanded` on the
-  card, `.open` on `#expand-details` and `#expand-wrap`. The past and
-  upcoming lists live inside `#expand-wrap`, so that toggle is also what
-  makes other flights selectable — if it ever breaks again, the symptom is
-  "I can't click on any flight" rather than anything about expanding.
-- **`togglePast` is defined on `window` on purpose.** The button uses an
-  inline `onclick`, which can only reach globals; declared with a bare
-  `function` inside the page's IIFE it would silently stop working.
-- **The active leg is listed as well as carded.** It's in neither
-  `past_groups` nor `upcoming_groups`, so without its own "Current" row
-  there was no way back to it after tapping another flight. It's shaded
-  with `--row-current`, which is a theme variable — darker than the white
-  cards on light, lighter than the dark cards on dark.
-- **Enrichment refreshes on EVERY poll.** `applyEnrichment` is called at
-  the top level of the poll handler. It once sat nested inside the progress
-  bar's conditionals, so it only ran for a flight with a live position —
-  the "Airline data" age froze on the ground and jumped on refresh.
-- **Diversion beats cancellation.** A diverted flight often carries both
-  flags, and AeroAPI returns two records for the slot: the original pairing
-  (which the airline may mark cancelled) and the one that actually flew.
-  `pick_flight` ranks by schedule proximity, then evidence of flying, then
-  diverted over cancelled; `derive_status` checks diverted first. Getting
-  this backwards showed a diversion as "Cancelled", which reads as "he
-  never left".
+- **Past flights keep their detail.** Actual times, gates and the frozen
+  closeout record stay visible after a leg ages out of the current window
+  — useful when a spouse is driving to the airport for a pickup. Nothing
+  recomputes and no query is spent; it's all read from disk.
 - Taxi-out/Taxi-in/Landing phase detection depends on each airport having
   enough ADS-B ground coverage to see it — busier fields (DFW) are reliable,
   smaller regional stations are a toss-up. When there's no coverage for a
@@ -648,15 +596,27 @@ so `bash update.sh` is the safe way to invoke it either way.)
 ## Tests
 
 `tests_past_leg_detail.py` covers the past-leg and T-30 preview paths
-through `compute_live_payload`. `tests_query_schedule.py` walks a flight
-that never leaves the gate and asserts the per-trigger caps hold — the
-counters in `refresh()` key off trigger REASON STRINGS, so a reworded
-trigger silently disables its own cap. Run both from this directory:
+through `compute_live_payload`.
+
+`tests_budget_limit.py` covers the monthly spend limit. It replaces
+`enrichment.fetch_leg` with a spy that counts calls, so "the cap stops
+queries" is asserted at the real enforcement point rather than inferred
+from what the settings page displays. It also asserts that RAISING the
+limit resumes querying the same leg — without that, a test that only checks
+for zero calls passes just as happily when the leg was outside the query
+window for some unrelated reason.
+
+Run either from this directory:
 
 ```bash
 python tests_past_leg_detail.py
-python tests_query_schedule.py
+python tests_budget_limit.py
 ```
+
+One fixture note worth keeping: `dep_time_local` is local to the ORIGIN
+airport. Building it from UTC clock hands puts a PHX leg seven hours out
+and silently moves it outside the query window, which is exactly how a
+budget test can pass for the wrong reason.
 
 It writes to a scratch database via the `PT_DB_FILE` environment variable
 and never touches `data/flighttracker.db`. **Keep test files inside this

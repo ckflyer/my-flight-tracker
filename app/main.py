@@ -2,7 +2,6 @@ from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
-from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import datetime, date, timedelta, time as dtime
 from zoneinfo import ZoneInfo
@@ -11,10 +10,10 @@ import calendar as cal_module
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from .schedule import load_schedule, get_current_info, delete_leg, save_schedule
-from .livesource import live_state_for_leg
+from .livesource import live_summary, live_state_for_leg
 from .enrichment import (get_enrichment, derive_status, departure_delay,
-                         arrival_delay, gate_info, diversion_info,
-                         budget_state, USAGE_REFRESH)
+                         arrival_delay, gate_info, diversion_info, query_stats,
+                         budget_state)
 from .closure import get_closeout
 from .models import FlightLeg
 from .parser import parse_schedule_text
@@ -39,25 +38,7 @@ jinja_env = Environment(
 )
 jinja_env.globals["version"] = VERSION
 
-@asynccontextmanager
-async def _lifespan(_app: FastAPI):
-    """Record tracks for active flights even with nobody watching.
-
-    The container runs a single uvicorn worker, so this is one poller per
-    deployment. If workers are ever added, this would start one per worker
-    and they'd poll the same flights redundantly — the shared cache in
-    livesource would absorb most of it, but the right fix then is to move
-    this to a separate process.
-
-    Was `@app.on_event("startup")`, which FastAPI deprecated; same
-    behaviour, no warning on boot.
-    """
-    from .poller import start as start_poller
-    start_poller()
-    yield
-
-
-app = FastAPI(title="Pilot Tracker", lifespan=_lifespan)
+app = FastAPI(title="Pilot Tracker")
 app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
 app.add_middleware(
     SessionMiddleware,
@@ -66,6 +47,20 @@ app.add_middleware(
     max_age=60 * 60 * 24 * 365,  # a year — sessions are meant to be persistent
     same_site="lax",
 )
+
+
+@app.on_event("startup")
+async def _start_track_poller():
+    """Record tracks for active flights even with nobody watching.
+
+    The container runs a single uvicorn worker, so this is one poller per
+    deployment. If workers are ever added, this would start one per worker
+    and they'd poll the same flights redundantly — the shared cache in
+    livesource would absorb most of it, but the right fix then is to move
+    this to a separate process.
+    """
+    from .poller import start as start_poller
+    start_poller()
 
 
 # ---------------------------------------------------------------------------
@@ -280,11 +275,7 @@ def group_legs_by_day(legs: list, day_numbers: dict, now: datetime, time_format:
     return groups
 
 
-# A gap this long between duty days means a new trip. Lowered from 35 to
-# 32 on the pilot's call — a 33-hour break is a trip break in practice.
-# Only ever a SUGGESTION on the import review page; the pilot confirms
-# every one before anything is saved.
-GAP_TRIP_THRESHOLD_HOURS = 32.0
+GAP_TRIP_THRESHOLD_HOURS = 35.0
 
 
 def apply_gap_trip_starts(legs: list, threshold_hours: float = GAP_TRIP_THRESHOLD_HOURS) -> None:
@@ -686,9 +677,9 @@ def _finish_payload(user_id: int, selected_leg, live, extra, now: datetime,
             except Exception:
                 pass
 
-    # Departure guard, applied last so it sees the final status. A flight
-    # that isn't demonstrably airborne shows no progress bar and no
-    # distance-to-go, rather than a figure derived from a schedule.
+    # Departure guard, applied last so it sees the final status. Works with
+    # or without AeroAPI, since the elapsed-time fallback in
+    # compute_progress is exactly what a pilot with no key relies on.
     _airborne = (
         (live is not None and live.get("on_ground") is False)
         or extra.get("status") in ("In Air", "Landing", "Taxi-in", "Arrived", "Diverting")
@@ -703,7 +694,7 @@ def _finish_payload(user_id: int, selected_leg, live, extra, now: datetime,
     return live, extra
 
 
-def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now: datetime, time_format: str = "24"):
+def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now: datetime, poll_seconds: int, time_format: str = "24"):
     """Live ADS-B + progress/ETE/breadcrumb/aircraft/phase for the selected
     leg, if it's genuinely the active one. Shared by the full page render
     and the lightweight polling endpoint so the two never drift apart."""
@@ -765,7 +756,7 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool, now
     # overwrote every OOOI-derived status, including "Delayed". A flight
     # sitting at the gate two hours late still read "Departing" because the
     # airline's own view of it was computed and then thrown away.
-    extra["status"] = compute_phase(selected_leg, live, history, now)
+    extra["status"] = compute_phase(selected_leg, live, history, now, poll_seconds)
     # When the aircraft isn't being tracked, say so and say when it last
     # was, instead of guessing a phase.
     if extra["status"] == "Unknown":
@@ -813,7 +804,7 @@ async def viewer(request: Request, leg: Optional[str] = None):
 
     selected_leg, is_selected_live = resolve_selected_leg(info, leg)
     selected = leg_view(selected_leg, now, tf)
-    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, tf)
+    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, settings.poll_seconds, tf)
     if selected:
         selected.update(extra)
     settings_dict = settings.model_dump()
@@ -832,7 +823,6 @@ async def viewer(request: Request, leg: Optional[str] = None):
         # upcoming/past lists, so without this there's no row to tap to
         # return to it.
         "current_leg_id": info.current.id if info.current else None,
-        "current_row": leg_view(info.current, now, tf),
         "upcoming_groups": group_legs_by_day(info.upcoming, day_numbers, now, tf),
         "past_groups": group_legs_by_day(info.past, day_numbers, now, tf),
         "past_count": len(info.past),
@@ -903,13 +893,6 @@ async def calendar_page(request: Request):
     for leg in legs:
         by_date.setdefault(leg.date, []).append(leg)
     trips = build_trip_spans(legs, settings.time_format)
-    # Which leg is airborne (or next up) right now, so the agenda can shade
-    # it. Cheap — get_current_info is already reading the same schedule.
-    try:
-        current_leg_id = get_current_info(user_id).current
-        current_leg_id = current_leg_id.id if current_leg_id else None
-    except Exception:
-        current_leg_id = None
 
     def trip_for_day(d):
         for trip in trips:
@@ -983,7 +966,6 @@ async def calendar_page(request: Request):
         request=request,
         month_blocks=month_blocks,
         settings=settings.model_dump(),
-        current_leg_id=current_leg_id,
         is_pilot=pilot is not None,
     ))
 
@@ -1118,11 +1100,24 @@ async def settings_page(request: Request):
     s = load_settings(pilot["id"])
     template = jinja_env.get_template("settings.html")
     ctx = {"request": request, "s": s, "saved": False, "is_admin": bool(pilot["is_admin"]),
-           "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"]),
-           "usage_refresh_min": int(USAGE_REFRESH.total_seconds() // 60)}
+           "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"])}
     if pilot["is_admin"]:
         ctx["all_users"] = list_all_users()
     return HTMLResponse(template.render(**ctx))
+
+
+def _clean_budget(raw, fallback: float) -> float:
+    """Parse the monthly spend limit from the settings form.
+
+    Anything unparseable keeps the stored value — silently resetting a
+    pilot's cap to a default because they fat-fingered a character is the
+    one failure this field can't afford.
+    """
+    try:
+        value = float(str(raw).strip().lstrip("$").replace(",", ""))
+    except (TypeError, ValueError):
+        return round(float(fallback), 2)
+    return round(max(0.0, min(500.0, value)), 2)
 
 
 @app.post("/settings")
@@ -1130,7 +1125,10 @@ async def settings_save(
     request: Request,
     aeroapi_enabled: str = Form(""),
     aeroapi_key: str = Form(""),
-    aeroapi_allow_overage: str = Form(""),
+    # Default is EMPTY, not "4.50": FastAPI substitutes the declared default
+    # for a blank field, so a numeric default here would silently reset a
+    # pilot's cap whenever the input was cleared. Blank means "keep stored".
+    aeroapi_budget: str = Form(""),
     time_format: str = Form("24"),
     theme: str = Form("dark"),
     poll_seconds: int = Form(15),
@@ -1145,7 +1143,14 @@ async def settings_save(
         # A blank key with the toggle on means "keep what's stored" — the
         # form shows the key masked, so submitting shouldn't wipe it.
         aeroapi_key=aeroapi_key.strip() or load_settings(pilot["id"]).aeroapi_key,
-        aeroapi_allow_overage=bool(aeroapi_allow_overage),
+        # Clamped, not trusted: this comes from a free-text number input,
+        # and a negative or absurd value would either disable tracking
+        # silently or defeat the point of having a cap at all. 0 is a valid
+        # choice and means stop querying entirely. Taken as a string and
+        # parsed here rather than declared float so that a typo returns the
+        # settings page with the old value intact, instead of FastAPI's raw
+        # 422 error page.
+        aeroapi_budget=_clean_budget(aeroapi_budget, load_settings(pilot["id"]).aeroapi_budget),
         time_format="12" if time_format == "12" else "24",
         theme="light" if theme == "light" else "dark",
         poll_seconds=max(10, min(300, int(poll_seconds))),
@@ -1155,8 +1160,7 @@ async def settings_save(
     save_settings(pilot["id"], s)
     template = jinja_env.get_template("settings.html")
     ctx = {"request": request, "s": s, "saved": True, "is_admin": bool(pilot["is_admin"]),
-           "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"]),
-           "usage_refresh_min": int(USAGE_REFRESH.total_seconds() // 60)}
+           "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"])}
     if pilot["is_admin"]:
         ctx["all_users"] = list_all_users()
     return HTMLResponse(template.render(**ctx))
@@ -1216,7 +1220,7 @@ async def api_selected(request: Request, leg: Optional[str] = None):
     selected_leg, is_selected_live = resolve_selected_leg(info, leg)
     if not selected_leg:
         return {"error": "no flight"}
-    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, tf)
+    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, settings.poll_seconds, tf)
     return {
         "is_selected_live": is_selected_live,
         # Which leg the app currently considers active. The page compares
@@ -1278,7 +1282,7 @@ async def api_leg(request: Request, leg_id: str):
         return {"error": "no flight"}
 
     view = leg_view(selected_leg, now, tf)
-    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, tf)
+    live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, settings.poll_seconds, tf)
     if view:
         view.update(extra)
     return {

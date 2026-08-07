@@ -83,7 +83,7 @@ def main():
                     "diverted": False})
 
     now = datetime.now(timezone.utc)
-    live, extra = compute_live_payload(uid, past, False, now, "12")
+    live, extra = compute_live_payload(uid, past, False, now, 15, "12")
 
     print("\npast leg (closed out yesterday):")
     check("reports the arrival time", bool(extra.get("arr_delay")),
@@ -120,7 +120,7 @@ def main():
         "gate_origin": "C12",
     }, datetime.now(timezone.utc) - timedelta(minutes=3))
 
-    live, extra = compute_live_payload(uid, soon, False, datetime.now(timezone.utc), "12")
+    live, extra = compute_live_payload(uid, soon, False, datetime.now(timezone.utc), 15, "12")
     print("\nupcoming leg (T-25, preview enrichment stored):")
     check("gate visible before departure",
           (extra.get("gates") or {}).get("origin_gate") == "C12")

@@ -13,12 +13,10 @@
     :root, [data-theme="dark"] {
       --bg: #0f1419; --card: #1a2332; --accent: #3b82f6;
       --text: #e7ecf3; --muted: #8b9bb4; --good: #22c55e; --warn: #f59e0b; --border: #2a3548;
-      --row-current: #24334a;
     }
     [data-theme="light"] {
       --bg: #f1f5f9; --card: #ffffff; --accent: #2563eb;
       --text: #0f172a; --muted: #64748b; --good: #16a34a; --warn: #d97706; --border: #e2e8f0;
-      --row-current: #e8ecf2;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html { scroll-behavior: smooth; }
@@ -84,16 +82,6 @@
     .agenda-day.seamless-after { margin-bottom: 0; }
     .agenda-label { font-size: 0.8rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 0.5rem; }
     .agenda-leg { display: flex; justify-content: space-between; align-items: baseline; padding: 0.3rem 0; font-size: 0.9rem; }
-    /* The leg that's active right now. Every other row sits on white, so a
-       light grey block is enough to find it at a glance without competing
-       with the trip banding already used on these cards. */
-    .agenda-leg.is-current {
-      background: var(--row-current);
-      border-radius: 8px;
-      padding: 0.4rem 0.55rem;
-      margin: 0.15rem -0.55rem;
-      box-shadow: inset 2px 0 0 var(--accent);
-    }
     .agenda-empty { color: var(--muted); font-size: 0.85rem; }
     .dh {
       display: inline-block; padding: 0.1rem 0.4rem; border-radius: 6px; font-size: 0.65rem; font-weight: 600;
@@ -162,7 +150,7 @@
     <div class="agenda-label">{{ day.label }}</div>
     {% if day.legs %}
       {% for leg in day.legs %}
-      <div class="agenda-leg {% if current_leg_id and leg.id == current_leg_id %}is-current{% endif %}">
+      <div class="agenda-leg">
         <div>
           <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
           {{ leg.origin }} &rarr; {{ leg.destination }}

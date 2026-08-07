@@ -1,4 +1,4 @@
-from datetime import datetime, time
+from datetime import datetime, date, time
 from typing import List
 import re
 from .models import FlightLeg
@@ -86,12 +86,7 @@ def parse_schedule_text(text: str) -> List[FlightLeg]:
             enrich_leg(leg)
             legs.append(leg)
             saw_blank = False
-        except Exception as e:
-            # A line that matched the pattern but failed to build (bad
-            # airport code, impossible date) used to disappear without
-            # trace. The import-review page shows what parsed; this shows
-            # what didn't.
-            print(f"[parser] skipping line {line!r}: {e}")
+        except Exception:
             continue
 
     def sort_key(leg: FlightLeg):

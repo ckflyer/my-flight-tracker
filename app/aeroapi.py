@@ -25,7 +25,7 @@ Auth: x-apikey header. Docs: flightaware.com/aeroapi/portal/documentation
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -95,25 +95,7 @@ def pick_flight(flights: List[Dict[str, Any]], origin: str, destination: str,
             return float("inf")
         return abs((sched - scheduled_dep).total_seconds())
 
-    # A diversion produces TWO records for the same scheduled slot: the
-    # original origin->destination pairing, which the airline may flag
-    # cancelled, and the one that actually flew and diverted. They tie on
-    # scheduled_out, so a plain min() picked whichever came back first —
-    # frequently the cancelled twin, which is why a diversion showed up as
-    # "Cancelled" with no destination.
-    #
-    # Rank by schedule proximity first, then prefer the record with real
-    # evidence of flying, then prefer diverted over cancelled.
-    def rank(f):
-        flew = bool(f.get("actual_off") or f.get("actual_on") or f.get("actual_in"))
-        return (
-            gap(f),
-            0 if flew else 1,
-            0 if f.get("diverted") else 1,
-            1 if f.get("cancelled") else 0,
-        )
-
-    best = min(candidates, key=rank)
+    best = min(candidates, key=gap)
     # More than a day away it isn't this leg, whatever the route says.
     return best if gap(best) < 86400 else None
 

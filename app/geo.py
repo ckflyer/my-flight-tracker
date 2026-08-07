@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from typing import Optional
 
 EARTH_RADIUS_NM = 3440.065
 

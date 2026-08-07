@@ -27,8 +27,6 @@
       --warn: #f59e0b;
       --border: #2a3548;
       --map-border: #334155;
-      /* Current-leg row shading: LIGHTER than the card on dark. */
-      --row-current: #24334a;
     }
     [data-theme="light"] {
       --bg: #f1f5f9;
@@ -41,8 +39,6 @@
       --warn: #d97706;
       --border: #e2e8f0;
       --map-border: #cbd5e1;
-      /* ...and DARKER than the white card on light, as asked for. */
-      --row-current: #e8ecf2;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -143,15 +139,37 @@
       font-size: 1.1rem;
       margin: 0 0.15rem;
     }
-    /* The delay text ("6 min early") is a THIRD flex item inside the arrival
-       chip, so on a narrow screen it widened that chip until the whole
-       times-row wrapped and the codes stopped lining up with the times.
-       flex-basis:100% drops it onto its own line INSIDE the chip instead,
-       so DFW/GRK and their times stay on one row whether or not the delay
-       text is present. Top-aligning the row keeps both chips level when
-       only one of them has a second line. */
-    .times-row { display: flex; gap: 1.5rem; align-items: flex-start; flex-wrap: nowrap; }
-    .time-chip { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; min-width: 0; }
+    /* A chip is [icon][ code + time ] with the delay note stacked BELOW the
+       code+time line, never beside it. Previously the delay was a fourth
+       flex sibling in the same horizontal row, so "1h 46m late" widened the
+       arrival chip until flex shrank both chips and the text wrapped
+       mid-chip — that's what split "PHX" from "7:03 PM" onto two lines.
+       chip-line is nowrap, so a code and its time can no longer be
+       separated; if a card is genuinely too narrow the whole arrival chip
+       drops to the next line instead, which stays readable. */
+    .times-row { display: flex; gap: 1.5rem; align-items: flex-start; flex-wrap: wrap; }
+    .time-chip { display: flex; align-items: flex-start; gap: 0.4rem; min-width: 0; }
+    .chip-body { display: flex; flex-direction: column; min-width: 0; position: relative; }
+    .chip-line { display: flex; align-items: baseline; gap: 0.4rem; white-space: nowrap; }
+    /* Tap a time to see which zone it's in. Deliberately opt-in: printing
+       the zone on every time is what crowded these rows in the first
+       place. */
+    .chip-time[data-full] { cursor: pointer; }
+    .time-pop {
+      position: absolute; bottom: calc(100% + 7px); left: 0;
+      background: var(--text); color: var(--card);
+      font-size: 0.7rem; font-weight: 600; letter-spacing: 0.01em;
+      white-space: nowrap; padding: 0.25rem 0.5rem; border-radius: 6px;
+      opacity: 0; visibility: hidden; transform: translateY(3px);
+      transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s;
+      pointer-events: none; z-index: 30;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.28);
+    }
+    .time-pop::after {
+      content: ""; position: absolute; top: 100%; left: 0.75rem;
+      border: 4px solid transparent; border-top-color: var(--text);
+    }
+    .time-pop.show { opacity: 1; visibility: visible; transform: translateY(0); }
     .chip-icon {
       width: 19px; height: 19px; border-radius: 50%;
       background: var(--muted);
@@ -231,11 +249,6 @@
       margin-bottom: 0.75rem;
     }
     [data-theme="light"] .toggle { background: #e2e8f0; }
-    /* The active leg, listed among the others. Light grey against the
-       white rows, with the accent edge used elsewhere for selection. */
-    .upcoming-item.is-current-leg { background: var(--row-current); box-shadow: inset 2px 0 0 var(--accent); }
-    /* Destination code showing a diversion airport rather than the filed one. */
-    .chip-code.diverted-code { color: var(--bad); font-weight: 700; }
     #past-section { display: none; }
     #past-section.open { display: block; }
     .live-box {
@@ -411,16 +424,8 @@
       font-size: 0.82rem; font-weight: 600;
     }
     .chip-delay {
-      flex-basis: 100%; font-size: 0.72rem; font-weight: 600;
-      margin-top: 0.05rem; white-space: nowrap;
-    }
-    /* Mobile was "just a little cramped" — tighten the gap and the type a
-       notch rather than letting anything wrap. */
-    @media (max-width: 430px) {
-      .times-row { gap: 0.9rem; }
-      .collapsed-card .chip-code { font-size: 0.82rem; }
-      .collapsed-card .chip-time { font-size: 0.9rem; }
-      .chip-delay { font-size: 0.68rem; }
+      display: block; font-size: 0.72rem; font-weight: 600; margin-top: 0.1rem;
+      white-space: nowrap;
     }
     .chip-delay.early { color: var(--good); }
     .chip-delay.late { color: var(--bad); }
@@ -557,8 +562,15 @@
               <polyline points="7 7 17 7 17 17"></polyline>
             </svg>
           </span>
-          <span class="chip-code" id="card-origin-code">{{ current.origin }}</span>
-          <span class="chip-time {{ current.dep_delay.state if current.dep_delay and current.dep_delay.state in ('early','late') else '' }}" id="card-dep-time">{{ (current.dep_delay.time_short if current.dep_delay and current.dep_delay.time_short else current.dep_short) or current.dep }}</span>
+          <span class="chip-body">
+            <span class="chip-line">
+              <span class="chip-code" id="card-origin-code">{{ current.origin }}</span>
+              <span class="chip-time {{ current.dep_delay.state if current.dep_delay and current.dep_delay.state in ('early','late') else '' }}" id="card-dep-time"
+                    data-pop="pop-dep"
+                    data-full="{{ (current.dep_delay.time if current.dep_delay and current.dep_delay.time else current.dep) or '' }}">{{ (current.dep_delay.time_short if current.dep_delay and current.dep_delay.time_short else current.dep_short) or current.dep }}</span>
+            </span>
+            <span class="time-pop" id="pop-dep" role="tooltip" aria-hidden="true"></span>
+          </span>
         </div>
         <div class="time-chip">
           <span class="chip-icon">
@@ -567,10 +579,17 @@
               <polyline points="17 7 17 17 7 17"></polyline>
             </svg>
           </span>
-          <span class="chip-code" id="card-dest-code">{{ current.destination }}</span>
-          <span class="chip-time {{ current.arr_delay.state if current.arr_delay and current.arr_delay.state in ('early','late') else '' }}" id="card-arr-time">{{ (current.arr_delay.time_short if current.arr_delay and current.arr_delay.time_short else current.arr_short) or current.arr }}</span>
-          <span class="chip-delay {{ current.arr_delay.state if current.arr_delay else '' }}" id="card-arr-delay"
-                style="{{ '' if (current.arr_delay and current.arr_delay.state in ('early','late','cancelled')) else 'display:none' }}">{{ current.arr_delay.short_text if current.arr_delay and current.arr_delay.short_text else '' }}</span>
+          <span class="chip-body">
+            <span class="chip-line">
+              <span class="chip-code" id="card-dest-code">{{ current.destination }}</span>
+              <span class="chip-time {{ current.arr_delay.state if current.arr_delay and current.arr_delay.state in ('early','late') else '' }}" id="card-arr-time"
+                    data-pop="pop-arr"
+                    data-full="{{ (current.arr_delay.time if current.arr_delay and current.arr_delay.time else current.arr) or '' }}">{{ (current.arr_delay.time_short if current.arr_delay and current.arr_delay.time_short else current.arr_short) or current.arr }}</span>
+            </span>
+            <span class="chip-delay {{ current.arr_delay.state if current.arr_delay else '' }}" id="card-arr-delay"
+                  style="{{ '' if (current.arr_delay and current.arr_delay.state in ('early','late','cancelled')) else 'display:none' }}">{{ current.arr_delay.short_text if current.arr_delay and current.arr_delay.short_text else '' }}</span>
+            <span class="time-pop" id="pop-arr" role="tooltip" aria-hidden="true"></span>
+          </span>
         </div>
       </div>
     </div>
@@ -619,25 +638,13 @@
           {% if current.ete %}<span>ETE {{ current.ete }}</span>{% endif %}
         </div>
       </div>
-      </div>
-      {# live-section closes HERE, above the detail block.
-         It used to wrap Flight detail as well, and applyLegPayload hides
-         live-section outright for any leg that isn't the active one — so
-         selecting a past flight hid its gates, its actual times, its
-         closeout record and its airline-data age along with the live box.
-         The data was fetched, stored and returned in the payload; the
-         markup just had it inside a container that got switched off.
-         Only the live ADS-B readout and the progress bar belong to
-         "is this flying right now". Everything below is history and
-         should survive the flight. #}
 
       <div class="detail-block" id="flight-detail" style="{{ '' if current.enriched else 'display:none' }}">
         <h3>Flight detail</h3>
-        {# No "Departed 2 min late" row. Whether he got out on time is
-           answered by the departure chip above being red or green; spelling
-           it out again in words is noise. Arrival keeps its wording,
-           because WHEN HE GETS THERE is the thing being waited on and
-           "6 min early" says something a colour can't. #}
+        <div class="detail-row" id="row-dep-delay" style="{{ '' if current.dep_delay else 'display:none' }}">
+          <span class="k">Departure</span>
+          <span class="v {{ current.dep_delay.state if current.dep_delay else '' }}" id="v-dep-delay">{{ current.dep_delay.text if current.dep_delay else '' }}</span>
+        </div>
         <div class="detail-row" id="row-arr-delay" style="{{ '' if current.arr_delay else 'display:none' }}">
           <span class="k">Arrival</span>
           <span class="v {{ current.arr_delay.state if current.arr_delay else '' }}" id="v-arr-delay">{{ current.arr_delay.text if current.arr_delay else '' }}</span>
@@ -670,10 +677,11 @@
           <span class="k">Airline data</span>
           <span class="v" id="v-updated">{{ current.enriched_at or '' }}</span>
         </div>
-        <div class="detail-row" id="row-diverted" style="{{ '' if (current.diversion and current.diversion.diverted_to) else 'display:none' }}">
+        <div class="detail-row" id="row-diverted" style="{{ '' if current.diversion else 'display:none' }}">
           <span class="k">Diverted to</span>
-          <span class="v late" id="v-diverted">{{ current.diversion.diverted_to if (current.diversion and current.diversion.diverted_to) else '' }}</span>
+          <span class="v late" id="v-diverted">{{ current.diversion.diverted_to if current.diversion else '' }}</span>
         </div>
+      </div>
       </div>
       <div class="buttons">
         {% if settings.show_flightaware %}
@@ -688,32 +696,6 @@
   <div class="expand-hint" id="expand-hint">Tap for more &#9662;</div>
 
   <div class="expand-wrap" id="expand-wrap">
-    {% if current_row %}
-    {# The active leg is in NEITHER past_groups nor upcoming_groups — it
-       lives in the card at the top. So once you tapped a different flight
-       there was nothing in either list to tap to get back, and the only
-       route home was the "Back to active flight" link. Listing it here,
-       shaded, means the current flight is always one tap away and is
-       obvious at a glance among the white rows. #}
-    <div class="section-label">Current</div>
-    <div class="card day-card">
-      <div class="upcoming-item is-current-leg {% if current_row.id == selected_id %}selected-row{% endif %}">
-        <div class="list-item">
-          <a class="flight-row-link" data-leg-id="{{ current_row.id }}" href="/?leg={{ current_row.id }}">
-            <div class="row-flight-num">{{ current_row.callsign }}{% if current_row.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
-            <div class="row-city-route">{{ current_row.origin }} &rarr; {{ current_row.destination }}</div>
-            <div class="row-times-row">
-              <div class="row-chip"><span class="row-chip-time">{{ current_row.dep }}</span></div>
-              <div class="row-chip"><span class="row-chip-time">{{ current_row.arr }}</span></div>
-            </div>
-          </a>
-          <div style="text-align:right">
-            <span class="status {{ current_row.status|lower|replace(' ', '-') }}">{{ current_row.status }}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-    {% endif %}
     {% if past_groups %}
     <button class="toggle" id="past-toggle" onclick="togglePast()">Show past flights ({{ past_count }})</button>
     <div id="past-section">
@@ -823,6 +805,44 @@
     })();
 
 
+    // Tap a time to reveal which zone it's in. Times on the card are local
+    // to their own airport and deliberately printed without a zone suffix —
+    // repeating "MST"/"CDT" on every one is what made these rows wrap. This
+    // puts the zone one tap away instead of on screen permanently.
+    (function() {
+      var open = null;
+
+      function close() {
+        if (open) { open.classList.remove('show'); open.setAttribute('aria-hidden', 'true'); }
+        open = null;
+      }
+
+      document.addEventListener('click', function(e) {
+        var t = e.target.closest ? e.target.closest('.chip-time[data-full]') : null;
+        if (!t) { close(); return; }
+        var pop = document.getElementById(t.getAttribute('data-pop'));
+        var full = t.getAttribute('data-full');
+        if (!pop || !full) { close(); return; }
+        // Don't let the tap fall through to the card's expand/collapse
+        // handler — asking what zone a time is in shouldn't also open or
+        // shut the whole card.
+        e.stopPropagation();
+        e.preventDefault();
+        var wasOpen = (open === pop);
+        close();
+        if (wasOpen) return;
+        pop.textContent = full;
+        pop.classList.add('show');
+        pop.setAttribute('aria-hidden', 'false');
+        open = pop;
+      });
+
+      // A stale bubble left hanging over a card that has since refreshed to
+      // a different leg would be showing the wrong flight's time.
+      document.addEventListener('scroll', close, true);
+      window.addEventListener('pt:leg-changed', close);
+    })();
+
     // Map layer toggle popover (live overlay + radar), preferences kept in
     // localStorage since the map keeps refreshing in place and the choice
     // shouldn't reset every poll.
@@ -872,7 +892,6 @@
       let liveData = {{ live | tojson if live else 'null' }};
       let currentData = {{ current | tojson if current else 'null' }};
       let isSelectedLive = {{ 'true' if is_selected_live else 'false' }};
-      const PAST_COUNT = {{ past_count | tojson }};
       let selectedId = {{ selected_id | tojson if selected_id else 'null' }};
       // The leg the SERVER considers active. When this changes (one flight
       // ends, the next becomes current) the page follows it automatically,
@@ -1064,6 +1083,8 @@
                   const parts = ['<span>' + data.progress_pct + '% en route</span>'];
                   if (data.distance_nm != null) parts.push('<span>' + data.distance_nm + ' nm to go</span>');
                   if (data.ete) parts.push('<span>ETE ' + data.ete + '</span>');
+
+                  applyEnrichment(data);
                   progLabel.innerHTML = parts.join('');
                 }
               } else {
@@ -1090,20 +1111,6 @@
 
             if (currentData) currentData.breadcrumb = data.breadcrumb;
             liveData = data.live;
-
-            // Refresh every enrichment-driven element on EVERY poll.
-            //
-            // This call used to sit three levels deep — inside
-            // `if (progWrap)`, inside `if (data.progress_pct != null)`,
-            // inside `if (progLabel)` — so enrichment only refreshed when
-            // the flight had a live progress bar. On the ground, with no
-            // ADS-B coverage, or on a past leg, it never ran at all: the
-            // "Airline data" age froze at whatever the last full page load
-            // rendered, then jumped when you refreshed. It also explains
-            // why the delay and gate rows appeared to come alive only once
-            // the flight was airborne.
-            applyEnrichment(data);
-
             renderMap(currentData, liveData, false);
           })
           .catch(function() {});
@@ -1128,16 +1135,23 @@
         }
         // Collapsed card: just the time, tinted, plus a short
         // delay note beside the arrival.
-        function applyTime(timeId, info, fallback) {
+        function applyTime(timeId, info, fallback, fullFallback) {
           var el = document.getElementById(timeId);
           if (!el) return;
           var tint = (info && (info.state === 'early' || info.state === 'late'))
             ? ' ' + info.state : '';
           el.className = 'chip-time' + tint;
           el.textContent = (info && info.time_short) || fallback || el.textContent;
+          // The zoned string behind the tap bubble has to track the same
+          // revision the chip is showing, or a delayed flight would pop up
+          // its ORIGINAL scheduled time — worse than showing nothing.
+          var full = (info && info.time) || fullFallback;
+          if (full) el.setAttribute('data-full', full);
         }
-        applyTime('card-dep-time', data.dep_delay, currentData && currentData.dep_short);
-        applyTime('card-arr-time', data.arr_delay, currentData && currentData.arr_short);
+        applyTime('card-dep-time', data.dep_delay,
+                  currentData && currentData.dep_short, currentData && currentData.dep);
+        applyTime('card-arr-time', data.arr_delay,
+                  currentData && currentData.arr_short, currentData && currentData.arr);
 
         var arrChip = document.getElementById('card-arr-delay');
         if (arrChip) {
@@ -1149,11 +1163,15 @@
           arrChip.style.display = showChip ? '' : 'none';
         }
 
-        // Expanded detail block. The departure row is deliberately absent —
-        // see the note in the template. Departure state still reaches the
-        // user through the chip tint applied above.
+        // Expanded detail block.
         setShown('flight-detail', !!(data.dep_delay || data.arr_delay || data.gates));
+        setShown('row-dep-delay', !!data.dep_delay);
         setShown('row-arr-delay', !!data.arr_delay);
+        if (data.dep_delay) {
+          setText('v-dep-delay', data.dep_delay.text);
+          var dv = document.getElementById('v-dep-delay');
+          if (dv) dv.className = 'v ' + (data.dep_delay.state || '');
+        }
         if (data.arr_delay) {
           setText('v-arr-delay', data.arr_delay.text);
           var av = document.getElementById('v-arr-delay');
@@ -1168,30 +1186,8 @@
         if (g.dest_gate) setText('v-gate-arr', g.dest_gate +
           (g.dest_terminal ? ' \u00b7 Terminal ' + g.dest_terminal : ''));
         if (g.baggage) setText('v-baggage', g.baggage);
-        // Only claim a diversion airport once one is named. Guarding on
-        // data.diversion alone printed the literal string "None" in the row
-        // whenever the flag had flipped but the field hadn't caught up.
-        var dv = data.diversion && data.diversion.diverted_to;
-        setShown('row-diverted', !!dv);
-        if (dv) setText('v-diverted', dv);
-
-        // The card's destination code has to follow the aircraft. It stayed
-        // on the ORIGINAL airport through a diversion, so the card claimed
-        // he was going somewhere he was no longer going.
-        var destEl = document.getElementById('card-dest-code');
-        if (destEl) {
-          if (dv) {
-            destEl.textContent = dv;
-            destEl.classList.add('diverted-code');
-            destEl.title = 'Diverted from ' + (data.diversion.scheduled || '');
-          } else {
-            destEl.classList.remove('diverted-code');
-            destEl.removeAttribute('title');
-            if (currentData && currentData.destination) {
-              destEl.textContent = currentData.destination;
-            }
-          }
-        }
+        setShown('row-diverted', !!data.diversion);
+        if (data.diversion) setText('v-diverted', data.diversion.diverted_to);
 
         // These four are in every /api/live payload but were never written
         // to the DOM, so they froze at whatever the last FULL page render
@@ -1251,15 +1247,6 @@
         setText('card-dep-time', cur.dep);
         setText('card-dest-code', cur.destination);
         setText('card-arr-time', cur.arr);
-        // The struck-through FFDO line. Never updated on a leg switch, so
-        // a past flight showed the PREVIOUS flight's scheduled times under
-        // its own actuals.
-        setText('v-sched', (cur.dep || '') + ' \u2192 ' + (cur.arr || ''));
-        // Gate labels are per-airport, so they move with the leg too.
-        var kDep = document.querySelector('#row-gate-dep .k');
-        if (kDep) kDep.textContent = (cur.origin || '') + ' gate';
-        var kArr = document.querySelector('#row-gate-arr .k');
-        if (kArr) kArr.textContent = (cur.destination || '') + ' gate';
 
         const statusBadge = document.getElementById('status-badge');
         if (statusBadge && cur.status) {
@@ -1332,88 +1319,6 @@
           selectLeg(knownCurrentLegId, { automatic: true });
         });
       }
-
-      // ---------------------------------------------------------------
-      // Expand / collapse.
-      //
-      // The markup and CSS for this have always been here — #collapsed-card
-      // has an .expanded state, #expand-details and #expand-wrap have .open
-      // states, and #expand-hint says "Tap for more". Nothing ever added
-      // those classes. The handler was lost in an edit somewhere before
-      // v4.4, which left the flight detail, the past list and the upcoming
-      // list permanently display:none with a hint inviting you to tap
-      // something that did nothing.
-      //
-      // #expand-wrap holds the past and upcoming lists, so this is also why
-      // no other flight could be selected: the links were in the DOM (the
-      // click delegation below works fine) but never visible to tap.
-      var CARD_EXPANDED_KEY = 'pt_card_expanded';
-      var cardExpanded = false;
-      try {
-        cardExpanded = window.localStorage.getItem(CARD_EXPANDED_KEY) === '1';
-      } catch (e) { /* private mode, or storage disabled — default closed */ }
-
-      function applyExpanded() {
-        var card = document.getElementById('collapsed-card');
-        var details = document.getElementById('expand-details');
-        var wrap = document.getElementById('expand-wrap');
-        var hint = document.getElementById('expand-hint');
-        if (card) card.classList.toggle('expanded', cardExpanded);
-        if (details) details.classList.toggle('open', cardExpanded);
-        if (wrap) wrap.classList.toggle('open', cardExpanded);
-        if (hint) {
-          hint.innerHTML = cardExpanded
-            ? 'Tap to collapse &#9652;'
-            : 'Tap for more &#9662;';
-        }
-      }
-
-      function setExpanded(next) {
-        cardExpanded = !!next;
-        try {
-          window.localStorage.setItem(CARD_EXPANDED_KEY, cardExpanded ? '1' : '0');
-        } catch (e) { /* not fatal — the state just won't survive a reload */ }
-        applyExpanded();
-      }
-
-      var expandHintEl = document.getElementById('expand-hint');
-      if (expandHintEl) {
-        expandHintEl.addEventListener('click', function() {
-          setExpanded(!cardExpanded);
-        });
-      }
-      // Tapping the card header itself expands too, which is the gesture
-      // most people try first. Collapsing stays on the hint alone, so a
-      // stray tap on the card can't shut the detail you just opened.
-      var cardHeaderEl = document.getElementById('collapsed-card-header');
-      if (cardHeaderEl) {
-        cardHeaderEl.addEventListener('click', function(e) {
-          if (e.target.closest && e.target.closest('a')) return;
-          if (!cardExpanded) setExpanded(true);
-        });
-      }
-      applyExpanded();
-
-      // "Show past flights" was wired to onclick="togglePast()" in the
-      // markup, but no such function existed anywhere in the file — another
-      // handler lost in an edit. The button rendered and did nothing.
-      //
-      // Defined on `window` deliberately: everything else here lives inside
-      // an IIFE, and an inline onclick attribute can only reach globals. It
-      // would silently break again if it were declared with a bare
-      // `function` inside this closure.
-      var pastOpen = false;
-      window.togglePast = function togglePast() {
-        var section = document.getElementById('past-section');
-        var btn = document.getElementById('past-toggle');
-        if (!section) return;
-        pastOpen = !pastOpen;
-        section.classList.toggle('open', pastOpen);
-        if (btn) {
-          btn.textContent = (pastOpen ? 'Hide past flights' : 'Show past flights')
-            + ' (' + PAST_COUNT + ')';
-        }
-      };
 
       function selectLeg(legId, opts) {
         if (!legId) return;

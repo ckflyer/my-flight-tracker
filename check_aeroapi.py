@@ -13,6 +13,7 @@ Pick a flight that is operating today. The route arguments matter — they
 are how the right record is picked out when a flight number is used in
 both directions.
 """
+import json
 import os
 import sys
 
