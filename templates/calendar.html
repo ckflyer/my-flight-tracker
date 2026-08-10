@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="{{ settings.theme }}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pilot Tracker · Calendar</title>
+  <link rel="manifest" href="/static/manifest.json?v={{ version }}">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png?v={{ version }}">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png?v={{ version }}">
+  <link rel="shortcut icon" href="/static/favicon.ico?v={{ version }}">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png?v={{ version }}">
+  <style>
+    :root, [data-theme="dark"] {
+      --bg: #0f1419; --card: #1a2332; --accent: #3b82f6;
+      --text: #e7ecf3; --muted: #8b9bb4; --good: #22c55e; --warn: #f59e0b; --border: #2a3548;
+    }
+    [data-theme="light"] {
+      --bg: #f1f5f9; --card: #ffffff; --accent: #2563eb;
+      --text: #0f172a; --muted: #64748b; --good: #16a34a; --warn: #d97706; --border: #e2e8f0;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text); min-height: 100vh;
+      padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+      max-width: 640px; margin: 0 auto;
+    }
+    .topbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.25rem; }
+    .brand { font-size: 0.95rem; font-weight: 700; letter-spacing: 0.02em; }
+    .topbar-right { display: flex; align-items: center; gap: 0.5rem; }
+    .topnav { display: flex; gap: 0.2rem; background: rgba(255,255,255,0.05); padding: 0.25rem; border-radius: 999px; }
+    [data-theme="light"] .topnav { background: rgba(15,23,42,0.06); }
+    .topnav a { color: var(--muted); text-decoration: none; font-size: 0.8rem; font-weight: 600; padding: 0.55rem 0.9rem; border-radius: 999px; transition: background 0.15s ease, color 0.15s ease; }
+    .topnav a:hover { color: var(--text); }
+    .topnav a.active { background: var(--accent); color: #fff; }
+    .logout-btn {
+      margin: 0; width: 34px; height: 34px; padding: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: transparent; color: var(--muted); border: 1px solid var(--border);
+      border-radius: 999px; cursor: pointer; flex-shrink: 0;
+    }
+    .logout-btn:hover { color: var(--text); border-color: var(--muted); }
+    .topbar-right { flex-wrap: wrap; justify-content: flex-end; }
+    .topnav { flex-wrap: wrap; }
+    @media (max-width: 400px) {
+      .topnav a { padding: 0.5rem 0.7rem; font-size: 0.76rem; }
+    }
+
+    .month-label { font-size: 1.1rem; font-weight: 700; margin: 1.25rem 0 0.75rem; }
+    .month-label:first-of-type { margin-top: 0; }
+
+    .grid-card { background: var(--card); border-radius: 16px; padding: 1rem; margin-bottom: 1.5rem; box-shadow: 0 4px 20px rgba(0,0,0,0.12); }
+    .weekday-row { display: grid; grid-template-columns: repeat(7, 1fr); margin-bottom: 0.4rem; }
+    .weekday-row div { text-align: center; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; color: var(--muted); letter-spacing: 0.03em; }
+    .week-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0; margin-bottom: 3px; }
+    .day-cell {
+      height: 62px;
+      display: flex; flex-direction: column; align-items: center; justify-content: flex-start;
+      text-decoration: none; color: var(--text); font-size: 0.8rem; position: relative;
+      padding: 0.3rem 0.15rem;
+      overflow: hidden;
+    }
+    .day-cell.out-month { color: var(--muted); opacity: 0.35; }
+    .day-cell.is-today .day-num { border: 2px solid var(--accent); border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; }
+    .day-cell.is-today.in-trip .day-num { border-color: #fff; }
+    .day-cell.in-trip { background: var(--accent); color: #fff; }
+    .day-cell.in-trip.round-left { border-top-left-radius: 8px; border-bottom-left-radius: 8px; }
+    .day-cell.in-trip.round-right { border-top-right-radius: 8px; border-bottom-right-radius: 8px; }
+    .day-cell.in-trip .meta-line { color: rgba(255,255,255,0.85); }
+    /* Days with both a start and finish time stack two labels plus a leg
+       count in one small cell, which crowded quickly — smaller type and
+       tighter spacing give the day number room to breathe. */
+    .day-cell .time-label { font-size: 0.56rem; font-weight: 700; margin-top: 0.08rem; line-height: 1.05; text-align: center; letter-spacing: -0.01em; }
+    .day-cell .meta-line { font-size: 0.55rem; color: var(--muted); margin-top: 0.1rem; line-height: 1.15; text-align: center; }
+
+    .agenda-day { background: var(--card); border-radius: 12px; padding: 0.9rem 1.1rem; margin-bottom: 0.6rem; scroll-margin-top: 1rem; }
+    .agenda-day.is-today { border: 1px solid var(--accent); }
+    .agenda-day.in-trip { border-left: 4px solid var(--accent); padding-left: calc(1.1rem - 4px); }
+    .agenda-day.in-trip:not(.trip-start) { border-top-left-radius: 0; }
+    .agenda-day.in-trip:not(.trip-end) { border-bottom-left-radius: 0; }
+    /* Consecutive working days in one trip share a continuous accent bar,
+       which is the point — it shows the trip as one unit. But with no gap
+       and no divider they ran together into a single slab of text, so the
+       day boundaries disappeared. A hairline rule and a little more
+       breathing room separate the days WITHOUT breaking the bar; days off
+       still get the full gap between cards. */
+    .agenda-day.seamless-after { margin-bottom: 0; padding-bottom: 1rem; }
+    .agenda-day.in-trip:not(.trip-start) {
+      border-top: 1px solid var(--border);
+      padding-top: 1rem;
+    }
+    .agenda-label { font-size: 0.8rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 0.5rem; }
+    /* One line per flight, always. The times used to carry their zone
+       suffix ("5:15 PM MST"), which on a phone pushed the row past the
+       card width and wrapped the route onto a second line. Zones live on
+       the tracker card's tap bubble now, so the agenda can use the short
+       form. The flight side truncates before the times do — a clipped
+       city pair is readable, a wrapped row is not. */
+    .agenda-leg {
+      display: flex; justify-content: space-between; align-items: baseline;
+      gap: 0.5rem; padding: 0.3rem 0; font-size: 0.9rem;
+    }
+    .agenda-leg-main {
+      min-width: 0; flex: 1 1 auto;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .agenda-route { color: var(--muted); font-weight: 600; }
+    .agenda-leg-times {
+      flex: 0 0 auto; white-space: nowrap;
+      font-size: 0.78rem; font-variant-numeric: tabular-nums;
+    }
+    @media (max-width: 430px) {
+      .agenda-leg { font-size: 0.85rem; }
+      .agenda-leg-times { font-size: 0.72rem; }
+      .agenda-leg-main strong { font-size: 0.85rem; }
+    }
+    .agenda-empty { color: var(--muted); font-size: 0.85rem; }
+    .dh {
+      display: inline-block; padding: 0.1rem 0.4rem; border-radius: 6px; font-size: 0.65rem; font-weight: 600;
+      background: rgba(245,158,11,0.2); color: var(--warn); margin-left: 0.35rem; vertical-align: middle;
+    }
+    .meta { color: var(--muted); font-size: 0.82rem; }
+    .footer-version { text-align: center; color: var(--muted); font-size: 0.75rem; margin-top: 1.5rem; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">Pilot Tracker</div>
+    <div class="topbar-right">
+      <nav class="topnav">
+        <a href="/">Tracker</a>
+        <a href="/calendar" class="active">Calendar</a>
+        {% if is_pilot %}
+        <a href="/admin">Flights</a>
+        <a href="/settings">Settings</a>
+        {% else %}
+        <a href="/viewer-settings">Settings</a>
+        {% endif %}
+      </nav>
+      <form method="post" action="/logout" style="margin:0;">
+        <button type="submit" class="logout-btn" title="Log out" aria-label="Log out"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg></button>
+      </form>
+    </div>
+  </div>
+
+  {% for block in month_blocks %}
+  <div class="month-label">{{ block.label }}</div>
+  <div class="grid-card">
+    <div class="weekday-row">
+      <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+    </div>
+    {% for week in block.weeks %}
+    <div class="week-row">
+      {% for day in week %}
+        {% set classes = [] %}
+        {% if not day.in_month %}{% set _ = classes.append('out-month') %}{% endif %}
+        {% if day.is_today %}{% set _ = classes.append('is-today') %}{% endif %}
+        {% if day.in_trip %}{% set _ = classes.append('in-trip') %}{% endif %}
+        {% if day.round_left %}{% set _ = classes.append('round-left') %}{% endif %}
+        {% if day.round_right %}{% set _ = classes.append('round-right') %}{% endif %}
+        {% if day.in_month %}
+        <a href="#day-{{ day.iso }}" class="day-cell {{ classes|join(' ') }}">
+          <span class="day-num">{{ day.day }}</span>
+          {% if day.start_time %}<div class="time-label">{{ day.start_time }}</div>{% endif %}
+          {% if day.finish_time %}<div class="time-label">{{ day.finish_time }}</div>{% endif %}
+          {% if day.leg_count %}
+          <div class="meta-line">{{ day.leg_count }} leg{{ 's' if day.leg_count != 1 else '' }}</div>
+          {% endif %}
+        </a>
+        {% else %}
+        <div class="day-cell {{ classes|join(' ') }}">
+          <span class="day-num">{{ day.day }}</span>
+        </div>
+        {% endif %}
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+
+  {% for day in block.agenda %}
+  <div class="agenda-day {% if day.is_today %}is-today{% endif %} {% if day.in_trip %}in-trip{% endif %} {% if day.trip_is_start %}trip-start{% endif %} {% if day.trip_is_end %}trip-end{% endif %} {% if day.seamless_after %}seamless-after{% endif %}" id="day-{{ day.iso }}">
+    <div class="agenda-label">{{ day.label }}</div>
+    {% if day.legs %}
+      {% for leg in day.legs %}
+      <div class="agenda-leg">
+        <div class="agenda-leg-main">
+          <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
+          <span class="agenda-route">{{ leg.origin }} &rarr; {{ leg.destination }}</span>
+        </div>
+        <div class="meta agenda-leg-times">{{ leg.dep_short or leg.dep }}&ndash;{{ leg.arr_short or leg.arr }}</div>
+      </div>
+      {% endfor %}
+    {% else %}
+      <div class="agenda-empty">No flights scheduled</div>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% endfor %}
+
+  <div class="footer-version">v{{ version }}</div>
+</body>
+</html>
