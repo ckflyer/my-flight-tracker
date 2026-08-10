@@ -52,8 +52,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
-from .flights import (flight_key, get_row, get_row_any, legs_sharing_callsign,
-                      write_all_owners)
+from .flights import flight_key, get_flight, legs_sharing_callsign, write
 from .geo import haversine_nm
 from .models import FlightLeg
 
@@ -131,7 +130,7 @@ def observe(leg: FlightLeg, state: Dict[str, Any], now: datetime, row=None) -> N
         as an aircraft is handed between ATC facilities, so an airborne
         change says nothing about whether the flight has ended.
     """
-    row = row if row is not None else get_row_any(leg.id)
+    row = row if row is not None else get_flight(leg.id)
     if row is None:
         return
 
@@ -184,10 +183,9 @@ def observe(leg: FlightLeg, state: Dict[str, Any], now: datetime, row=None) -> N
         else:
             new_stopped_since = None  # taxiing, not finished
 
-    # Everything the aeroplane is doing is a fact about the aeroplane, so
-    # it goes to every account holding this leg rather than only the one
-    # whose page happened to trigger the poll.
-    write_all_owners(
+    # Everything here is a fact about the AEROPLANE, so it lands on the
+    # shared row and every crew member on the leg sees it at once.
+    write(
         leg.id,
         once={
             # Backdate wheels-off/on to the moment they happened, not to
@@ -269,9 +267,9 @@ def has_flown(row) -> bool:
 
 # ----------------------------------------------------------- acquisition
 def acquire_aircraft(leg: FlightLeg, icao24: str, now: datetime) -> None:
-    """Lock this leg to one airframe. Written once, to every owner."""
-    write_all_owners(leg.id, once={"aircraft_hex": icao24,
-                                   "aircraft_acquired_at": now.isoformat()})
+    """Lock this leg to one airframe. Written once, on the shared row."""
+    write(leg.id, once={"aircraft_hex": icao24,
+                        "aircraft_acquired_at": now.isoformat()})
 
 
 class Verdict:
@@ -289,7 +287,7 @@ def evaluate(leg: FlightLeg, state: Optional[Dict[str, Any]],
     if not state:
         return Verdict(True)
     now = now or datetime.now(timezone.utc)
-    row = row if row is not None else get_row_any(leg.id)
+    row = row if row is not None else get_flight(leg.id)
     hex_id = (state.get("icao24") or "").strip().lower()
 
     if row is not None:

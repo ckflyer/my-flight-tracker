@@ -26,7 +26,6 @@ except ImportError:
     sys.exit(2)
 
 from app.aeroapi import BASE_URL, pick_flight, normalize
-from app.enrichment import derive_status, delay_info, gate_info
 
 if len(sys.argv) < 5:
     print(__doc__)
@@ -78,9 +77,20 @@ for stage in ("out", "off", "on", "in"):
           f"est={enr.get('estimated_'+stage)}  actual={enr.get('actual_'+stage)}")
 
 print("\n--- what the app will show ---")
-print(f"  status : {derive_status(enr, None)}")
-print(f"  delay  : {delay_info(enr)}")
-print(f"  gates  : {gate_info(enr)}")
+# As of v5 there is no separate display layer to call here: these values
+# are written straight into named columns on the flight row and rendered
+# from there. So show the mapping instead, which is the thing that breaks
+# silently if FlightAware ever renames a field.
+_gates = {k: enr.get(k) for k in ("gate_origin", "gate_destination",
+                                  "terminal_origin", "terminal_destination",
+                                  "baggage_claim") if enr.get(k)}
+print(f"  gates  : {_gates or 'none published'}")
+print(f"  tail   : {enr.get('registration') or 'not published'}")
+print("  pill   : Delayed only if an ESTIMATE differs from the airline's own")
+print("           scheduled time AND lands later than your FFDO time.")
+if enr.get("estimated_out") and enr.get("scheduled_out"):
+    moved = enr["estimated_out"] != enr["scheduled_out"]
+    print(f"           airline has {'MOVED' if moved else 'not moved'} departure")
 
 print("\n--- COVERAGE CHECK ---")
 missing = [k for k in ("actual_out", "actual_off", "actual_on", "actual_in",

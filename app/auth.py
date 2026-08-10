@@ -164,7 +164,11 @@ def delete_user(user_id: int) -> None:
     """
     conn = get_connection()
     try:
-        conn.execute("DELETE FROM flights WHERE user_id = ?", (user_id,))
+        # Only their ROSTER goes. Flights are shared with other crew:
+        # deleting one account must not erase a colleague's flight or the
+        # tracking data everyone on it depends on. Flights nobody has left
+        # are swept by purge_old().
+        conn.execute("DELETE FROM roster WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         conn.commit()
     finally:
@@ -181,7 +185,7 @@ def claim_orphaned_data(user_id: int) -> None:
     """
     conn = get_connection()
     try:
-        conn.execute("UPDATE flights SET user_id = ? WHERE user_id = 0", (user_id,))
+        conn.execute("UPDATE roster SET user_id = ? WHERE user_id = 0", (user_id,))
         conn.commit()
     finally:
         conn.close()

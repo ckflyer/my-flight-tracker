@@ -29,7 +29,6 @@ from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
 from . import tags
-from .flightmatch import observed_gate_in
 from .track import (compute_distance_nm, compute_progress, format_ete,
                     compute_remaining_minutes)
 
@@ -222,7 +221,14 @@ def build(row, leg, now: datetime, time_format: str = "24",
         # Kept so anything still reading `status` gets the more urgent of
         # the two, which is what a single badge would have shown.
         "status": status_tag or phase_tag,
-        "signal_note": None if closed else tags.signal_note(row, now),
+        # One small-print slot under the card. Loss of signal is the more
+        # urgent thing to say; otherwise, if we're sitting in the closeout
+        # loop, say so rather than looking frozen for no visible reason.
+        "signal_note": None if closed else (
+            tags.signal_note(row, now)
+            or ("waiting on airline gate-in"
+                if (_col(row, "closeout_tries") and not _col(row, "in_actual_api"))
+                else None)),
         "progress_pct": _col(row, "progress_pct"),
         "ete": format_ete(_col(row, "ete_min")),
         "distance_nm": _col(row, "distance_nm"),

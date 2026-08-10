@@ -55,7 +55,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
-from .flights import get_row, write
+from .flights import get_flight, write
 from .tags import PHASE_ARRIVED, STATUS_CANCELLED, STATUS_DIVERTED
 
 # An aircraft that has actually blocked in goes quiet — engines and
@@ -201,7 +201,7 @@ def _arrival_source(row, closed_by: str) -> str:
     return "estimated"
 
 
-def close(user_id: int, leg, row, closed_by: str, closed_at: datetime,
+def close(leg, row, closed_by: str, closed_at: datetime,
           observed_in: Optional[datetime]) -> None:
     """Freeze the leg. The values are already in the row; this just marks
     it finished, records who said so, and sets the purge date."""
@@ -211,7 +211,7 @@ def close(user_id: int, leg, row, closed_by: str, closed_at: datetime,
     elif _col(row, "diverted"):
         status = STATUS_DIVERTED
     write(
-        user_id, leg.id,
+        leg.id,
         once={"in_observed": observed_in.isoformat() if observed_in else None},
         always={
             "closed": 1,
@@ -238,7 +238,7 @@ def close(user_id: int, leg, row, closed_by: str, closed_at: datetime,
     print(f"[closure] {leg.id}: closed by {closed_by} at {closed_at.isoformat()}")
 
 
-def maybe_close(user_id: int, leg, row, now: datetime,
+def maybe_close(leg, row, now: datetime,
                 observed_in: Optional[datetime] = None,
                 stopped_for: Optional[float] = None,
                 signal_gap: Optional[float] = None,
@@ -255,7 +255,7 @@ def maybe_close(user_id: int, leg, row, now: datetime,
     if _col(row, "closed"):
         actual_in = _parse(_col(row, "in_actual_api"))
         if actual_in and _col(row, "closed_by") in UPGRADEABLE:
-            close(user_id, leg, row, SOURCE_AIRLINE, actual_in, observed_in)
+            close(leg, row, SOURCE_AIRLINE, actual_in, observed_in)
             print(f"[closure] {leg.id}: upgraded to airline gate-in")
             return SOURCE_AIRLINE
         return None
@@ -266,25 +266,17 @@ def maybe_close(user_id: int, leg, row, now: datetime,
     if not verdict:
         return None
     closed_by, closed_at = verdict
-    close(user_id, leg, row, closed_by, closed_at, observed_in)
+    close(leg, row, closed_by, closed_at, observed_in)
     return closed_by
 
 
 def any_closed(leg_id: str) -> bool:
-    """Has this leg been closed by ANY account?
-
-    Closure is a fact about the flight, not about one pilot's view of it.
-    """
-    from .db import get_connection
-    conn = get_connection()
-    try:
-        return conn.execute(
-            "SELECT 1 FROM flights WHERE id = ? AND closed = 1 LIMIT 1", (leg_id,)
-        ).fetchone() is not None
-    finally:
-        conn.close()
+    """Closure is a fact about the flight, so with a shared row this is
+    simply whether it is closed. Kept as a name because callers read
+    better for it."""
+    return is_closed(leg_id)
 
 
-def is_closed(user_id: int, leg_id: str) -> bool:
-    row = get_row(user_id, leg_id)
+def is_closed(leg_id: str) -> bool:
+    row = get_flight(leg_id)
     return bool(row is not None and _col(row, "closed"))

@@ -1,135 +1,240 @@
-# Pilot Tracker
+# flight-tracker
 
-Personal flight schedule + live tracking app for airline pilots (built around
-Envoy / American Eagle's FFDO schedule format) and the people waiting on
-them. Think "Flighty, but for crew and family" — no social features, no
-stats/gamification, just the tracking.
+Self-hosted flight tracking for airline crew and their families. FastAPI +
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 5.2.
 
-> **Working on this with an AI assistant?** Read *For the AI assistant*
-> below before changing anything, and update this file before packaging a
-> new zip. This file is the only thing that carries between sessions.
+<!--
+READER: THIS FILE IS OPTIMISED FOR AI CONSUMPTION, NOT HUMAN BROWSING.
+Terse, dense, decision-oriented. The owner does not read code and does not
+need this file to be friendly — he needs the next model to not undo
+correct work. Rules stated as INVARIANTS are load-bearing: each one
+encodes a bug that already shipped. Do not "simplify" them without
+reading the rationale attached.
+-->
 
-- Paste your FFDO schedule; automatic current/next/past flights based on
-  local block times
-- Live ADS-B position via Airplanes.live, with a real flight-phase state machine
-- Flown tracks kept per flight for 30 days, so past flights replay their
-  actual path on the map
-- Nothing ever full-page reloads: live data, flight switching, and the
-  active flight changing all update in place
-  (Scheduled → Departing → Taxi-out → In Air → Landing → Taxi-in → Arrived) —
-  not just a clock guess
-- Breadcrumb trail, flight-progress bar, distance-to-go, ETE, and a classic
-  green/yellow/red weather radar overlay on the current flight's map
-- Aircraft registration/type arrive with the live position — no lookup,
-  no manual entry
-- One-tap FlightRadar24 / FlightAware links that prefer the installed app on
-  Android
-- Pilot login (username + password) plus a 5-digit share code so anyone you
-  give it to can view your flights without an account
-- Installable as a home-screen app on iOS/Android (icon, manifest, etc.)
-- Designed to self-host on TrueNAS / Dockge / any Linux box with Docker
+## AGENT PROTOCOL
 
-## For the AI assistant: read this first, update it last
+**Session start:** read this file top to bottom, then read the code you
+intend to change. This file is a map; the code is the territory and may
+have drifted. If the packaged zip and the deployed build disagree, stop
+and say so before editing — that has already cost a working feature once.
 
-**This file is the handoff between sessions.** The sandbox is wiped between
-chats, so nothing survives except this repo. Whatever isn't written here is
-lost. Assume the person you're helping has no background in code and reads
-this file to find out what state their own project is in.
+**Session end (required, before packaging):**
+1. Bump `app/version.py`.
+2. Add a `## VERSION HISTORY` entry at the top of it.
+3. Update `## STATE` and `## OPEN`.
+4. Record any bug you hit and how it was diagnosed.
+5. Run all five test suites. Package only if all pass.
+6. Never ship `data/*.db` or `data/secret_key.txt`.
 
-### At the start of a session
+**Owner context:** no programming background. Explain reasoning in prose in
+chat, not jargon. He is a line pilot and is the authority on operational
+questions (what "delayed" means, when a flight is over) — ask him rather
+than inferring. He has caught two real bugs by inspection; take his hunches
+seriously.
 
-1. Read this whole section, then **Current state** and **Open items** below.
-2. Read the code before changing it. The summary here is a map, not the
-   territory, and it can be out of date — the code is the truth.
-3. If the packaged zip and the deployed build seem to disagree, say so
-   before editing. That has already happened once and cost a working
-   feature (see *Restored missing JavaScript*).
+**Deploy workflow:** he drops extracted files into a GitHub repo, runs
+`git pull` on TrueNAS, then `update.sh` via Dockge.
 
-### At the end of a session — required
+## STATE
 
-Update this file **before** packaging the zip. Specifically:
+v5.1. Deployed target: TrueNAS. Multi-user: the owner plus several FOs,
+who fly the same legs — hence shared flight rows (v5.1).
 
-- Bump the version in `app/version.py` and add a section under **Version
-  history** describing what changed and, more importantly, **why**.
-- Update **Current state** and **Open items** so they describe the project
-  as it is now, not as it was.
-- Record any failure you hit and how it was diagnosed. A bug that gets
-  fixed twice is a bug that wasn't written down the first time.
+Tests: 126, five suites, all passing.
 
-Write for someone non-technical. Explain the reason a thing was done, not
-just the change — the reasoning is what stops the next session undoing it.
+| Suite | N | Covers |
+|---|---|---|
+| `tests_flight_row.py` | 50 | write modes, both tag ladders, closure guards, shared crew, retention |
+| `tests_poller_end_to_end.py` | 27 | full flight gate-to-gate, scripted ADS-B feed |
+| `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
+| `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
+| `tests_carrier_cap.py` | 13 | deadhead lookup cap, FFDO placeholder filter |
 
-### Ground rules learned the hard way
+## OPEN
 
-- **Never package anything from `data/`.** `data/secret_key.txt` signs
-  session cookies; shipping one logs out the pilot and every share-link
-  viewer at once. The packaging step must exclude `data/*.db`,
-  `data/secret_key.txt` and `data/settings.json`. This has happened.
-- **Verify after any multi-part edit.** The recurring failure mode in this
-  project is colliding edits in one function producing duplicated lines,
-  wrong column names, lost constants, or silently deleted functions. Re-read
-  what you changed. Run the tests.
-- **The pilot's domain corrections are usually right.** He flies these
-  legs. When he says something doesn't match reality, it doesn't — his
-  corrections have repeatedly caught real bugs.
-- **Times are local to their own airport.** This trips up code and test
-  fixtures alike; building a departure time from UTC clock hands puts a PHX
-  leg seven hours out.
-- Sandbox shell notes: `pkill -f` self-matches the shell, use `pkill -x
-  uvicorn`; `cd X && cmd &` backgrounds the whole list.
-- Test suites share one database, so ordering matters, and login
-  rate-limiting trips after repeated runs (restarting clears it).
+- **AeroAPI field mapping verified only against a synthetic record.** Wiring
+  confirmed end-to-end (gates, times, tail, Delayed pill all land). If
+  FlightAware renames a field the failure is SILENT — data just never
+  appears. Verify on the box: `python check_aeroapi.py <key> ENY3729 DFW OKC`.
+- **v5.1 not yet run on real hardware.** Sandbox only. Back up
+  `data/flighttracker.db` before first `update.sh`.
+- `/account/usage` response shape unverified against the live endpoint.
+  `refresh_usage()` logs an unrecognised shape rather than reporting zero
+  spend; grep container logs for it.
+- `app/main.py` ~1300 lines, edited surgically in v5.0/v5.1; not fully
+  audited. All routes return 200 and all tests pass.
+- Tune AeroAPI spend toward the $5 free credit. ~46 legs/month × ~5 queries
+  ≈ $1.25; worst case ≈ $2.00. Headroom exists.
+- Distribution undecided. Airplanes.live is non-commercial; AeroAPI
+  Personal tier is personal-use only.
 
-### Workflow this project uses
+## DATA MODEL
 
-The pilot extracts the zip into his GitHub repo, pushes, then runs
-`update.sh` on TrueNAS (Dockge) to `git pull` and restart. So **the zip must
-be complete and self-consistent** — it is dropped in wholesale. Don't ship
-patch scripts or partial files, and don't assume he can run commands to fix
-up a package after extracting it.
+Four tables in `data/flighttracker.db`. Was seven before v5.0.
 
-## Current state
+```
+users     accounts, prefs, AeroAPI key, spend counters
+flights   ONE ROW PER REAL-WORLD FLIGHT. SHARED. Not user-scoped.
+          id = DATE-FLIGHTNUM-ORIGIN-DEST
+roster    (user_id, flight_id) + sort_index, is_deadhead, trip_start
+positions breadcrumb trail, keyed by flight id
+```
 
-**Version 5.0 — the data rebuild.** Seven tables became three, the page
-stopped writing to the database, and the single status badge became two
-pills. See *Version history* for the full list and *How the data is
-organised* for why.
+**Split rule:** facts about the AEROPLANE → `flights`. Facts about a
+PERSON'S RELATIONSHIP to it → `roster`. Deadheading is the canonical case:
+one flight is a working leg for the captain and a deadhead for the FO.
 
-Working: schedule import, live ADS-B tracking, flight tracks, AeroAPI
-enrichment with a pilot-set monthly spend limit, share codes, calendar, the
-two-pill phase/status display, and closure.
+**Why shared (v5.1):** crew fly together. One aeroplane, one takeoff, one
+gate-in ⇒ one row. v5.0 gave each pilot a row and fanned writes out to all
+of them; that worked but meant two AeroAPI queries for one identical
+answer, each pilot's key paying separately. `enrichment.payer_for()` now
+picks the lowest user id with an enabled key AND remaining budget; if that
+pilot is capped, the next covers it, so the flight does not go dark for
+everyone.
 
-Tests: 106 across four suites, all passing.
+There is no `-DH` suffix on flight ids. It described a person, not an
+aeroplane. `flights.flight_key()` strips it for legacy input.
 
-| Suite | Covers |
-| --- | --- |
-| `tests_flight_row.py` (43) | write modes, both tag ladders, closure guards, retention |
-| `tests_poller_end_to_end.py` (27) | a whole flight, gate to gate, with a scripted ADS-B feed |
-| `tests_past_leg_detail.py` (19) | past-leg and T-30 preview rendering |
-| `tests_budget_limit.py` (17) | the monthly spend cap at its real enforcement point |
+### ADS-B and airline values are SEPARATE COLUMNS
 
-**v5.0 has not been run on the real box yet.** It has only been exercised
-in a sandbox against fake data. Take a copy of `data/flighttracker.db`
-before the first `update.sh`.
+| Event | Airline | Observed |
+|---|---|---|
+| Gate-out | `out_actual_api` | `out_observed` |
+| Wheels-off | `off_actual_api` | `off_observed` |
+| Wheels-on | `on_actual_api` | `on_observed` |
+| Gate-in | `in_actual_api` | `in_observed` |
 
-## Open items
+**Do not merge these.** Separation lets the card state its source, lets
+disagreement surface, and stops a lagging airline record overwriting
+something observed.
 
-- **First-deploy check.** Watch the container log on first boot for the
-  three migration lines (`dropped the dead v4 positions table`, `carried N
-  track points over`, `carried N schedule legs over`), then confirm the
-  schedule and past tracks look right in the app.
-- Tune query spend toward the $5 free credit. At ~46 legs/month and ~5
-  queries a leg the app currently lands near $1.25 with a worst case around
-  $2.00, so there is real headroom.
-- `check_aeroapi.py` and `check_live_source.py` need running on the real
-  box; a sandbox can't reach either API.
-- The `/account/usage` response shape is still unverified against the real
-  endpoint. `refresh_usage()` logs an unrecognised shape rather than
-  silently reporting zero, so check the container logs for it.
-- Distribution is undecided: self-hosted free vs commercial. Airplanes.live
-  is non-commercial, and the AeroAPI Personal tier is personal-use only.
+**Display priority:** airline wins for gates, delays, cancellation,
+diversion, revised times. For the four events above, **whichever is
+further along wins, and neither may move the flight backwards.** The two
+sources fail in opposite directions — airline runs late, ADS-B runs blind.
+Blanket airline priority reintroduces "In air while visibly parked",
+because `actual_on` publishes with a lag.
 
-## Quick start
+### Three write modes (`flights.write`)
+
+| Mode | SQL | Use for | Failure if misused |
+|---|---|---|---|
+| `once` | `COALESCE(col, ?)` | moments that happened: wheels-off, aircraft hex, airline's original schedule | a re-query overwrites truth with a later restatement |
+| `latest` | `COALESCE(?, col)` | things that change: position, revised estimates, gates | **blank guard** — an empty poll over a coverage hole erases known state |
+| `always` | `col = ?` | recomputed derived values: progress, ETE | stale figures freeze on the card |
+
+## INVARIANTS
+
+Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
+
+1. **Phase only moves forward.** `tags.advance_phase`. Coverage gap → phase
+   holds, plus a "no signal for N min" note. Never regress to Unknown;
+   Unknown does not exist.
+2. **The page never writes.** `main.compute_live_payload` and `view.py` are
+   read-only. Only `poller.py` decides. v4 had two engines on two clocks.
+3. **One clock per sweep.** `poll_once(now)` takes the clock as an argument
+   and passes it to `get_current_info`.
+4. **Delayed requires an airline PUSH,** not observed lateness. Both: (a) an
+   estimate/actual differing from the airline's own scheduled time, (b)
+   landing later than the FFDO time. Condition (a) prevents a permanently
+   lit pill from routine bid-line/published-schedule offsets.
+5. **Only closure sets phase = Arrived.** "Stopped" ≠ "flight over".
+6. **Closure gated on `has_departed()`.** Backstop and observed-arrival
+   cannot fire until ADS-B saw airborne or the airline published
+   gate-out/wheels-off. Scheduled time passing is not evidence.
+7. **Observed arrival requires wheels-on first.** Stationary+silent at the
+   departure gate is identical to blocking in.
+8. **Backstop anchors on revised arrival,** else observed departure +
+   scheduled block. Never the original timetable.
+9. **Progress requires a live fix.** No fix → no figure, bar hides. Never
+   derive from elapsed clock time.
+10. **Aircraft identity is the ICAO hex, never geometry.** Heading-based
+    rejection breaks on diversions, holds and opposite-flow departures.
+11. **Booleans from SQLite are `0`/`1`, not `False`/`True`.** Normalise
+    before `is False` comparisons.
+12. **Never reuse a table name across schema versions** without checking
+    `PRAGMA table_info`. `CREATE TABLE IF NOT EXISTS` silently no-ops.
+13. **Deleting a user deletes their `roster` rows only.** Flights and
+    tracks are shared.
+
+## MODULE MAP
+
+```
+main.py         FastAPI routes, rendering. READ-ONLY w.r.t. flight state.
+poller.py       background engine, 20s sweep. SOLE decision-maker.
+flights.py      shared row + roster: read, write modes, retention
+tags.py         phase ladder (forward-only) + status (bidirectional)
+view.py         row -> card payload. READ-ONLY.
+closure.py      when a leg ends and on whose authority
+flightmatch.py  which airframe is flying this leg (hex lock)
+enrichment.py   AeroAPI spend triggers, budget, payer selection
+track.py        breadcrumbs + progress/distance/ETE maths
+livesource.py   shared cache + 1 req/s floor over the ADS-B provider
+airplaneslive.py / aeroapi.py / carrier.py   providers
+db.py           schema + migrations (v4 and v5.0 -> v5.1)
+schedule.py     past/current/upcoming split
+parser.py models.py auth.py settings.py airports.py geo.py ratelimit.py
+templates/viewer.html   the app (65KB, edit surgically)
+```
+
+## THE TWO PILLS
+
+Independent. Status renders first, phase second.
+
+**Phase** — always theme blue. Forward-only ladder:
+`Scheduled → Taxi-out → In air → Landing → Taxi-in → Arrived`.
+Landing = airborne within 8nm of destination, or airline `actual_on`
+without `actual_in`. Legs with zero ADS-B still get a phase from airline
+OOOI.
+
+**Status** — the ONLY coloured pill. **Blank when nothing to say; there is
+no "on time" pill** (a badge on every normal flight is wallpaper).
+
+| Status | Trigger | Sticky |
+|---|---|---|
+| Cancelled | airline | yes — also hides the phase pill |
+| Diverted | airline | yes |
+| Delayed | see invariant 4 | no — clears if the airline pulls the time back |
+
+The lateness NOTE ("out 12 min late") is separate, measured against the
+FFDO bid line, and shown regardless of the pill. Both can be true.
+
+## AIRCRAFT MATCHING
+
+Callsigns are not unique to a leg: regional turns fly out and back under
+one number, and the return departs inside the outbound's window.
+
+Behaviour unchanged since v4 — the most correct part of the app. Storage
+moved into columns.
+
+0. **Arbitrate** — of legs sharing a callsign that day, only the latest
+   whose scheduled departure has passed may claim the aircraft.
+   Deterministic; needs no observation (outstations often lack coverage).
+1. **Acquire** — adopt on callsign when at ORIGIN (≤30nm) or within
+   T-20/T+45. The window covers no-receiver outstations; safe against
+   turns because the return cannot depart until this leg lands.
+2. **Hold** — thereafter only that hex, unconditionally, anywhere.
+   Diversions and returns-to-field are followed.
+3. **Release** — a closed leg accepts nothing further from any source.
+
+## CLOSURE
+
+| `closed_by` | Meaning |
+|---|---|
+| `airline` | airline gate-in, or cancellation |
+| `relaunch` | aircraft took off again. Unambiguous, free |
+| `observed` | confirmed landing + 5 min stopped + 8 min silent |
+| `backstop` | 3h past revised arrival, quiet, no fresh airline data |
+
+Observed closes the leg **even with an API key** (owner's decision).
+`actual_in` is the OOOI field most often missing; v5.0 waited on it and
+hung. A late airline gate-in **upgrades** an observed/backstop close.
+
+Both halves of `observed` are required: a plane holding off-gate stays
+stationary while transmitting; a coverage hole is silence without a stop.
+
+## QUICK START
 
 ```bash
 # clone
@@ -151,7 +256,7 @@ create your pilot account (username, password, optional email). After that,
 (family, whoever you share the code with) use the 5-digit tracking code
 shown on `/admin`.
 
-## Schedule format
+## SCHEDULE FORMAT
 
 Paste exactly like this (one leg per line):
 
@@ -166,7 +271,7 @@ Paste exactly like this (one leg per line):
 Times are local block times at each airport. Each row has an "×" button on
 `/admin` to delete it individually if needed.
 
-## Accounts & sharing
+## ACCOUNTS & SHARING
 
 - **Pilots** log in with a username/password created during first-run setup
   at `/setup`. Only a pilot can edit the schedule (`/admin`) or settings
@@ -187,390 +292,178 @@ Times are local block times at each airport. Each row has an "×" button on
   there's no public signup — accounts are created only via the one-time
   `/setup` bootstrap.
 
-## Project layout
+## DEPLOY ON TRUENAS WITH DOCKGE
 
-```
-app/
-  main.py         FastAPI routes and page rendering. READS ONLY.
-  poller.py       the background engine. The ONLY thing that decides anything.
-  flights.py      the flight row: read, write, merge rules, retention
-  tags.py         the two pills — phase ladder and status
-  view.py         turns a flight row into what the card shows. READ-ONLY.
-  closure.py      when a leg is over, and on whose authority
-  flightmatch.py  which physical aircraft is flying this leg
-  enrichment.py   when to spend an AeroAPI query, and where the answer goes
-  track.py        the breadcrumb trail, plus progress / distance / ETE maths
-  livesource.py   shared cache and rate-limit floor over the ADS-B provider
-  airplaneslive.py  the ADS-B provider itself
-  aeroapi.py      the FlightAware client
-  carrier.py      which airline actually operates a deadhead
-  db.py           the three-table schema, and the v4 migration
-  schedule.py     splitting the schedule into past / current / upcoming
-  parser.py       reads a pasted FFDO line
-  models.py       FlightLeg and friends
-  auth.py         accounts, share codes, sessions
-  settings.py     per-user preferences
-  airports.py     IATA lookup      geo.py  great-circle distance
-  ratelimit.py    login throttling  version.py  the footer version number
-templates/        viewer.html (the app), admin, calendar, settings, login
-```
+1. Copy this folder to your TrueNAS box (e.g. into the app-data dataset Dockge watches, or wherever you keep your stacks).
+2. In Dockge, create a new stack pointing at this folder, or paste `docker-compose.yml`'s contents into a new stack.
+3. Make sure the `./data` folder exists on the host (Dockge/Compose will create it as a bind mount if it doesn't).
+4. Start the stack. First boot will build the image and expose port `8000`.
+5. Visit `http://<truenas-ip>:8000/` — you'll land on `/setup` to create your pilot account.
+6. Nothing to configure for live tracking — Airplanes.live needs no API key or account.
+7. On `/admin`, grab the 5-digit share code and send it to whoever should be able to view your flights.
+8. Everything in `./data` persists across container restarts/rebuilds since it's a bind-mounted volume.
 
-## How the data is organised
+Login is real now (password-protected pilot account, code-gated viewer
+access), but there's still no HTTPS/TLS built in — if you're exposing this
+beyond your LAN, put it behind Tailscale, a reverse proxy with TLS, or a VPN
+so credentials aren't sent in the clear.
 
-**Three tables. That is the whole database.**
+## UPDATING
 
-| Table | What it holds |
-| --- | --- |
-| `users` | accounts, preferences, AeroAPI key, spend counters |
-| `flights` | ONE ROW PER LEG — every fact about that flight, in a named column |
-| `positions` | the breadcrumb trail, keyed by flight rather than by user |
+Dockge's Deploy/Update button won't rebuild the image just because the code
+changed — it's a known limitation when a stack uses `build: .` instead of a
+pre-built `image:`. Use `update.sh` instead, from the stack's directory on
+the TrueNAS host:
 
-Before v5 this was seven tables, and a single leg's story was spread across
-four of them: `legs` (the schedule), `flight_aircraft` (what ADS-B had
-seen), `flight_enrichment` (a JSON blob of what the airline said) and
-`flight_closeout` (another JSON blob). **Nothing owned the flight.** Four
-modules each reached into their own table, and `compute_live_payload`
-reconciled the pieces at DISPLAY time — on every page render, for every
-viewer. That reconciliation is where the ordering bugs lived. Two more
-tables, `aircraft` and the old user-scoped `positions`, were completely
-dead: nothing had read or written them in several versions.
-
-### ADS-B and airline values are kept SEPARATE
-
-`off_actual_api` and `off_observed` are both "when the wheels came off".
-They are deliberately different columns. That means the card can say WHICH
-one it is showing, the two can be compared when they disagree, and a
-lagging airline record can never silently overwrite something we watched
-happen. Merging them into one column would throw away the disagreement,
-which is the interesting part.
-
-The four events are all doubled this way:
-
-| Event | Airline's figure | What we observed |
-| --- | --- | --- |
-| Gate-out | `out_actual_api` | `out_observed` |
-| Wheels-off | `off_actual_api` | `off_observed` |
-| Wheels-on | `on_actual_api` | `on_observed` |
-| Gate-in | `in_actual_api` | `in_observed` |
-
-**Airline wins for display, with one exception.** Gates, delays,
-cancellations, diversions and revised times: the airline knows things ADS-B
-cannot, so it wins outright. But for the four events above, whichever
-source is FURTHER ALONG wins, and neither may move the flight backwards.
-The two sources fail in opposite directions — the airline runs late, ADS-B
-runs blind — so letting whichever notices first win is what makes it
-correct. Blanket airline priority would reintroduce the bug where a flight
-reads "In air" while visibly parked, because `actual_on` publishes with a
-lag.
-
-### The three write modes
-
-Choosing the right one is most of the correctness of this app. See
-`flights.py`.
-
-- **ONCE** — the first value we ever get is kept forever. For things that
-  happened at a moment in time: wheels-off, the aircraft hex, the airline's
-  originally published schedule. Writing these "latest wins" would let a
-  re-query overwrite the truth with a later restatement of it.
-- **LATEST** — the new value wins, **but a blank never overwrites a known
-  value**. For things that genuinely change: position, revised estimates,
-  gate assignment. The blank guard is the whole point. A poll that comes
-  back empty because the aircraft is over west Texas with no receiver
-  nearby must not erase what we knew a minute ago.
-- **ALWAYS** — unconditional overwrite, including with nothing. Only for
-  recomputed values like progress and ETE, where "we can't work this out
-  right now" is itself the right thing to display.
-
-### One engine, not two
-
-The poller is the only thing that decides anything. It fetches, judges,
-records, advances the tags, spends queries and closes legs. The page reads
-the row and renders it.
-
-In v4 the page did all of that too — `compute_live_payload` ran on every
-render and every browser poll, and it fetched live data, wrote track points
-and advanced the aircraft state machine. Two engines ran the same logic on
-different clocks, and whichever got there first changed the answer. A
-family member opening the app could move the flight's state.
-
-`poll_once(now)` takes the clock as an argument so one sweep runs at
-exactly one instant. It used to let `get_current_info` read the wall clock
-separately from the preview window, so the two could disagree about which
-leg was current.
-
-## The two pills
-
-**Phase** answers "where is the aeroplane right now". **Status** answers
-"is the plan holding". They are independent, which is what lets a diversion
-show as `Diverted · Taxi-in` — in v4 they shared one slot, so you saw one
-or the other but never both.
-
-### Phase — always the theme blue, and ONLY EVER MOVES FORWARD
-
-```
-Scheduled → Taxi-out → In air → Landing → Taxi-in → Arrived
+```bash
+bash update.sh
 ```
 
-Forward-only is the fix for the most visible bug in v4. ADS-B coverage
-drops somewhere over west Texas, the old phase machine returned "Unknown",
-and the card went from "In air" to "Unknown" — so to the person watching,
-the app forgot where he was. **Nothing had happened. We had just stopped
-hearing.** Losing the signal is a fact about our RECEPTION, not about the
-aeroplane, and it now shows as a note beside a phase that stays put:
-"no signal for 14 min".
+This resets the working copy to match GitHub exactly (`git fetch` +
+`git reset --hard origin/main`, not a plain `git pull`), then rebuilds and
+restarts the container, tailing the logs so you can confirm it started
+cleanly. Using `reset --hard` instead of `pull` means it can never fail
+with a "divergent branches" error, even if something was committed locally
+on the host and never pushed.
 
-The Unknown phase is gone entirely, and so is the old "Departing" — a
-scheduled time passing is not evidence the aircraft moved.
+(First run: `chmod +x update.sh` if you want to run it as `./update.sh`
+instead — GitHub's browser uploader doesn't preserve the executable bit,
+so `bash update.sh` is the safe way to invoke it either way.)
 
-Every branch reads either something the aircraft broadcast or something the
-airline published. A leg with no ADS-B coverage at all still gets a phase
-from the airline's OOOI, which is exactly when it matters most.
+## WHEN AEROAPI IS QUERIED
 
-**Only closure produces Arrived.** The phase machine never invents it.
-"The aircraft stopped" and "the flight is over" are different claims.
+**One rule.** Every leg is handed `TICKETS_PER_LEG` (18) tickets and spends
+them like this:
 
-### Status — carries the only colour, and is BLANK when there's nothing to say
+    time left in the window / tickets left = how long to wait
 
-There is no "on time" pill. A green badge on every normal flight is
-wallpaper and the eye stops seeing it. Colour is how you find trouble, so
-it is spent only on trouble — which is also why the phase pill is always
-blue and never green, amber or red.
+The window runs from 30 minutes before SCHEDULED departure to an hour after
+the BEST CURRENTLY KNOWN arrival. That last part is the whole delay story:
+when the airline publishes a revised arrival, the window stretches and the
+remaining tickets re-space themselves across it automatically. A six-hour
+delay widens the gaps instead of draining the budget.
 
-| Status | Fires when |
-| --- | --- |
-| Cancelled | the airline says so. **Sticks**, and hides the phase pill entirely |
-| Diverted | the airline says so. **Sticks** — a flight that diverted diverted |
-| Delayed | see below |
+Two clamps hold the edges:
 
-Status, unlike phase, **moves both ways**. If the airline pushes departure
-to 14:20 and then pulls it back to 13:55, the pill clears. That isn't the
-app forgetting; it's a real improvement in his day. Cancelled and Diverted
-are the exceptions and never clear.
+  * `MIN_QUERY_GAP` (5 min) — never faster, so a garbage timestamp can't
+    empty the wallet in a single sweep.
+  * `MAX_QUERY_GAP` (20 min) — never slower. This is also what covers a
+    flight overrunning its window with nothing published: the remaining
+    time goes negative, the formula falls through to this, and the leg
+    ticks over quietly instead of stopping dead.
 
-### Delayed means the AIRLINE PUSHED IT, not that it left late
+`ARRIVAL_RESERVE` (4) of the tickets are locked until the aircraft is
+actually down, or its arrival time has passed. Gate-in is the one answer
+that ENDS a leg, so it can't be starved by a long delay upstream. The clock
+half of that condition matters for legs with no ADS-B coverage, where no
+touchdown can ever be observed.
 
-Two conditions, and both are required:
+The leg stops spending the moment there's nothing left to learn — gate-in
+received, cancelled, or closed. Unspent tickets simply go unspent; there is
+no prize for using them.
 
-1. **The airline must have actually moved something** — an estimate (or an
-   actual) that differs from the airline's own scheduled time.
-2. **The revised time must land later than the FFDO time.** He flies the
-   bid line, so that is what late means here.
+The background poller has to reach a leg BEFORE it becomes the current
+flight, or the first look can never happen: a leg isn't `current` until
+T-20, so the poller carries its own `PREVIEW_WINDOW` (35 min) and sweeps
+imminent upcoming legs too. That window is deliberately in the poller
+rather than in `get_current_info`, because "current" also drives flight
+selection, the map and the card, and moving that boundary would change all
+of them.
 
-Condition 1 exists because the airline's published schedule and the bid
-line routinely differ by a couple of minutes with nothing wrong. Comparing
-the published time straight to the FFDO time would leave the pill
-permanently lit. Condition 2 exists because the bid line is the reference
-that matters to him.
+AeroAPI's own `departure_delay` / `arrival_delay` fields are fetched but
+deliberately NOT stored. They are measured against the airline's published
+schedule; every delay figure in this app is measured against the FFDO bid
+line, because that is what the pilot flies. Keeping both would mean two
+numbers for one thing and an invitation to trust the wrong one. The full
+raw record is kept in `api_raw` regardless, so nothing is lost.
 
-Before pushback this is measured on departure; after it, on arrival — a
-late departure that makes the time up enroute stops showing a pill.
+### What this replaced (v5.1 and earlier)
 
-v4's `DELAY_STATUS_MIN` fired off observed lateness, so a 12-minute
-pushback lit up "Delayed" when nothing had actually gone wrong. **That is
-now impossible.** The lateness NOTE is separate and stays honest
-regardless: a flight can read no-pill and still say "out 12 min late".
-Those aren't contradictory; they're two true things.
+Six independent triggers — first look at T-30, a ground watch at T+20 and
+every 30 min after, three evenly spaced cruise checks, wheels-down+5, a
+closeout loop, and a no-ADS-B arrival fallback — each with its own cap and
+its own counter column. They worked. But the interactions between them were
+where the bugs lived, and three cruise checks on a 95-minute regional leg
+bought the same answer three times over. The `closeout_tries`,
+`fallback_tries` and `delay_watch_tries` columns still exist on the table
+(migrations here are append-only) but nothing reads or writes them.
 
-## Matching the right aircraft
+### Measured against a real schedule
 
-**Unchanged in behaviour from v4** — the most correct part of the app, and
-it earned that the hard way. Only its storage moved, from the old
-`flight_aircraft` table into columns on the flight row.
+Two actual months of FFDO lines, simulated against the shipped
+`should_query()` at 20-second poller resolution:
 
-Live data is looked up by callsign, and a callsign is not unique to a leg.
-Regional turns fly out and back under one flight number — 3700 DFW-MFE and
-3700 MFE-DFW the same day — and the return departs well inside the window
-the outbound stays current for. A plain callsign match locks onto the wrong
-aircraft.
+| Scenario | July (26 legs) | August (41 legs) |
+|---|---|---|
+| Normal, gate-in published | $1.70 | $2.76 |
+| Gate-in never published | $2.34 | $3.69 |
+| 45-min delay, published | $1.86 | $2.97 |
+| 6-hour delay, published | $1.95 | $3.08 |
+| 6-hour delay, airline silent | $2.34 | $3.69 |
+| No ADS-B coverage at all | $1.70 | $2.76 |
 
-**What it deliberately does NOT do:** judge an aircraft by which way it is
-pointing. An earlier version rejected aircraft heading away from the
-destination, which breaks the moment a flight diverts — a DFW-OKC leg
-turning back to DFW looks exactly like the return flight, so the guard
-disowned the user's own aeroplane at precisely the moment anyone watching
-most needed to see it. Holds, opposite-flow departures and arrival
-vectoring break it the same way. Geometry cannot tell "going somewhere
-else" apart from "going somewhere else on purpose". There is no route data
-to compare against either — ADS-B does not transmit origin or destination.
+The per-leg ceiling is a hard 18 in every scenario, so a 50-leg month
+cannot exceed $4.50 even if every single flight goes wrong.
 
-**What it does instead: identity.** Every aircraft broadcasts a unique
-ICAO 24-bit hex address.
-
-0. **ARBITRATE** — when several legs share a callsign that day, only the
-   one actually in progress may claim the aircraft: the latest leg whose
-   scheduled departure has arrived. Deterministic, and needs no observation
-   at all — which matters because release depends on seeing the aircraft
-   stopped at the outstation, and small fields often have no coverage.
-1. **ACQUIRE** — a leg adopts an aircraft on its callsign when it is at the
-   ORIGIN, or during a window around scheduled departure. The window covers
-   outstations with no receiver, where a flight may first appear already
-   enroute. A turn's return leg can't depart until this one has landed, so
-   it never falls in that window.
-2. **HOLD** — from then on only that hex is accepted, unconditionally,
-   wherever it goes. Diversions, holds and returns to the departure field
-   are all followed.
-3. **RELEASE** — once the leg closes it accepts nothing further, from any
-   source. A closed leg can never adopt the return flight.
-
-The hex is stored as one column, `aircraft_hex`. There is no lookup table
-and no learning — the tail number and type now arrive free with the
-position. (The old `aircraft` table that did those lookups was dead and has
-been dropped.)
-
-## Closing a leg out
-
-One decision, one recorded reason. Once closed a leg is **frozen**: no
-polling, no live data, no recomputation, so a past flight's numbers never
-drift as late data trickles in.
-
-| `closed_by` | Meaning |
-| --- | --- |
-| `airline` | the airline's own gate-in, or a cancellation |
-| `relaunch` | the aircraft took off AGAIN. Unambiguous, free, no timers |
-| `observed` | we watched it land, stop, and go quiet |
-| `backstop` | nothing left to learn, and well past arrival |
-
-### Observed arrival now closes the leg, even with an API key
-
-It didn't in v4: only the airline's `actual_in` could close a leg for a
-pilot with a key, **which is why closeout hung**. The app would watch the
-aeroplane park, then ask FlightAware every ten minutes for an hour and a
-half, then wait three hours more. `actual_in` is the OOOI field most often
-missing entirely.
-
-By the pilot's own call, a confirmed landing followed by 5 minutes stopped
-and 8 minutes silent is good enough to say Arrived. It records as
-`observed`, and **a late airline gate-in still upgrades it** to the
-airline's figure and time. Nothing is lost.
-
-Both halves are required. A plane waiting off-gate for a stand can sit
-stationary for half an hour still transmitting; a signal dropping out over
-a ramp with poor coverage means nothing on its own. An aircraft that has
-genuinely blocked in stops moving *and* goes dark.
-
-### Two v5 bug fixes, both found by the pilot
-
-**1. The backstop could fire on a delayed flight before it even left.** It
-anchored on the best available arrival estimate, but with no airline data
-that fell back to the SCHEDULED arrival — so a three-hour delay meant the
-backstop clock expired right around the time he actually pushed. Worse, its
-"has it gone quiet?" test passed when there had been no signal EVER, which
-is exactly the case at an outstation with no receiver. A delayed flight
-from a small field could close itself at the gate.
-
-Fixed two ways. The backstop cannot start counting until the flight has
-demonstrably BEGUN — ADS-B saw it airborne, or the airline published a
-gate-out or wheels-off. Before that there is no clock at all. And with no
-revised arrival to anchor on, it anchors on the observed departure plus the
-scheduled block time, never on the original timetable.
-
-**2. An observed arrival could be read off an aircraft that never moved.**
-Stationary-and-quiet is only meaningful AFTER a landing. Sitting at the
-departure gate with the transponder off looks identical. The observed route
-now requires wheels-on to be known first, from either source.
-
-## Arrival times: fact before forecast
-
-Arrival is taken in this order: the airline's actual gate-in, then **our
-own observed gate stop**, then the estimate. The airline publishes
-`actual_in` with a lag, so a flight can be parked while the only airline
-figure available is an hour-old forecast. Presenting that forecast as the
-arrival time is how "arrived 4:05, 11 minutes early" appeared for a flight
-that actually blocked in at 4:11.
-
-When a revised time exists the card shows THAT time, with the scheduled one
-struck through beneath it. Delta and displayed time are both derived from
-minute-truncated values so they can never disagree by a rounding minute.
-
-Tolerance is zero, by the pilot's call: one minute late IS late, and a card
-printing 5:59 beside a crossed-out 5:57 and calling it on time is arguing
-with itself.
-
-## Progress cannot run on the clock
-
-Progress is pinned to zero until there is EVIDENCE the aircraft left, and
-comes only from a live position. v4's elapsed-time fallback measured the
-clock against the schedule, so a flight still at the gate showed "27.7% en
-route" and, once past its scheduled arrival, 100%. **No live fix now means
-no figure at all and the bar hides.** Better than a number derived from a
-timetable everyone already knows is wrong.
-
-Time-to-go comes from live groundspeed and distance where possible, and
-otherwise from the airline's REVISED arrival — never the bare schedule. A
-flight two hours late does not have five minutes to go just because the
-timetable says so.
-
-
-## When AeroAPI is queried
-
-Deliberately almost all CLOCK-driven. An earlier version triggered on "a
-position was stored", which sounds like a state change but is true on
-nearly every poll of an airborne aircraft — it burned 8 queries mid-cruise
-telling us nothing, and hit the per-leg cap on an ordinary flight.
-
-  * **T-30** — first look: gate, revised arrival, and any delay already
-    published. By then the flight plan is filed, so all three exist; an
-    hour out they usually don't yet.
-
-    This one needs the background poller to reach the leg BEFORE it becomes
-    the current flight. A leg isn't `current` until T-20, so the poller
-    carries its own `PREVIEW_WINDOW` (35 min) and sweeps imminent upcoming
-    legs too. Without that the T-30 branch is simply unreachable and no
-    airline data arrives before pushback — which is exactly what happened
-    up to v4.4. The window is deliberately in the poller rather than in
-    `get_current_info`, because "current" also drives flight selection, the
-    map and the card, and moving that boundary would change all of them.
-  * **T+20, then every 30 min** — while the aircraft is still ON THE
-    GROUND past its departure time. One prompt check, then a slower watch,
-    capped at 3 total. It stops the moment the aircraft is seen airborne,
-    handing straight over to the cruise checks rather than waiting for the
-    next 30-minute tick.
-  * **3 cruise checks** — evenly spaced between ACTUAL departure and
-    estimated wheels-on. They require the aircraft to genuinely be off the
-    ground: gated only on an anchor, they fired while a delayed flight sat
-    at the gate. Any falling inside the 20-minute floor are skipped
-    outright (the latest due checkpoint wins), so a short leg uses fewer
-    rather than firing them all late.
-  * **Wheels down + 5** — often already on stand, closing the leg in one
-    query instead of several. Fires once. Needs ADS-B. Touchdown is
-    DEBOUNCED: on_ground must hold for 60 seconds at under 90 kts before it
-    counts, so a single bad alt_baro frame on approach can't trigger it
-    early. The recorded time is backdated to the wheels-down moment, not to
-    when confirmation finished.
-  * **Closeout** — every 10 minutes until gate-in, capped at 2 attempts.
-    After that the observed close or the backstop ends the leg instead.
-  * **Arrival fallback** — for legs with NO ADS-B at all, where no
-    wheels-down event can ever fire. Capped at 2.
-
-Both repeating triggers are capped because they loop waiting for an answer
-that sometimes never comes; uncapped, a missing gate-in ate the whole
-per-leg budget. After the caps, the backstop closes the leg instead.
-
-Cruise checks anchor on the airline's wheels-off, or on ADS-B's observed
-takeoff when the API hasn't caught up — without that fallback a flight
-departing between ground checks has no anchor and cruise checks can't
-start at all.
-
-Every trigger has its own cap; none borrows from another. The reachable
-maximum is 10 with ADS-B and 9 without, against a hard ceiling of
-`MAX_QUERIES_PER_LEG = 10`, of which 2 are reserved for closeout alone.
-
-Typical 5 queries per leg, worst case 8. At 50 legs/month that's about
-$1.25, worst case $1.75.
-
-## Cost control
+## COST CONTROL
 
 `/flights/{ident}` costs $0.005 per result set; `/schedules` costs $0.02,
-which is why deadhead carrier resolution is done once per leg and stored.
-At ~50 legs/month and 5-8 queries per leg that's roughly $1.25-$1.75/month,
-inside the Personal tier's $5 free credit. `MAX_QUERIES_PER_LEG` (10) caps
-any single leg, `ARRIVAL_RESERVE` (2) of those are held for confirming
-gate-in, and the per-pilot monthly limit is a hard stop — queries cease
-entirely once it's reached, so the app can never quietly produce a bill.
+four times as much, which is why deadhead carrier resolution is capped,
+counted at four units, and stored permanently once it succeeds.
+
+At 18 tickets per leg, a heavy 50-leg month has a hard ceiling of $4.50,
+and real spend lands well under because most legs stop early the moment
+gate-in arrives. The per-pilot monthly limit is a hard stop on top of that
+— queries cease entirely once it's reached, so the app can never quietly
+produce a bill.
 
 That limit is set by each pilot in Settings ("Monthly spend limit"), stored
-on the `users` row, and defaults to $4.50 —  just under the Personal tier's
-$5 free credit, so an estimate that's slightly off can't produce a bill.
+on the `users` row, and defaults to $4.90 — just under the Personal tier's
+$5 free credit. It was $4.50 through v5.1; the v5.2 migration moves any row
+still sitting on exactly the old default, and leaves any other value alone
+on the grounds that a pilot who typed a number meant it.
+
+### Deadhead carrier resolution
+
+An FFDO line gives a bare flight number, never an airline. For the pilot's
+own legs that's fine — they're Envoy. A deadhead is usually on mainline
+American or another wholly-owned regional, each broadcasting its own
+callsign, so looking up ENY4110 when the aircraft squawks AAL4110 means the
+leg never tracks at all.
+
+Resolution order, and the caps on it:
+
+  1. **The free ADS-B probe goes first.** Try the handful of callsigns
+     American's family actually uses and see which one has an aircraft
+     within 40 nm of the origin around departure. Costs nothing.
+  2. **Then, at most twice ever, a paid `/schedules` lookup**, spaced an
+     hour apart, recorded on the row in `carrier_tries` / `carrier_tried_at`
+     BEFORE the call is made — so a timeout or a crash mid-request still
+     counts. It goes through `payer_for()`, so it obeys the same monthly
+     cap as everything else.
+
+Through v5.1 a FAILED lookup wrote nothing down. The poller sweeps every 20
+seconds and a deadhead sits in its window for five or six hours, so the
+identical failing question was asked roughly a thousand times — at $0.02
+each, outside the budget check, and invisible to the local counter. One bad
+deadhead could spend the entire month in an afternoon with nothing on
+screen changing. `tests_carrier_cap.py` drives 900 sweeps and asserts at
+most two paid lookups.
+
+### FFDO placeholder lines
+
+An FFDO block carries non-flying lines that fit the same shape as a leg —
+`07/05/2026 0 DFW 1946 DFW 1946` is a duty or hotel marker. Same airport
+both ends, flight number zero. Through v5.1 the parser accepted them, so
+each became a tracked "flight" that looked up a callsign nobody broadcasts
+and spent its ticket allowance discovering that. They're dropped in
+`parser.py` now, before they reach the schedule, the poller or the card.
+
+The cap is enforced against FlightAware's own usage figure, which is
+refreshed every 15 minutes (`USAGE_REFRESH`). That endpoint is free, and
+the one number that must never be stale is the one deciding whether to stop
+spending. A reading older than an hour is treated as a FLOOR rather than
+the truth, and the local count takes over.
 `AEROAPI_MONTHLY_BUDGET` only supplies the fallback for a row that has no
 value. A limit of $0 stops all AeroAPI queries while keeping the key saved;
 live ADS-B tracking is free and is never affected.
@@ -607,222 +500,7 @@ than in real time, so anything older than six hours is treated as stale and
 the estimate takes over. Settings shows the poll count and dollars against
 the cap, when the figure was last pulled, and which source it came from.
 
-## Storage
-
-Everything lives in `data/flighttracker.db` (SQLite), in the three tables
-described under *How the data is organised*.
-
-### Upgrading from v4
-
-The migration runs automatically on first boot and is **idempotent** —
-restarting the container repeatedly will not duplicate anything.
-
-**Carries over:** your accounts and settings, your schedule, and every
-flown track. Those are irreplaceable — the schedule was typed in and the
-tracks were observed.
-
-**Does NOT carry over:** the airline enrichment and closeout blobs. They
-are at most 30 days old, they can be re-fetched, and mapping two nested
-JSON documents into eighty-odd columns is a one-off guess. Practically:
-past flights will show their route and their flown path but not their gate
-times until they are re-flown. Everything from the deploy forward is
-complete.
-
-**Nothing is dropped except two genuinely dead tables** — `aircraft`, and
-the old user-scoped `positions`, neither of which had been read or written
-in several versions. The v4 tables that held real data (`legs`,
-`flight_tracks`, `flight_aircraft`, `flight_enrichment`, `flight_closeout`)
-are deliberately LEFT IN PLACE rather than deleted. If anything about the
-migration turns out wrong, the original data is still sitting there to
-recover from. They can be dropped by hand once you're happy.
-
-One migration trap worth remembering: v4 had a dead `positions` table with
-a completely different shape, and v5 reuses that name. `CREATE TABLE IF NOT
-EXISTS` silently did nothing against the old one, leaving every write to
-fail on a missing column. `db.py` now checks the shape and drops the old
-table first. **This class of bug — a name reused across schema versions —
-is invisible on a fresh install and only appears on a real upgrade,** which
-is exactly why the migration is tested against a synthetic v4 database
-rather than assumed to work.
-
-`data/secret_key.txt` signs login session cookies. It's generated once and
-must stay stable — deleting it logs everyone out.
-
-## Deploy on TrueNAS with Dockge
-
-1. Copy this folder to your TrueNAS box (e.g. into the app-data dataset Dockge watches, or wherever you keep your stacks).
-2. In Dockge, create a new stack pointing at this folder, or paste `docker-compose.yml`'s contents into a new stack.
-3. Make sure the `./data` folder exists on the host (Dockge/Compose will create it as a bind mount if it doesn't).
-4. Start the stack. First boot will build the image and expose port `8000`.
-5. Visit `http://<truenas-ip>:8000/` — you'll land on `/setup` to create your pilot account.
-6. Nothing to configure for live tracking — Airplanes.live needs no API key or account.
-7. On `/admin`, grab the 5-digit share code and send it to whoever should be able to view your flights.
-8. Everything in `./data` persists across container restarts/rebuilds since it's a bind-mounted volume.
-
-Login is real now (password-protected pilot account, code-gated viewer
-access), but there's still no HTTPS/TLS built in — if you're exposing this
-beyond your LAN, put it behind Tailscale, a reverse proxy with TLS, or a VPN
-so credentials aren't sent in the clear.
-
-## Updating
-
-Dockge's Deploy/Update button won't rebuild the image just because the code
-changed — it's a known limitation when a stack uses `build: .` instead of a
-pre-built `image:`. Use `update.sh` instead, from the stack's directory on
-the TrueNAS host:
-
-```bash
-bash update.sh
-```
-
-This resets the working copy to match GitHub exactly (`git fetch` +
-`git reset --hard origin/main`, not a plain `git pull`), then rebuilds and
-restarts the container, tailing the logs so you can confirm it started
-cleanly. Using `reset --hard` instead of `pull` means it can never fail
-with a "divergent branches" error, even if something was committed locally
-on the host and never pushed.
-
-(First run: `chmod +x update.sh` if you want to run it as `./update.sh`
-instead — GitHub's browser uploader doesn't preserve the executable bit,
-so `bash update.sh` is the safe way to invoke it either way.)
-
-## Version history
-
-### v5.0 — the data rebuild
-
-The pilot's read on v4 was that ADS-B and AeroAPI had been "glued together
-to work between the two providers", and that the phase tags were often
-wrong. Both were right. This release rebuilds how data is stored and who is
-allowed to decide things.
-
-**Seven tables became three.** `legs`, `flight_aircraft`,
-`flight_enrichment` and `flight_closeout` collapse into one `flights` row
-per leg, with a named column for every fact. `aircraft` and the old
-user-scoped `positions` were dead and are dropped. `flight_tracks` becomes
-`positions`. The glue is gone because reconciliation moved from DISPLAY
-time to WRITE time: the poller decides once and writes it down, and the
-page renders the row.
-
-**The page stopped writing to the database.** `compute_live_payload` used
-to fetch live data, record track points and advance the aircraft state
-machine on every render and every browser poll. Two engines, two clocks,
-and whichever got there first changed the answer. That is where the
-ordering bugs came from. It is now read-only.
-
-**One badge became two pills.** Phase (always blue, forward-only) and
-status (the only colour, blank when there's nothing to say). Diversions no
-longer compete with position for one slot.
-
-**Bugs fixed:**
-
-* **Phase fell backwards on a coverage gap.** "In air" → "Unknown"
-  mid-cruise, which read to the family as the app losing him. Phase is now
-  forward-only and signal loss shows as a note. The Unknown phase is gone.
-* **"Delayed" fired on observed lateness.** A 12-minute pushback lit the
-  pill when nothing had gone wrong. It now requires the AIRLINE to have
-  pushed a time past the FFDO figure. The lateness note is separate and
-  still honest.
-* **The backstop could close a delayed flight before it departed.**
-  *(Found by the pilot.)* It anchored on the SCHEDULED arrival with no
-  airline data, so a 3-hour delay expired the clock around pushback — and
-  its quiet test passed when there had been no signal ever, i.e. at any
-  outstation with no receiver. It now cannot start until the flight has
-  demonstrably begun, and anchors on observed departure plus block time.
-* **An observed arrival could be read off an aircraft that never moved.**
-  *(Found by the pilot.)* Stationary-and-quiet at the departure gate looks
-  identical to blocking in. It now requires wheels-on first.
-* **Closeout hung with an API key.** Only `actual_in` could close a leg —
-  the OOOI field most often missing. A confirmed landing plus 5 min stopped
-  and 8 min silent now closes it as `observed`, and a late gate-in upgrades
-  it.
-* **`flight_closeout` was declared twice in `db.py`** with two different
-  shapes; the second never applied, and its `closeout_queries` /
-  `last_closeout_at` columns were read by nothing. Moot now.
-* **Re-pasting a schedule wiped observed data.** `save_schedule` deleted
-  every row first, throwing away the aircraft lock and every observed time
-  for legs that hadn't changed. It now updates in place.
-* **`Landing` was unreachable without an AeroAPI key.** *(Found by the new
-  test suite.)* SQLite stores booleans as `0`/`1`, and the phase code
-  tested `is False`, which never matches `0`. Every airborne aircraft fell
-  through to the airline-data branch instead of using its position. A
-  one-line normalisation, and a nasty one to have found live.
-* **The poller used two clocks in one sweep.** `get_current_info` read the
-  wall clock while the preview window used the sweep's own `now`, so the
-  two could disagree about which leg was current. `poll_once(now)` now
-  takes the clock as an argument.
-* **The v4→v5 migration hit a name collision.** v5 reuses the name
-  `positions` for a table v4 had with a different shape, so `CREATE TABLE
-  IF NOT EXISTS` silently did nothing and every write failed on a missing
-  column. Invisible on a fresh install; only appears on a real upgrade.
-  `db.py` checks the shape and drops the old table first.
-
-**Documentation drift corrected:** the README said a 15-minute query floor
-(code: 20) and 3 closeout tries (code: 2).
-
-**Tests went from 33 to 106,** including a new end-to-end suite that flies
-a whole leg with a scripted ADS-B feed, and a migration test against a
-synthetic v4 database.
-
-### v4.7
-
-* **Never package `data/secret_key.txt`.** The v4.6 zip shipped one, which
-  overwrites the key that signs session cookies and logs out the pilot and
-  every share-link viewer at once. `.gitignore` covers the file, but that
-  only helps if it isn't already tracked — check with
-  `git log --oneline -- data/secret_key.txt`. If it has ever been
-  committed, `git rm --cached data/secret_key.txt`, push, delete it on the
-  box and restart so a fresh key is generated.
-* **A wrong password no longer clears the login form.** The username is
-  re-rendered and focus moves to the password field. The password itself is
-  deliberately not echoed — it would land in the page source, browser cache
-  and any proxy log, and the browser's password manager refills it anyway.
-* **Calendar agenda rows stay on one line.** They were printing full zoned
-  times ("5:15 PM MST"), which overflowed a phone and wrapped the route
-  onto a second line. Short times now, with the flight side truncating
-  before the times do.
-* **Days within a trip are separated again.** `seamless-after` removed the
-  gap so a multi-day trip read as one continuous bar, which is right, but
-  with no divider the days ran into a single slab. A hairline rule and more
-  padding separate them without breaking the bar.
-* **Expand/collapse and the past-flights toggle work again** — see below.
-* **Spend is FlightAware's number only.** The local estimate is gone from
-  the UI, `/account/usage` is polled hourly, and the settings block that
-  showed two competing figures has been rebuilt as one line.
-
-### Restored missing JavaScript (v4.7)
-
-`togglePast()` and the card expand/collapse handler had no code behind them
-as of v4.5: the markup and CSS were intact, but nothing set the `.open` and
-`.expanded` classes and the button's inline `onclick` pointed at a function
-that no longer existed. Both were rewritten against the CSS contract, which
-specifies them exactly (`.expand-details.open`, `.expand-wrap.open`,
-`.collapsed-card.expanded`, `#past-section.open`).
-
-The card header is now a tap target as well as the small hint text, and
-taps on anything interactive inside it — a time bubble, the FR24 button, a
-flight row — are excluded so they don't collapse the card underneath the
-finger.
-
-### v4.6
-
-* **Monthly spend limit is now a number the pilot sets**, replacing the
-  keep-querying-past-the-cap toggle. See Cost control above.
-* **Times no longer wrap mid-chip.** `.chip-delay` used to be a fourth flex
-  sibling inside `.time-chip`, so a long note like "1h 46m late" widened the
-  arrival chip until flex shrank both chips and their text wrapped — which
-  is what split "PHX" from "7:03 PM" onto separate lines. Code and time now
-  sit in a `white-space: nowrap` `.chip-line`, with the delay note stacked
-  beneath inside `.chip-body`. If a card is ever genuinely too narrow the
-  whole arrival chip drops to the next line, which stays readable.
-* **Tap a time to see its zone.** Card times are local to their own airport
-  and printed without a zone suffix on purpose — repeating MST/CDT on every
-  one is what crowded these rows originally. A small bubble now puts the
-  zone one tap away. It reuses the zoned strings already computed for the
-  detail rows, so there is no extra AeroAPI cost. `applyTime()` refreshes
-  `data-full` alongside the visible text; otherwise a delayed flight would
-  pop its ORIGINAL scheduled time.
-
-## Notes
+## NOTES
 
 - **`viewer.html` is missing JavaScript as of v4.5 — see below.** Two
   behaviours have no code behind them: nothing toggles `#expand-details` /
@@ -858,48 +536,138 @@ finger.
 - No payments, public signup, or email/SMTP integration yet — those are
   intentionally deferred, not missing by accident.
 
-## Tests
+## STORAGE & MIGRATION
 
-106 tests across four suites. Run any of them from this directory; each
-uses its own scratch database via `PT_DB_FILE`, so they never touch the
-real one and can't leak state into each other.
+Everything in `data/flighttracker.db` (SQLite, WAL). `data/secret_key.txt`
+signs session cookies — generated once, must stay stable, never packaged.
+
+Migration runs on boot, is **idempotent**, and handles two source shapes:
+
+| From | Path |
+|---|---|
+| v4 (7 tables) | `legs` → `flights` + `roster`; `flight_tracks` → `positions`; dead `aircraft` and old user-scoped `positions` dropped |
+| v5.0 (per-user `flights`) | renamed `flights_v50`, merged to one shared row per flight; observed/airline columns copied field-by-field (non-null wins) |
+
+**Carries over:** accounts, settings, schedule, all flown tracks, and (from
+v5.0 only) observed and airline data.
+
+**Does NOT carry over from v4:** enrichment and closeout JSON blobs. ≤30
+days old, re-fetchable, and mapping two nested documents into 80 columns is
+a one-off guess. Symptom: past flights show route and path but no gate
+times until re-flown.
+
+**Not dropped:** v4 tables holding real data (`legs`, `flight_tracks`,
+`flight_aircraft`, `flight_enrichment`, `flight_closeout`) and
+`flights_v50` are left in place for recovery. Drop by hand once satisfied.
+
+First-boot log lines to expect: `dropped the dead v4 positions table`,
+`carried N track points over from v4`, `carried N schedule legs over from
+v4`, or `merged N per-user v5.0 rows into shared flights`.
+
+## TESTS
 
 ```bash
-python tests_flight_row.py          # 43 — the row, the tags, closure, retention
-python tests_poller_end_to_end.py   # 27 — a whole flight, gate to gate
-python tests_past_leg_detail.py     # 19 — past-leg and T-30 preview rendering
-python tests_budget_limit.py        # 17 — the monthly spend cap
+python tests_flight_row.py          # 50
+python tests_poller_end_to_end.py   # 27
+python tests_past_leg_detail.py     # 19
+python tests_budget_limit.py        # 17
 ```
 
-`tests_poller_end_to_end.py` is the one to read first if you want to
-understand the app. It replaces the ADS-B feed with a scripted one and
-walks a single leg through pushback, taxi, climb, cruise, **a total loss of
-coverage**, re-acquisition, approach, landing, taxi-in and blocking in,
-asserting the pills and the closure decision at every step. The
-coverage-gap step is the point of the whole exercise: that is the v4 bug
-where the phase fell to Unknown mid-cruise and the card told his family the
-app had lost him.
+Each uses its own scratch DB via `PT_DB_FILE`. Read
+`tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
+leg through pushback → taxi → climb → cruise → **total loss of coverage** →
+re-acquisition → approach → landing → taxi-in → block-in, asserting both
+pills and the closure decision at each step. The coverage-gap step is
+invariant 1.
 
-Three fixture notes worth keeping, each of which cost time to find:
+**Fixture traps, each of which cost time:**
+- `dep_time_local` is local to the ORIGIN. Building it from UTC hands puts
+  a PHX leg 7h out, silently outside the query window.
+- A leg needs a ROW in `flights` before `refresh()` does anything; it reads
+  counters from there. A bare Python object is correctly declined.
+- `poller` does `from .livesource import live_state` — binds at import.
+  Patch `poller.live_state`, not `livesource.live_state`.
+- Usernames must be ≥3 chars; `create_user` rejects shorter silently from
+  the HTTP layer's perspective (form redisplay, HTTP 200).
 
-- **`dep_time_local` is local to the ORIGIN airport.** Building it from UTC
-  clock hands puts a PHX leg seven hours out and silently moves it outside
-  the query window, which makes a blocked call prove nothing.
-- **A leg needs a ROW in `flights` before `refresh()` will do anything.**
-  It reads its query counters and last-query time from there. A leg that is
-  only a Python object gets correctly declined — which made
-  `tests_budget_limit.py` pass for the wrong reason until the fixture was
-  fixed.
-- **`poller` does `from .livesource import live_state`,** which binds the
-  name at import. A fake feed has to be installed on `poller.live_state`,
-  not on `livesource.live_state`.
+## VERSION HISTORY
 
-One fixture note worth keeping: `dep_time_local` is local to the ORIGIN
-airport. Building it from UTC clock hands puts a PHX leg seven hours out
-and silently moves it outside the query window, which is exactly how a
-budget test can pass for the wrong reason.
+### v5.2 - one polling rule instead of six
 
-It writes to a scratch database via the `PT_DB_FILE` environment variable
-and never touches `data/flighttracker.db`. **Keep test files inside this
-folder** — the earlier suites lived one directory up and were lost when the
-project was packaged, which is why there's only one here.
+- **Six AeroAPI triggers replaced by the ticket rule.** 18 tickets per leg,
+  spaced by "time left in the window / tickets left", clamped to 5-20 min,
+  4 held back for arrival. Delays are handled by the window stretching, not
+  by a dedicated watcher. Measured at $1.70-$3.69/month across two real
+  months of FFDO lines; hard ceiling $4.50 at 50 legs.
+- **Deadhead carrier lookup no longer runs away.** Free ADS-B probe first,
+  then at most two paid `/schedules` calls per leg ever, recorded before the
+  call is made, counted at their real $0.02 price, and under the budget cap.
+  Was ~1,000 uncapped, uncounted, un-budgeted calls on a single bad leg.
+- **FFDO placeholder lines dropped in the parser** (same airport both ends,
+  or flight number zero) instead of becoming tracked flights.
+- **Usage refresh 1h -> 15 min**, stale threshold 3h -> 1h. The endpoint is
+  free, and the cap is only as good as the number it reads.
+- **Default monthly cap $4.50 -> $4.90**, with a migration that moves rows
+  sitting on exactly the old default and leaves chosen values alone.
+- `tests_carrier_cap.py` added (13 assertions).
+
+### v5.1 — shared flights
+
+Owner confirmed FOs are using the app and flying the same legs. v5.0 gave
+each pilot a private row for a shared aeroplane.
+
+- `flights` is now keyed by flight id alone and **shared by all crew**.
+  New `roster` table holds per-person facts (`sort_index`, `is_deadhead`,
+  `trip_start`). Four tables total.
+- **One AeroAPI query per flight, not per pilot.** `enrichment.payer_for()`
+  picks the lowest user id with a key and remaining budget; falls through
+  to the next if capped. `flights.api_paid_by` records who paid.
+- Importing a leg another pilot already has **adopts** the existing row —
+  the joining pilot immediately sees everything observed or paid for.
+- Schedule fields are written only when a flight is NEW, so two bid lines
+  cannot fight over one row.
+- Deleting a leg or an account removes `roster` entries only; shared
+  flights and tracks survive. Orphans swept by `purge_old()`.
+- `write_all_owners` / `get_row(user_id, ...)` / `get_row_any` removed
+  rather than aliased, so a future session cannot write per-user code
+  against a shared table.
+- Fixed: `check_aeroapi.py` imported three functions deleted in v5.0 and
+  crashed on startup — the exact tool needed when AeroAPI looks wrong.
+- Fixed: "waiting on airline gate-in" was computed but never rendered; now
+  shares the small-print slot with the signal note.
+- Removed dead code: `tags.never_tracked`, unused imports in `view.py`.
+- AeroAPI's own `departure_delay`/`arrival_delay` are fetched but
+  deliberately NOT stored — they measure against the airline's published
+  schedule, while every delay figure here measures against the FFDO bid
+  line. Two numbers for one thing invites trusting the wrong one. Full raw
+  record kept in `api_raw`.
+
+### v5.0 — the data rebuild
+
+Owner's read on v4: ADS-B and AeroAPI had been "glued together", and phase
+tags were often wrong. Both correct.
+
+- Seven tables → three. `legs` + `flight_aircraft` + `flight_enrichment` +
+  `flight_closeout` collapsed into one row per leg with named columns.
+  `aircraft` and old `positions` were dead; dropped.
+- Reconciliation moved from DISPLAY time to WRITE time. The page stopped
+  writing to the database (invariant 2).
+- One badge → two pills.
+
+Bugs fixed:
+- Phase fell backwards on a coverage gap ("In air" → "Unknown" mid-cruise).
+- "Delayed" fired on observed lateness; a 12-min pushback lit the pill.
+- Backstop could close a delayed flight before it departed *(owner-found)*.
+- Observed arrival could be read off an aircraft that never moved
+  *(owner-found)*.
+- Closeout hung with an API key — only `actual_in` could close a leg.
+- `flight_closeout` declared twice in `db.py` with two different shapes.
+- Re-pasting a schedule wiped observed data (`save_schedule` deleted first).
+- `Landing` unreachable without an API key: SQLite `0` vs `is False`
+  *(found by the new test suite)*.
+- Poller used two clocks in one sweep.
+- v4→v5 migration hit a `positions` name collision — invisible on a fresh
+  install, only on upgrade.
+
+Docs drift corrected: query floor 15→20 min, closeout tries 3→2.
+Tests 33 → 106.

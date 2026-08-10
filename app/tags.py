@@ -37,7 +37,7 @@ Cancelled and Diverted are the exceptions and never clear.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 from .geo import haversine_nm
@@ -254,13 +254,3 @@ def signal_note(row, now: datetime) -> Optional[str]:
     if gap < 90:
         return f"no signal for {int(gap)} min"
     return f"no signal for {int(gap // 60)}h {int(gap % 60):02d}m"
-
-
-def never_tracked(row, leg, now: datetime) -> bool:
-    """True only when we have literally never heard anything about this
-    flight and the airline hasn't spoken either, and it should have gone
-    by now. This is the honest version of the old Unknown."""
-    if _col(row, "last_signal_at") or _col(row, "last_api_query_at"):
-        return False
-    dep = leg.dep_datetime_utc()
-    return bool(dep and now > dep + timedelta(minutes=20))

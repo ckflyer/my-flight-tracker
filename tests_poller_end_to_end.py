@@ -21,7 +21,7 @@ from app.db import init_db                             # noqa: E402
 from app.auth import create_user                       # noqa: E402
 from app.airports import enrich_leg                    # noqa: E402
 from app.models import FlightLeg                       # noqa: E402
-from app.flights import get_row, save_schedule         # noqa: E402
+from app.flights import get_flight, save_schedule       # noqa: E402
 from app.track import get_breadcrumb                   # noqa: E402
 from app import livesource, poller, tags               # noqa: E402
 
@@ -73,7 +73,7 @@ def step(label, minutes_from_dep, state):
     _state["value"] = state
     at = DEP + timedelta(minutes=minutes_from_dep)
     poller.poll_once(at)
-    row = get_row(UID, LEG.id)
+    row = get_flight(LEG.id)
     print(f"  T{minutes_from_dep:+04d}  {label:<22} "
           f"phase={row['phase_tag']!s:<10} status={row['status_tag']!s:<8} "
           f"closed={bool(row['closed'])}")
@@ -138,7 +138,7 @@ check("a flown path was recorded", len(crumbs) >= 6, f"{len(crumbs)} points")
 check("thinning collapsed the parked fixes", len(crumbs) <= 12, f"{len(crumbs)} points")
 
 print("\n-- a closed leg is frozen --")
-before = dict(get_row(UID, LEG.id))
+before = dict(get_flight(LEG.id))
 row = step("something else on the callsign", 95,
            fix(O.lat, O.lon, False, 300, 15000, squawk="4321"))
 check("the return flight cannot reopen it", bool(row["closed"]))

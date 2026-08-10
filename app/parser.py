@@ -68,6 +68,16 @@ def parse_schedule_text(text: str) -> List[FlightLeg]:
             arr = _parse_hhmm(m.group("arr"))
             is_deadhead = bool(re.search(r"\(D\)", line, re.IGNORECASE))
 
+            # An FFDO block carries non-flying lines that happen to fit the
+            # same shape — "0 DFW 1946 DFW 1946" is a duty or hotel marker,
+            # not a leg. Same airport both ends, and usually flight number
+            # zero. Left in, each one became a tracked flight that looked
+            # up a callsign nobody broadcasts and spent its whole ticket
+            # allowance discovering that. Dropped here rather than later so
+            # they never reach the schedule, the poller or the card.
+            if origin == dest or flight.lstrip("0") == "":
+                continue
+
             leg_id = f"{d.isoformat()}-{flight}-{origin}-{dest}"
             if is_deadhead:
                 leg_id += "-DH"

@@ -39,10 +39,11 @@ from . import tags
 from .carrier import needs_resolution, resolve as resolve_carrier
 from .closure import maybe_close
 from .db import get_connection
-from .enrichment import credentials, refresh as refresh_enrichment, refresh_usage
+from .enrichment import (credentials, payer_for, refresh as refresh_enrichment,
+                         refresh_usage)
 from .flightmatch import (evaluate, has_flown, observe, observed_gate_in,
                           signal_gap_seconds, stopped_seconds, wheels_down_at)
-from .flights import get_row, get_row_any, owners_of, purge_old, write
+from .flights import get_flight, owners_of, purge_old, write
 from .livesource import live_state
 from .schedule import get_current_info
 from .track import record_position
@@ -85,9 +86,8 @@ def _all_user_ids() -> List[int]:
 def active_flights(now: Optional[datetime] = None) -> Dict[str, object]:
     """Every flight currently in its window, as {leg_id: FlightLeg}.
 
-    Deduplicated across accounts: if several pilots share a flight it is
-    polled once, and because tracks are keyed by flight rather than user,
-    that single fetch serves all of them.
+    Deduplicated across accounts: several pilots on one flight share a
+    single row, so it is fetched once, judged once, and written once.
     """
     found: Dict[str, object] = {}
     now = now or datetime.now(timezone.utc)
@@ -120,14 +120,15 @@ def active_flights(now: Optional[datetime] = None) -> Dict[str, object]:
 def _update_tags(leg, now: datetime) -> None:
     """Recompute both pills and the derived figures, then store them.
 
-    Phase is passed through the forward-only guard, so a coverage gap can
-    never walk the flight backwards. Status is free to move both ways,
-    except Cancelled and Diverted which stick — handled in tags.py.
+    Runs ONCE per flight, not once per crew member — the row is shared, so
+    the tags are too. Phase goes through the forward-only guard, so a
+    coverage gap can never walk the flight backwards. Status is free to
+    move both ways, except Cancelled and Diverted which stick.
     """
-    for user_id in owners_of(leg.id):
-        row = get_row(user_id, leg.id)
+    if True:
+        row = get_flight(leg.id)
         if row is None or row["closed"]:
-            continue
+            return
         candidate = tags.compute_phase(row, leg, now)
         phase = tags.advance_phase(row["phase_tag"], candidate)
         status, dep_rev, arr_rev = tags.compute_status(row, leg, now)
@@ -154,7 +155,7 @@ def _update_tags(leg, now: datetime) -> None:
         always["out_variance_min"] = (dep_v or {}).get("minutes")
         always["in_variance_min"] = (arr_v or {}).get("minutes")
 
-        write(user_id, leg.id, always=always)
+        write(leg.id, always=always)
 
 
 def _settle(leg, now: datetime, has_adsb: bool) -> None:
@@ -163,7 +164,7 @@ def _settle(leg, now: datetime, has_adsb: bool) -> None:
     Runs per owner: each pilot's own key pays for their own airline data
     and each keeps their own closeout record.
     """
-    shared = get_row_any(leg.id)
+    shared = get_flight(leg.id)
     touchdown = wheels_down_at(shared)
     departed = has_flown(shared)
     observed_in = observed_gate_in(shared)
@@ -173,36 +174,42 @@ def _settle(leg, now: datetime, has_adsb: bool) -> None:
     # the aircraft has actually landed somewhere.
     down = touchdown is not None
 
-    for user_id in owners_of(leg.id):
-        row = get_row(user_id, leg.id)
-        if row is None or row["closed"]:
-            continue
+    if shared is None or shared["closed"]:
+        return
+
+    # ONE query per flight, however many crew are on it. That is the point
+    # of the shared row: in v5.0 a captain and an FO on the same leg each
+    # paid their own key for an identical answer.
+    payer = payer_for(leg.id)
+    if payer is not None:
         try:
-            refresh_enrichment(user_id, leg, now, has_adsb=has_adsb,
+            refresh_enrichment(payer, leg, now, has_adsb=has_adsb,
                                touchdown=touchdown, departed=departed, down=down)
         except Exception as e:
-            print(f"[poller] enrichment failed for {leg.id}/{user_id}: {e}")
+            print(f"[poller] enrichment failed for {leg.id}: {e}")
+
+    # /account/usage is free, so every crew member's spend figure is kept
+    # honest regardless of who paid. Throttled inside refresh_usage.
+    for user_id in owners_of(leg.id):
         try:
-            # /account/usage is free, so this costs nothing and keeps the
-            # spend figure honest. Throttled inside refresh_usage.
             refresh_usage(user_id, now)
         except Exception as e:
             print(f"[poller] usage refresh failed for {user_id}: {e}")
 
-        try:
-            row = get_row(user_id, leg.id)
-            last_api = row["last_api_query_at"]
-            fresh = False
-            if last_api:
-                try:
-                    fresh = (now - datetime.fromisoformat(last_api)) < ENRICHMENT_FRESH
-                except Exception:
-                    fresh = False
-            maybe_close(user_id, leg, row, now, observed_in=observed_in,
-                        stopped_for=stopped_for, signal_gap=signal_gap,
-                        enrichment_fresh=fresh)
-        except Exception as e:
-            print(f"[poller] closeout failed for {leg.id}/{user_id}: {e}")
+    try:
+        row = get_flight(leg.id)
+        last_api = row["last_api_query_at"]
+        fresh = False
+        if last_api:
+            try:
+                fresh = (now - datetime.fromisoformat(last_api)) < ENRICHMENT_FRESH
+            except Exception:
+                fresh = False
+        maybe_close(leg, row, now, observed_in=observed_in,
+                    stopped_for=stopped_for, signal_gap=signal_gap,
+                    enrichment_fresh=fresh)
+    except Exception as e:
+        print(f"[poller] closeout failed for {leg.id}: {e}")
 
 
 def poll_once(now: Optional[datetime] = None) -> int:
@@ -216,14 +223,19 @@ def poll_once(now: Optional[datetime] = None) -> int:
             # ENY4110 when the aircraft squawks AAL4110 finds nothing.
             # Resolved once and stored on the row, not every sweep.
             if needs_resolution(leg):
-                key = next((credentials(uid) for uid in owners_of(leg_id)
-                            if credentials(uid)), None)
+                # payer_for, not "anyone with a key" — this path bills the
+                # same wallet as everything else, so it has to respect the
+                # same cap. Before v5.2 it looked up a key directly and
+                # spent regardless of budget. A None payer just means the
+                # free ADS-B probe gets its turn and nothing is charged.
+                payer = payer_for(leg_id)
                 try:
-                    resolve_carrier(leg, key, now)
+                    resolve_carrier(leg, credentials(payer) if payer else None,
+                                    now, user_id=payer)
                 except Exception as e:
                     print(f"[poller] carrier resolution failed for {leg_id}: {e}")
 
-            row = get_row_any(leg_id)
+            row = get_flight(leg_id)
             if row is not None and row["closed"]:
                 continue
 
@@ -241,7 +253,7 @@ def poll_once(now: Optional[datetime] = None) -> int:
                           f"for {leg_id}: {verdict.reason}")
                 else:
                     # Re-read: evaluate() may have just acquired the hex.
-                    observe(leg, state, now, row=get_row_any(leg_id))
+                    observe(leg, state, now, row=get_flight(leg_id))
                     if state.get("lat") is not None and state.get("lon") is not None:
                         record_position(leg_id, state["lat"], state["lon"], now,
                                         state.get("on_ground"))

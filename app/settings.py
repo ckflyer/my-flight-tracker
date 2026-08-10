@@ -22,7 +22,7 @@ class AppSettings(BaseModel):
     # at all", the pilot sets the number and it is always enforced. 0 is
     # allowed and means "never query" — a deliberate off switch that keeps
     # the key stored.
-    aeroapi_budget: float = 4.50
+    aeroapi_budget: float = 4.90
     time_format: str = "24"
     show_flightaware: bool = True
     show_fr24: bool = True
@@ -49,7 +49,7 @@ def load_settings(user_id: int) -> AppSettings:
         aeroapi_enabled=bool(row["aeroapi_enabled"]),
         aeroapi_key=row["aeroapi_key"] or "",
         aeroapi_budget=(float(row["aeroapi_budget"])
-                        if row["aeroapi_budget"] is not None else 4.50),
+                        if row["aeroapi_budget"] is not None else 4.90),
         time_format=row["time_format"] or "24",
         theme=row["theme"] or "dark",
         poll_seconds=row["poll_seconds"] or 15,

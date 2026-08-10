@@ -24,7 +24,7 @@ from app.auth import create_user                     # noqa: E402
 from app.models import FlightLeg                     # noqa: E402
 from app.airports import enrich_leg                  # noqa: E402
 from app import closure                              # noqa: E402
-from app.flights import get_row, save_schedule, write  # noqa: E402
+from app.flights import get_flight, save_schedule, write  # noqa: E402
 from app.main import compute_live_payload            # noqa: E402
 
 PASS, FAIL = [], []
@@ -63,7 +63,7 @@ def seed_airline(user_id, leg_id, fields, fetched_at):
     fields = dict(fields)
     fields["last_api_query_at"] = fetched_at.isoformat()
     fields["api_queries_used"] = 1
-    write(user_id, leg_id, always=fields)
+    write(leg_id, always=fields)
 
 
 def main():
@@ -83,7 +83,7 @@ def main():
         "gate_origin": "B34", "terminal_origin": "B",
         "gate_destination": "A1",
     }, datetime.now(timezone.utc) - timedelta(hours=20))
-    closure.close(uid, past, get_row(uid, past.id), closure.SOURCE_AIRLINE,
+    closure.close(past, get_flight(past.id), closure.SOURCE_AIRLINE,
                   arr_utc, None)
 
     now = datetime.now(timezone.utc)
@@ -140,7 +140,7 @@ def main():
     # The airline pushed departure 14 min past the FFDO time, so this one
     # SHOULD carry the pill — unlike a flight that merely left late.
     from app import tags
-    row = get_row(uid, soon.id)
+    row = get_flight(soon.id)
     status, dep_rev, _ = tags.compute_status(row, soon, datetime.now(timezone.utc))
     check("a real airline push lights the Delayed pill",
           status == tags.STATUS_DELAYED, repr(status))

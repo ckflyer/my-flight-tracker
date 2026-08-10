@@ -18,79 +18,97 @@ blob. Airline values land in the `_api` / `_estimated` / `_scheduled`
 columns; nothing here ever touches an `_observed` column, so a lagging
 airline record can never overwrite something we watched happen.
 
-WHAT GETS QUERIED, AND WHEN
----------------------------
-  T-30            first look: gate, revised arrival, any published delay.
-                  By then the flight plan is filed so all three exist; an
-                  hour out they usually don't yet.
-  T+20, then 30m  while still ON THE GROUND past departure. Capped at 3.
-                  Stops the moment ADS-B sees it airborne.
-  3 cruise checks evenly spaced between ACTUAL departure and estimated
-                  wheels-on. Requires real evidence of being airborne —
-                  gated only on an anchor, they fired while a delayed
-                  flight sat at the gate.
-  Wheels down +5  often already on stand, closing the leg in one query
-                  instead of several. Fires once. Needs ADS-B.
-  Closeout        every 10 min until gate-in. Capped at 2.
-  Arrival fallback for legs with NO ADS-B at all, where no wheels-down
-                  event can ever fire. Capped at 2.
+WHAT GETS QUERIED, AND WHEN — THE TICKET RULE
+---------------------------------------------
+Every leg is handed TICKETS_PER_LEG tickets and one rule for spending
+them:
 
-Reachable maximum is 10 with ADS-B and 9 without, against a hard ceiling
-of MAX_QUERIES_PER_LEG, of which ARRIVAL_RESERVE are held for confirming
-arrival alone. Typical is 5 per leg, worst case 8.
+    time left in the window / tickets left = how long to wait
+
+That's it. No trigger list, no per-trigger caps, no special case for a
+delay. The window runs from 30 minutes before scheduled departure to an
+hour after the BEST CURRENTLY KNOWN arrival — so when the airline
+publishes a revised arrival, the window stretches by itself and the
+remaining tickets re-space themselves across it. A six-hour delay widens
+the gaps instead of draining the budget, which is exactly what the old
+"still on the ground" watcher existed to prevent, without the watcher.
+
+Two clamps keep it honest at the edges:
+
+  MIN_QUERY_GAP   never faster than this, so a garbage timestamp can't
+                  empty the wallet in one sweep
+  MAX_QUERY_GAP   never slower than this. Also what covers the case
+                  where the flight overruns its window and the airline
+                  has published nothing: remaining time goes negative,
+                  the formula falls through to this, and the leg ticks
+                  over quietly instead of stopping dead.
+
+And ARRIVAL_RESERVE of the tickets are locked until the aircraft is
+actually down or past its arrival time. Gate-in is the one answer that
+ends the leg, so it cannot be starved by a long delay upstream.
+
+The leg stops spending the moment there is nothing left to learn — gate-in
+received, cancelled, or closed — and unspent tickets simply go unspent.
+
+REPLACED IN v5.2
+----------------
+Six independent triggers (first look / ground watch / cruise checks /
+wheels-down / closeout / no-ADS-B fallback), each with its own cap and its
+own counter column. They worked, but the interactions between them were
+where the bugs lived, and three cruise checks on a 95-minute regional leg
+bought the same answer three times. One rule is easier to reason about and
+spends the allowance where it's actually worth something.
 """
 from __future__ import annotations
 
 import json
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from .aeroapi import AeroApiError, fetch_leg
 from .db import get_connection
-from .flights import get_row, write
+from .flights import get_flight, owners_of, write
 
-# Never query a leg more often than this, whatever the triggers say.
-MIN_QUERY_GAP = timedelta(minutes=20)
-# How many evenly spaced checks between departure and arrival. Any falling
-# inside MIN_QUERY_GAP of the previous query are skipped outright (the
-# latest due checkpoint wins), so a short leg simply uses fewer.
-CRUISE_CHECKS = 3
-# Absolute ceiling per leg — a runaway loop can't cost more than this.
-MAX_QUERIES_PER_LEG = 10
-# Of that ceiling, how many are held back purely for confirming arrival —
-# closeout, or the no-ADS-B fallback. Both answer the same question ("has
-# it blocked in?"), and that question is the one that closes the leg, so
-# it can't be starved by earlier triggers.
-ARRIVAL_RESERVE = 2
-# Hard caps on the repeating triggers. Both loop on a timer until they get
-# an answer, and when gate-in simply never publishes — which happens — an
-# uncapped loop eats the whole per-leg budget waiting for something that
-# isn't coming. After these, the backstop closes the leg instead.
-MAX_CLOSEOUT_TRIES = 2
-MAX_ARRIVAL_FALLBACK_TRIES = 2
-MAX_DELAY_WATCH_TRIES = 3
-DELAY_WATCH_GAP = timedelta(minutes=30)
-CLOSEOUT_GAP = timedelta(minutes=10)
-CLOSEOUT_WINDOW = timedelta(minutes=90)
+# How many queries one leg may ever spend. At $0.005 each this is $0.09
+# per leg; across a heavy 50-leg month that is $4.50 against the Personal
+# tier's $5 free allowance, and real spend lands well under because most
+# legs stop early the moment gate-in arrives.
+#
+# 18 puts a query roughly every 11 minutes across an average 95-minute
+# leg's window. Going higher mostly buys the same answer twice — the
+# airline does not republish gates and estimates faster than that.
+TICKETS_PER_LEG = 18
+# Of those, how many are locked until the aircraft is down or past its
+# arrival time. Gate-in is the answer that ENDS the leg, so a long delay
+# upstream must not be able to spend the tickets that confirm it.
+ARRIVAL_RESERVE = 4
 
-# How early to take a first look. T-30 rather than T-60: by then the
-# flight plan is filed, so the revised arrival, any published delay and
-# the gate all exist.
-PREVIEW_BEFORE_DEP = timedelta(minutes=30)
-SILENT_DEP_FALLBACK = timedelta(minutes=20)
-AFTER_LANDING = timedelta(minutes=5)
-ARRIVAL_FALLBACK = timedelta(minutes=10)
+# The clamps on the spacing formula. See the module docstring.
+MIN_QUERY_GAP = timedelta(minutes=5)
+MAX_QUERY_GAP = timedelta(minutes=20)
+
+# The window tickets are spread across: this far before SCHEDULED
+# departure, to this far after the best currently known arrival. T-30
+# rather than T-60 because by then the flight plan is filed, so the gate,
+# the revised arrival and any published delay all actually exist.
+WINDOW_BEFORE_DEP = timedelta(minutes=30)
+WINDOW_AFTER_ARR = timedelta(minutes=60)
 
 # What a /flights/{ident} call costs, per FlightAware's published rate.
 COST_PER_QUERY_USD = float(os.environ.get("AEROAPI_COST_PER_QUERY", "0.005"))
 # Fallback ceiling for a user row with no value of its own.
-MONTHLY_BUDGET_USD = float(os.environ.get("AEROAPI_MONTHLY_BUDGET", "4.50"))
-# /account/usage is free, and their figure only updates every 10 minutes,
-# so there is no point asking more often than this.
-USAGE_REFRESH = timedelta(hours=1)
+MONTHLY_BUDGET_USD = float(os.environ.get("AEROAPI_MONTHLY_BUDGET", "4.90"))
+# /account/usage is free, and FlightAware's figure updates every 10
+# minutes, so 15 keeps the brake reading a number that is actually close
+# to true. It used to be hourly, which meant the cap could be enforced
+# against a reading an hour out of date — the one number that must not be
+# stale is the one deciding whether to stop spending.
+USAGE_REFRESH = timedelta(minutes=15)
 # A reading older than this is treated as a FLOOR rather than the truth.
-USAGE_STALE_AFTER = timedelta(hours=3)
+# Refreshing every 15 minutes, anything over an hour old means the usage
+# endpoint is unreachable, not that spending stopped.
+USAGE_STALE_AFTER = timedelta(hours=1)
 
 
 def _parse(value) -> Optional[datetime]:
@@ -273,114 +291,92 @@ def budget_state(user_id: int) -> Dict[str, Any]:
 
 
 # --------------------------------------------------------- when to spend
-def _cruise_checkpoints(leg, row, dep_anchor: datetime) -> List[datetime]:
-    """Evenly spaced mid-flight checks between departure and arrival."""
-    end = None
-    for key in ("on_estimated", "on_scheduled", "in_estimated", "in_scheduled"):
-        end = _parse(_col(row, key))
-        if end:
+def window_end(row, leg) -> Optional[datetime]:
+    """When this leg's query window closes: best known arrival + an hour.
+
+    "Best known" in order of confidence — the airline's live estimate
+    first, then its published schedule, then the FFDO timetable. This is
+    the whole delay story: the airline publishes a revised arrival, this
+    moves, and the spacing formula spreads the remaining tickets across the
+    longer window without anything else in the app having to notice.
+    """
+    arr = None
+    for key in ("in_estimated", "on_estimated", "in_scheduled"):
+        arr = _parse(_col(row, key))
+        if arr:
             break
-    if end is None:
-        end = leg.arr_datetime_utc()
-    # If the only arrival figure predates the actual departure it's stale —
-    # a delayed flight's scheduled arrival is already in the past. Project
-    # the scheduled block time forward from when it actually left, so
-    # cruise checks start straight away instead of waiting for the airline
-    # to publish a revised estimate we haven't got a reason to buy yet.
-    if end is None or end <= dep_anchor:
-        dep_sched, arr_sched = leg.dep_datetime_utc(), leg.arr_datetime_utc()
-        if dep_sched and arr_sched and arr_sched > dep_sched:
-            end = dep_anchor + (arr_sched - dep_sched)
-        else:
-            return []
-    span = (end - dep_anchor).total_seconds()
-    return [dep_anchor + timedelta(seconds=span * (i + 1) / (CRUISE_CHECKS + 1))
-            for i in range(CRUISE_CHECKS)]
+    if arr is None:
+        arr = leg.arr_datetime_utc()
+    return (arr + WINDOW_AFTER_ARR) if arr else None
+
+
+def next_gap(row, leg, now: datetime, tickets_left: int) -> timedelta:
+    """How long to wait before the next query. The whole rule.
+
+    Time left in the window divided by tickets left, clamped at both ends.
+    Past the end of the window the division goes negative and it falls
+    through to MAX_QUERY_GAP — which is the right answer for a flight
+    overrunning with nothing published: keep asking, slowly.
+    """
+    end = window_end(row, leg)
+    if end is None or tickets_left <= 0:
+        return MAX_QUERY_GAP
+    remaining = end - now
+    if remaining <= timedelta(0):
+        return MAX_QUERY_GAP
+    gap = remaining / tickets_left
+    return max(MIN_QUERY_GAP, min(MAX_QUERY_GAP, gap))
 
 
 def should_query(row, leg, now: datetime, has_adsb: bool = False,
                  touchdown: Optional[datetime] = None,
                  departed: bool = False, down: bool = False) -> Optional[str]:
-    """Why this leg deserves a query right now, or None."""
+    """Why this leg deserves a query right now, or None.
+
+    The extra arguments are what the poller already knows from ADS-B. Only
+    `down` still matters — it unlocks the arrival reserve early, so a
+    flight that lands ahead of its estimate gets its gate-in tickets
+    straight away rather than waiting for a clock to catch up. The rest are
+    kept in the signature because the poller passes them and they cost
+    nothing to ignore.
+    """
     if row is None:
         return None
-    used = int(_col(row, "api_queries_used") or 0)
-    if used >= MAX_QUERIES_PER_LEG:
-        return None
-    # Nothing more to learn.
+
+    # Nothing left to learn. Gate-in is the answer that ends the leg.
     if _col(row, "in_actual_api") or _col(row, "cancelled") or _col(row, "closed"):
         return None
 
-    dep = leg.dep_datetime_utc()
-    last = _parse(_col(row, "last_api_query_at"))
-
-    # 1. First look. Nothing has been asked yet.
-    if last is None:
-        if dep and now >= dep - PREVIEW_BEFORE_DEP:
-            return "T-30: first look"
+    used = int(_col(row, "api_queries_used") or 0)
+    tickets_left = TICKETS_PER_LEG - used
+    if tickets_left <= 0:
         return None
 
-    # Past this point only arrival-confirming triggers may spend.
-    reserve_only = used >= (MAX_QUERIES_PER_LEG - ARRIVAL_RESERVE)
+    dep = leg.dep_datetime_utc()
+    if dep is None or now < dep - WINDOW_BEFORE_DEP:
+        return None   # window hasn't opened
 
+    # The reserve is locked until the aircraft is genuinely down, or its
+    # arrival time has come and gone. `down` covers the normal case; the
+    # clock covers a leg with no ADS-B coverage at all, where no
+    # touchdown can ever be observed.
     arr_ref = (_parse(_col(row, "in_estimated")) or _parse(_col(row, "in_scheduled"))
                or leg.arr_datetime_utc())
-
-    # 2. Closeout — exempt from the ordinary rate floor, because the
-    #    question it asks is the one that ends the leg.
-    if (down and int(_col(row, "closeout_tries") or 0) < MAX_CLOSEOUT_TRIES
-            and (now - last) >= CLOSEOUT_GAP
-            and arr_ref and now <= arr_ref + CLOSEOUT_WINDOW):
-        return "closeout: waiting on gate-in"
-
-    # 3. No-ADS-B arrival fallback. Shares the reserve with closeout
-    #    rather than being locked out by it — for a leg with no coverage
-    #    at all, no wheels-down event can ever fire.
-    if (not has_adsb and arr_ref
-            and int(_col(row, "fallback_tries") or 0) < MAX_ARRIVAL_FALLBACK_TRIES
-            and now >= arr_ref + ARRIVAL_FALLBACK
-            and (now - last) >= MIN_QUERY_GAP):
-        return "arrival due (no ADS-B)"
-
-    if reserve_only:
-        return None
-    if (now - last) < MIN_QUERY_GAP:
+    at_arrival = bool(down) or bool(arr_ref and now >= arr_ref)
+    if not at_arrival and tickets_left <= ARRIVAL_RESERVE:
         return None
 
-    # 4. Wheels down + 5. Fires ONCE — without the `last < touchdown`
-    #    guard it re-fires after the closeout attempts run out and quietly
-    #    doubles the arrival spend.
-    if touchdown and now >= touchdown + AFTER_LANDING and last < touchdown:
-        return "wheels down + 5"
+    last = _parse(_col(row, "last_api_query_at"))
+    if last is None:
+        return f"first look (1 of {TICKETS_PER_LEG})"
 
-    # 5. Still on the ground past departure. One prompt check, then a
-    #    slower watch. Capped, so a four-hour ground delay can't drain the
-    #    leg's budget asking the same question every fifteen minutes.
-    if (not departed and dep and now >= dep + SILENT_DEP_FALLBACK
-            and not _col(row, "off_actual_api")):
-        tries = int(_col(row, "delay_watch_tries") or 0)
-        if tries == 0:
-            return "T+20: departure check"
-        if tries < MAX_DELAY_WATCH_TRIES and (now - last) >= DELAY_WATCH_GAP:
-            return f"still on the ground ({tries} of {MAX_DELAY_WATCH_TRIES - 1})"
+    gap = next_gap(row, leg, now, tickets_left)
+    if (now - last) < gap:
+        return None
 
-    # 6. Cruise checkpoints. Only once the aircraft has ACTUALLY departed —
-    #    an anchor alone isn't departure. Anchor on the airline's
-    #    wheels-off where we have it, otherwise on what ADS-B saw; without
-    #    that fallback a flight departing between ground checks has no
-    #    anchor and cruise checks can't start at all.
-    anchor = (_parse(_col(row, "off_actual_api")) or _parse(_col(row, "off_observed"))
-              or _parse(_col(row, "out_actual_api")))
-    if departed and anchor and not _col(row, "on_actual_api"):
-        points = _cruise_checkpoints(leg, row, anchor)
-        # Take the LATEST checkpoint that's due, not the earliest. When
-        # the rate floor holds a query back, the checkpoint it was holding
-        # is genuinely skipped rather than queued up and fired late.
-        for i in range(len(points) - 1, -1, -1):
-            if now >= points[i] and last < points[i]:
-                return f"cruise check {i + 1} of {CRUISE_CHECKS}"
-
-    return None
+    spent = used + 1
+    phase = "arrival" if at_arrival else "en route"
+    return f"{phase} check ({spent} of {TICKETS_PER_LEG}, {int(gap.total_seconds() // 60)}m spacing)"
 
 
 # --------------------------------------------------------------- spending
@@ -427,14 +423,15 @@ def _apply(user_id: int, leg_id: str, data: Dict[str, Any], raw, now: datetime,
     always = {
         "last_api_query_at": now.isoformat(),
         "last_api_reason": reason,
+        # Whose key paid. The row is shared, so this is the only record of
+        # which account the spend belongs to.
+        "api_paid_by": user_id,
+        # The one counter that matters now: tickets spent. The old
+        # closeout_tries / fallback_tries / delay_watch_tries columns are
+        # left on the table (migrations here are append-only) but nothing
+        # reads or writes them any more — each existed to cap one of the
+        # six triggers the ticket rule replaced.
         "api_queries_used": int(_col(row, "api_queries_used") or 0) + 1,
-        "closeout_tries": int(_col(row, "closeout_tries") or 0)
-                          + (1 if reason.startswith("closeout") else 0),
-        "fallback_tries": int(_col(row, "fallback_tries") or 0)
-                          + (1 if reason.startswith("arrival due") else 0),
-        "delay_watch_tries": int(_col(row, "delay_watch_tries") or 0)
-                             + (1 if (reason.startswith("T+20")
-                                      or reason.startswith("still on the ground")) else 0),
     }
     # Cancelled and diverted are one-way. A later record that omits them
     # must not un-cancel a cancelled flight.
@@ -450,7 +447,7 @@ def _apply(user_id: int, leg_id: str, data: Dict[str, Any], raw, now: datetime,
     if raw is not None:
         always["api_raw"] = json.dumps(raw)[:200000]
 
-    write(user_id, leg_id, once=once, latest=latest, always=always)
+    write(leg_id, once=once, latest=latest, always=always)
 
 
 def refresh(user_id: int, leg, now: datetime, has_adsb: bool = False,
@@ -474,7 +471,7 @@ def refresh(user_id: int, leg, now: datetime, has_adsb: bool = False,
               f"AeroAPI paused, ADS-B tracking continues")
         return None
 
-    row = get_row(user_id, leg.id)
+    row = get_flight(leg.id)
     if row is None:
         return None
     departed = departed or bool(_col(row, "off_actual_api"))
@@ -492,8 +489,9 @@ def refresh(user_id: int, leg, now: datetime, has_adsb: bool = False,
         # Still counts against the key's usage — the request was made.
         _count_query(user_id, now, 1)
         # And against the leg, so a failing key can't loop forever.
-        write(user_id, leg.id, always={
+        write(leg.id, always={
             "last_api_query_at": now.isoformat(),
+            "api_paid_by": user_id,
             "api_queries_used": int(_col(row, "api_queries_used") or 0) + 1,
         })
         return None
@@ -505,9 +503,10 @@ def refresh(user_id: int, leg, now: datetime, has_adsb: bool = False,
     if data is None:
         print(f"[enrichment] {leg.id}: no matching flight for {leg.callsign} "
               f"{leg.origin}-{leg.destination}")
-        write(user_id, leg.id, always={
+        write(leg.id, always={
             "last_api_query_at": now.isoformat(),
             "last_api_reason": reason,
+            "api_paid_by": user_id,
             "api_queries_used": int(_col(row, "api_queries_used") or 0) + 1,
         })
         return reason
@@ -515,3 +514,18 @@ def refresh(user_id: int, leg, now: datetime, has_adsb: bool = False,
     _apply(user_id, leg.id, data, raw, now, reason, row)
     print(f"[enrichment] {leg.id}: refreshed ({reason})")
     return reason
+
+
+def payer_for(leg_id: str) -> Optional[int]:
+    """Which crew member's AeroAPI key should pay for this flight.
+
+    The row is shared, so only ONE query is needed however many crew are on
+    the leg — the point of sharing. Picks the lowest user id that has a key
+    enabled AND budget left; if that pilot is capped for the month, the
+    next one covers it, and the flight keeps its airline data instead of
+    going dark for everyone.
+    """
+    for uid in owners_of(leg_id):
+        if credentials(uid) and not budget_state(uid)["exhausted"]:
+            return uid
+    return None

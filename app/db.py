@@ -1,9 +1,26 @@
-"""Three tables. That's the whole database.
+"""Four tables. Two of them are large; two are tiny.
 
     users       — accounts, preferences, AeroAPI key and spend counters
-    flights     — ONE ROW PER LEG. Every fact about that flight, in a
-                  named column, whether it came from ADS-B or the airline.
-    positions   — the breadcrumb trail, keyed by FLIGHT not by user
+    flights     — ONE ROW PER REAL-WORLD FLIGHT, SHARED BY ALL CREW.
+                  Every fact about it, in a named column, whether it came
+                  from ADS-B or the airline. NOT scoped to a user.
+    roster      — which flights are on whose schedule. Per-user: position
+                  in the list, deadhead or working, trip boundary.
+    positions   — the breadcrumb trail, keyed by flight
+
+WHY `flights` IS SHARED (v5.1)
+------------------------------
+Crew fly together. When a captain and an FO are both using this app on the
+same leg, that is ONE aeroplane, ONE takeoff, ONE gate-in. v5.0 gave them a
+row each and wrote observed facts to both, which worked but meant two
+AeroAPI queries for one flight — each pilot's key paying separately for an
+identical answer. One row means one query serves everyone, and the two
+views cannot drift apart.
+
+The split is: anything true of the AEROPLANE lives on `flights`; anything
+true of a PERSON'S RELATIONSHIP to it lives on `roster`. Deadheading is the
+clearest case — the same flight is a working leg for one pilot and a
+deadhead for another, so `is_deadhead` is a roster fact, not a flight fact.
 
 Before v5.0 this was seven tables. A single leg's story was spread across
 `legs` (the schedule), `flight_aircraft` (what ADS-B had seen),
@@ -60,16 +77,16 @@ def get_connection() -> sqlite3.Connection:
 # Declared in one list so a new field is added in exactly one place and
 # the migration below picks it up automatically.
 FLIGHT_COLUMNS: List[tuple] = [
-    # ---- schedule, from the FFDO paste. Never overwritten by live data.
-    ("sort_index",            "INTEGER NOT NULL DEFAULT 0"),
+    # ---- the flight itself, from the FFDO paste. Never overwritten by
+    # live data. These are facts about the FLIGHT, so they are shared;
+    # sort_index / is_deadhead / trip_start are per-person and live on
+    # `roster` instead.
     ("date",                  "TEXT"),
     ("flight_number",         "TEXT"),
     ("origin",                "TEXT"),
     ("destination",           "TEXT"),
     ("dep_time_local",        "TEXT"),
     ("arr_time_local",        "TEXT"),
-    ("is_deadhead",           "INTEGER NOT NULL DEFAULT 0"),
-    ("trip_start",            "INTEGER NOT NULL DEFAULT 0"),
     # Which carrier actually operates this leg. A deadhead's FFDO line
     # gives a bare number, so ENY is often wrong. Resolved once, stored.
     ("operator_callsign",     "TEXT"),
@@ -169,10 +186,24 @@ FLIGHT_COLUMNS: List[tuple] = [
 
     # ---- bookkeeping
     ("api_queries_used",      "INTEGER NOT NULL DEFAULT 0"),
+    # Dead as of v5.2 — each capped one of the six triggers the ticket
+    # rule replaced. Kept because migrations here are append-only and
+    # dropping a column in SQLite means rebuilding the table for nothing.
     ("closeout_tries",        "INTEGER NOT NULL DEFAULT 0"),
     ("fallback_tries",        "INTEGER NOT NULL DEFAULT 0"),
     ("delay_watch_tries",     "INTEGER NOT NULL DEFAULT 0"),
+    # How many PAID attempts have been made to work out who operates this
+    # deadhead, and when the last one was. Without these a failed lookup
+    # left no trace, so the poller asked again 20 seconds later, forever —
+    # roughly 1,000 billed queries on a single leg, outside the budget cap
+    # and invisible to the counter. See carrier.py.
+    ("carrier_tries",         "INTEGER NOT NULL DEFAULT 0"),
+    ("carrier_tried_at",      "TEXT"),
     ("last_api_query_at",     "TEXT"),
+    # Which account's AeroAPI key paid for the most recent query on this
+    # shared row. Recorded so spend is attributable when several crew are
+    # on the same flight.
+    ("api_paid_by",           "INTEGER"),
     ("last_api_reason",       "TEXT"),
     ("api_raw",               "TEXT"),
     ("last_polled_at",        "TEXT"),
@@ -184,23 +215,37 @@ FLIGHT_COLUMNS: List[tuple] = [
 
 def _create_flights(conn) -> None:
     cols = ",\n                ".join(f"{n} {t}" for n, t in FLIGHT_COLUMNS)
+    # id is the flight key: DATE-FLIGHTNUMBER-ORIGIN-DEST. Derived from the
+    # flight itself, so two crew on the same leg produce the same id and
+    # therefore share the row. There is no "-DH" suffix here — deadheading
+    # describes a person, not an aeroplane, and lives on `roster`.
     conn.execute(
         f"""
         CREATE TABLE IF NOT EXISTS flights (
-            id TEXT NOT NULL,
-            user_id INTEGER NOT NULL DEFAULT 0,
-            {cols},
-            PRIMARY KEY (user_id, id)
+            id TEXT PRIMARY KEY,
+            {cols}
         )
         """
     )
-    # Leg ids are derived from the flight itself, so two pilots on the
-    # same flight generate the same id. (user_id, id) rather than id alone
-    # is what stops one pilot's import silently replacing another's rows.
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_flights_user ON flights(user_id, sort_index)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_flights_id ON flights(id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_flights_number_date ON flights(flight_number, date)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_flights_purge ON flights(purge_after)")
+
+    # Who is on which flight, and in what capacity.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS roster (
+            user_id INTEGER NOT NULL,
+            flight_id TEXT NOT NULL,
+            sort_index INTEGER NOT NULL DEFAULT 0,
+            is_deadhead INTEGER NOT NULL DEFAULT 0,
+            trip_start INTEGER NOT NULL DEFAULT 0,
+            added_at TEXT,
+            PRIMARY KEY (user_id, flight_id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_roster_user ON roster(user_id, sort_index)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_roster_flight ON roster(flight_id)")
 
 
 def _sync_flight_columns(conn) -> None:
@@ -237,7 +282,7 @@ def init_db() -> None:
                 aeroapi_enabled INTEGER NOT NULL DEFAULT 0,
                 aeroapi_key TEXT,
                 aeroapi_queries INTEGER NOT NULL DEFAULT 0,
-                aeroapi_budget REAL NOT NULL DEFAULT 4.50,
+                aeroapi_budget REAL NOT NULL DEFAULT 4.90,
                 aeroapi_reported_cost REAL,
                 aeroapi_reported_calls INTEGER,
                 aeroapi_usage_at TEXT,
@@ -254,7 +299,7 @@ def init_db() -> None:
             ("aeroapi_enabled", "INTEGER NOT NULL DEFAULT 0"),
             ("aeroapi_key", "TEXT"),
             ("aeroapi_queries", "INTEGER NOT NULL DEFAULT 0"),
-            ("aeroapi_budget", "REAL NOT NULL DEFAULT 4.50"),
+            ("aeroapi_budget", "REAL NOT NULL DEFAULT 4.90"),
             ("aeroapi_reported_cost", "REAL"),
             ("aeroapi_reported_calls", "INTEGER"),
             ("aeroapi_usage_at", "TEXT"),
@@ -268,6 +313,25 @@ def init_db() -> None:
             # Whoever already exists (the original single pilot) becomes
             # admin automatically on upgrade.
             conn.execute("UPDATE users SET is_admin = 1 WHERE id = (SELECT MIN(id) FROM users)")
+
+        # v5.2 raised the default cap from $4.50 to $4.90. Changing the
+        # column DEFAULT only affects rows created afterwards, so anyone
+        # already installed would keep the old ceiling and quietly lose
+        # 40 cents of the free allowance. Only rows sitting on EXACTLY the
+        # old default move — a pilot who chose 4.50, or any other number,
+        # picked it, and this must not overwrite a deliberate choice.
+        conn.execute("UPDATE users SET aeroapi_budget = 4.90 WHERE aeroapi_budget = 4.50")
+
+        # A v5.0 database has a per-user `flights` table with a composite
+        # primary key. The shared table cannot be created over the top of
+        # it (CREATE TABLE IF NOT EXISTS would silently do nothing and
+        # every write would then hit the wrong shape), so it is renamed
+        # out of the way first and merged in below.
+        if _table_exists(conn, "flights"):
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(flights)")}
+            if "user_id" in cols:
+                conn.execute("ALTER TABLE flights RENAME TO flights_v50")
+                print("[db] found a per-user v5.0 flights table — merging into shared")
 
         _create_flights(conn)
         _sync_flight_columns(conn)
@@ -316,14 +380,16 @@ def _table_exists(conn, name: str) -> bool:
 
 
 def _migrate_from_v4(conn) -> None:
-    """Carry the schedule and the flown tracks over from the old schema.
+    """Carry the schedule and the flown tracks over from older schemas.
 
-    Deliberately partial. The schedule is irreplaceable — it was typed in
-    — and tracks are irreplaceable, they were observed. The airline
+    Deliberately partial. The schedule is irreplaceable — it was typed in —
+    and tracks are irreplaceable, they were observed. The v4 airline
     enrichment and closeout blobs are neither: they are at most 30 days
-    old, they can be re-fetched, and mapping two nested JSON documents
-    into sixty columns is a one-off guess. Past flights keep their route
-    and their path; their gate times start over.
+    old, they can be re-fetched, and mapping two nested JSON documents into
+    eighty columns is a one-off guess. Past flights keep their route and
+    their path; their gate times start over.
+
+    Handles both v4 (seven tables) and v5.0 (per-user `flights`).
     """
     if _table_exists(conn, "flight_tracks"):
         already = conn.execute("SELECT COUNT(*) c FROM positions").fetchone()["c"]
@@ -336,36 +402,85 @@ def _migrate_from_v4(conn) -> None:
             if moved:
                 print(f"[db] carried {moved} track points over from v4")
 
-    if _table_exists(conn, "legs"):
-        already = conn.execute("SELECT COUNT(*) c FROM flights").fetchone()["c"]
-        if not already:
-            old = {r["name"] for r in conn.execute("PRAGMA table_info(legs)")}
-            has_op = "operator_callsign" in old
-            has_trip = "trip_start" in old
-            rows = conn.execute("SELECT * FROM legs").fetchall()
-            for r in rows:
-                try:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO flights "
-                        "(id, user_id, sort_index, date, flight_number, origin, destination, "
-                        " dep_time_local, arr_time_local, is_deadhead, trip_start, "
-                        " operator_callsign) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (r["id"], r["user_id"] or 0, r["sort_index"], r["date"],
-                         r["flight_number"], r["origin"], r["destination"],
-                         r["dep_time_local"], r["arr_time_local"], r["is_deadhead"],
-                         (r["trip_start"] if has_trip else 0),
-                         (r["operator_callsign"] if has_op else None)),
-                    )
-                except Exception:
-                    continue
-            n = conn.execute("SELECT COUNT(*) c FROM flights").fetchone()["c"]
-            if n:
-                print(f"[db] carried {n} schedule legs over from v4")
+    have_roster = conn.execute("SELECT COUNT(*) c FROM roster").fetchone()["c"]
+    if have_roster:
+        return
 
-    # The old tables are left in place rather than dropped. If anything
-    # about the migration turns out wrong, the original data is still
-    # there to look at; dropping it would make that unrecoverable.
-    for dead in ("aircraft",):
-        if _table_exists(conn, dead):
-            conn.execute(f"DROP TABLE {dead}")
+    # --- from v5.0: `flights` was per-user and carried the roster fields.
+    if _table_exists(conn, "flights_v50"):
+        rows = conn.execute("SELECT * FROM flights_v50").fetchall()
+        _adopt(conn, rows, id_key="id", user_key="user_id")
+        # v5.0 already stored observed and airline data in the same column
+        # shape, so unlike the v4 path there is nothing to guess — copy it
+        # across. Where two crew had rows for one flight, the richer one
+        # wins field by field, since a blank is only ever absence.
+        carried = {n for n, _ in FLIGHT_COLUMNS} & {
+            r["name"] for r in conn.execute("PRAGMA table_info(flights_v50)")}
+        carried -= {"date", "flight_number", "origin", "destination",
+                    "dep_time_local", "arr_time_local", "created_at"}
+        for col in sorted(carried):
+            conn.execute(
+                f"UPDATE flights SET {col} = COALESCE("
+                f"  (SELECT v.{col} FROM flights_v50 v "
+                f"   WHERE (CASE WHEN v.id LIKE '%-DH' "
+                f"          THEN substr(v.id, 1, length(v.id) - 3) ELSE v.id END) = flights.id "
+                f"   AND v.{col} IS NOT NULL LIMIT 1), {col})")
+        print(f"[db] merged {len(rows)} per-user v5.0 rows into shared flights")
+        return
+
+    # --- from v4: the `legs` table.
+    if _table_exists(conn, "legs"):
+        old_cols = {r["name"] for r in conn.execute("PRAGMA table_info(legs)")}
+        rows = conn.execute("SELECT * FROM legs").fetchall()
+        _adopt(conn, rows, id_key="id", user_key="user_id",
+               has_trip="trip_start" in old_cols,
+               has_op="operator_callsign" in old_cols)
+        n = conn.execute("SELECT COUNT(*) c FROM flights").fetchone()["c"]
+        if n:
+            print(f"[db] carried {n} schedule legs over from v4 "
+                  f"({len(rows)} roster entries)")
+
+
+def _strip_dh(leg_id: str) -> str:
+    """Old ids carried a "-DH" suffix. That describes the PERSON's role,
+    not the aeroplane, so it is not part of a shared flight's identity."""
+    return leg_id[:-3] if leg_id.endswith("-DH") else leg_id
+
+
+def _adopt(conn, rows, id_key: str, user_key: str,
+           has_trip: bool = True, has_op: bool = True) -> None:
+    """Fold old per-user rows into one shared flight plus roster entries.
+
+    Where two pilots had the same leg, the flight row is written once (the
+    first wins; they described the same aeroplane) and each gets a roster
+    entry carrying their own sort order and deadhead flag.
+    """
+    now = _now()
+    for r in rows:
+        try:
+            raw_id = r[id_key]
+            fid = _strip_dh(raw_id)
+            uid = r[user_key] or 0
+            is_dh = int(bool(r["is_deadhead"])) if "is_deadhead" in r.keys() else \
+                (1 if raw_id.endswith("-DH") else 0)
+            conn.execute(
+                "INSERT OR IGNORE INTO flights (id, date, flight_number, origin, "
+                "destination, dep_time_local, arr_time_local, operator_callsign, "
+                "created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (fid, r["date"], r["flight_number"], r["origin"], r["destination"],
+                 r["dep_time_local"], r["arr_time_local"],
+                 (r["operator_callsign"] if has_op else None), now),
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO roster (user_id, flight_id, sort_index, "
+                "is_deadhead, trip_start, added_at) VALUES (?,?,?,?,?,?)",
+                (uid, fid, r["sort_index"] or 0, is_dh,
+                 int(bool(r["trip_start"])) if has_trip else 0, now),
+            )
+        except Exception:
+            continue
+
+
+def _now() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()

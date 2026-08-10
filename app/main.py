@@ -11,7 +11,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from .schedule import load_schedule, get_current_info, delete_leg, save_schedule
 from .enrichment import query_stats, budget_state
-from .flights import get_row
+from .flights import get_flight
 from .models import FlightLeg
 from .parser import parse_schedule_text
 from .airports import enrich_leg
@@ -161,8 +161,9 @@ def tag_index(user_id: int) -> dict:
     try:
         return {r["id"]: (r["status_tag"], r["phase_tag"], bool(r["cancelled"]))
                 for r in conn.execute(
-                    "SELECT id, status_tag, phase_tag, cancelled FROM flights "
-                    "WHERE user_id = ?", (user_id,))}
+                    "SELECT f.id, f.status_tag, f.phase_tag, f.cancelled FROM roster r "
+                    "JOIN flights f ON f.id = r.flight_id WHERE r.user_id = ?",
+                    (user_id,))}
     finally:
         conn.close()
 
@@ -642,7 +643,7 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool,
         return None, {"progress_pct": None, "ete": None, "distance_nm": None,
                       "breadcrumb": [], "aircraft": None, "status": None,
                       "phase_tag": None, "status_tag": None}
-    row = get_row(user_id, selected_leg.id)
+    row = get_flight(selected_leg.id)
     payload = flight_view.build(row, selected_leg, now, time_format)
     live = payload.pop("live", None)
     return live, payload
@@ -1002,7 +1003,7 @@ async def settings_save(
     request: Request,
     aeroapi_enabled: str = Form(""),
     aeroapi_key: str = Form(""),
-    # Default is EMPTY, not "4.50": FastAPI substitutes the declared default
+    # Default is EMPTY, not "4.90": FastAPI substitutes the declared default
     # for a blank field, so a numeric default here would silently reset a
     # pilot's cap whenever the input was cleared. Blank means "keep stored".
     aeroapi_budget: str = Form(""),
