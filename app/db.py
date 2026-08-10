@@ -368,6 +368,23 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_positions_key_ts ON positions(flight_key, ts)")
 
         _migrate_from_v4(conn)
+        # v5.2 taught the parser to drop FFDO placeholder lines (same
+        # airport both ends, or flight number zero). That only helps
+        # FUTURE imports — anything already saved stayed saved, kept
+        # showing on the tracker and the calendar, and kept being swept by
+        # the poller. Clean them out once, here, rather than asking the
+        # pilot to delete them by hand from the Flights page.
+        placeholder = ("SELECT id FROM flights WHERE origin = destination "
+                       "OR TRIM(COALESCE(flight_number,'')) IN ('','0','00','000','0000')")
+        stale = [r["id"] for r in conn.execute(placeholder)]
+        if stale:
+            marks = ",".join("?" * len(stale))
+            conn.execute(f"DELETE FROM roster WHERE flight_id IN ({marks})", stale)
+            conn.execute(f"DELETE FROM positions WHERE flight_key IN ({marks})", stale)
+            conn.execute(f"DELETE FROM flights WHERE id IN ({marks})", stale)
+            print(f"[db] removed {len(stale)} FFDO placeholder rows "
+                  f"(same airport both ends, or flight number zero)")
+
         conn.commit()
     finally:
         conn.close()

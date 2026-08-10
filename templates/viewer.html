@@ -252,8 +252,67 @@
       margin-bottom: 0.75rem;
     }
     [data-theme="light"] .toggle { background: #e2e8f0; }
-    #past-section { display: none; }
-    #past-section.open { display: block; }
+    /* Past rows and wholly-past days are hidden until the toggle opens
+       them. Driven off a class on <body> rather than a wrapper element,
+       because past and live rows now interleave inside the same list — a
+       single collapsible container can no longer express "hide these three
+       rows but keep the fourth". */
+    body:not(.past-open) .is-past { display: none !important; }
+
+    .leg-head {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      gap: 0.5rem; cursor: pointer; width: 100%;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .leg-head-main { min-width: 0; flex: 1 1 auto; }
+    .leg-head-tags {
+      text-align: right; flex: 0 0 auto;
+      display: flex; flex-direction: column; align-items: flex-end; gap: 0.3rem;
+    }
+    .row-caret {
+      color: var(--muted); font-size: 0.75rem; line-height: 1;
+      transition: transform 0.15s ease;
+    }
+    .leg-head[aria-expanded="true"] .row-caret { transform: rotate(180deg); }
+
+    /* The live flight, shown IN the list as well as on the card, so the
+       scroll has a "you are here". */
+    .live-row { position: relative; }
+    .live-row > .leg-head { }
+    .upcoming-item.live-row {
+      border-left: 3px solid var(--accent);
+      margin-left: -0.75rem; padding-left: 0.72rem;
+      background: rgba(56,189,248,0.06); border-radius: 0 8px 8px 0;
+    }
+    .live-dot {
+      display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+      background: var(--accent); margin-left: 0.4rem; vertical-align: middle;
+    }
+
+    .row-detail {
+      margin-top: 0.6rem; padding-top: 0.6rem;
+      border-top: 1px dashed var(--border);
+    }
+    .row-detail[hidden] { display: none; }
+    .rd-row {
+      display: flex; justify-content: space-between; gap: 0.75rem;
+      font-size: 0.82rem; padding: 0.22rem 0; align-items: baseline;
+    }
+    .rd-row .k { color: var(--muted); flex: 0 0 auto; }
+    .rd-row .v {
+      text-align: right; font-weight: 600; min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .rd-row .v.late { color: var(--bad); }
+    .rd-row .v.early { color: var(--good); }
+    .rd-row .v.cancelled { color: var(--bad); }
+    .rd-empty, .rd-loading { font-size: 0.8rem; color: var(--muted); padding: 0.2rem 0; }
+    .rd-links { margin-top: 0.55rem; display: flex; gap: 0.9rem; }
+    .rd-links a {
+      color: var(--accent); font-size: 0.82rem; font-weight: 600;
+      text-decoration: none;
+    }
+    .rd-links a[data-fr24-link] { color: var(--muted); }
     .live-box {
       margin-top: 0.85rem;
       padding: 0.75rem;
@@ -704,82 +763,66 @@
   <div class="expand-hint" id="expand-hint">Tap for more &#9662;</div>
 
   <div class="expand-wrap" id="expand-wrap">
-    {% if past_groups %}
+    {% if past_count %}
     <button class="toggle" id="past-toggle" onclick="togglePast()">Show past flights ({{ past_count }})</button>
-    <div id="past-section">
-      {% for group in past_groups %}
-      {% if group.trip_start and not loop.first %}
-      <div class="trip-divider"></div>
-      {% endif %}
-      <div class="card day-card">
-        <div class="day-label">{{ group.date_label }}</div>
-        {% for leg in group.legs %}
-        <div class="upcoming-item {% if leg.id == selected_id %}selected-row{% endif %}">
-          <div class="list-item">
-            <a class="flight-row-link" data-leg-id="{{ leg.id }}" href="/?leg={{ leg.id }}">
-              <div class="row-flight-num">{{ leg.callsign }}{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
-              <div class="row-city-route">{{ leg.origin }} → {{ leg.destination }}</div>
-              <div class="row-times-row">
-                <div class="row-chip"><span class="row-chip-icon"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline></svg></span><span class="row-chip-time">{{ leg.dep }}</span></div>
-                <div class="row-chip"><span class="row-chip-icon"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="7" x2="17" y2="17"></line><polyline points="17 7 17 17 7 17"></polyline></svg></span><span class="row-chip-time">{{ leg.arr }}</span></div>
-              </div>
-            </a>
-            <div style="text-align:right">
-              {% if leg.status_tag %}<span class="status {{ leg.status_tag|lower|replace(' ', '-') }}">{{ leg.status_tag }}</span>{% endif %}{% if leg.phase_tag %}<span class="status phase {{ 'arrived' if leg.phase_tag == 'Arrived' else '' }}">{{ leg.phase_tag }}</span>{% endif %}
-            </div>
-          </div>
-        </div>
-        {% endfor %}
-      </div>
-      {% if group.overnight %}
-      <div class="overnight-label">Overnight in {{ group.overnight.city }} — {{ group.overnight.duration }}</div>
-      {% endif %}
-      {% endfor %}
-    </div>
     {% endif %}
 
-    {% if upcoming_groups %}
-    <div class="section-label">Upcoming</div>
-    {% for group in upcoming_groups %}
-    {% if group.trip_start and not loop.first %}
-    <div class="trip-divider"></div>
+    {# ONE list: past, the live flight, then upcoming, in order. The live
+       flight is IN the list, not only on the card above — scrolling a
+       schedule with a hole where you actually are gives you nothing to
+       measure against. Past rows and wholly-past days carry .is-past and
+       are hidden until the toggle opens them; a day holding both flown and
+       upcoming legs stays visible and hides only its flown rows. #}
+    {% for group in flight_groups %}
+    {% if group.first_live %}
+    {# Scroll landmark for togglePast(). Sits before the first day that is
+       not entirely past, so every element the toggle inserts is above it
+       and the delta it moves by is exactly the height added. #}
+    <div id="past-anchor" style="height:0"></div>
     {% endif %}
-    <div class="card day-card">
+    {% if group.trip_start and not loop.first %}
+    <div class="trip-divider {% if group.all_past %}is-past{% endif %}"></div>
+    {% endif %}
+    <div class="card day-card {% if group.all_past %}is-past{% endif %}">
       <div class="day-label">{{ group.date_label }}</div>
       {% for leg in group.legs %}
-      <div class="upcoming-item {% if leg.id == selected_id %}selected-row{% endif %}">
-        <div class="list-item">
-          <a class="flight-row-link" data-leg-id="{{ leg.id }}" href="/?leg={{ leg.id }}">
-            <div class="row-flight-num">{{ leg.callsign }}{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
-            <div class="row-city-route">{{ leg.origin }} → {{ leg.destination }}</div>
+      <div class="upcoming-item {% if leg.is_past %}is-past{% endif %} {% if leg.is_current %}live-row{% endif %}">
+        <div class="list-item leg-head" data-detail-for="{{ leg.id }}" role="button" tabindex="0"
+             aria-expanded="false" aria-controls="rd-{{ leg.id }}">
+          <div class="leg-head-main">
+            <div class="row-flight-num">{{ leg.callsign }}{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}{% if leg.is_current %}<span class="live-dot" title="Current flight"></span>{% endif %}</div>
+            <div class="row-city-route">{{ leg.origin }} &rarr; {{ leg.destination }}</div>
             <div class="row-times-row">
               <div class="row-chip"><span class="row-chip-icon"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline></svg></span><span class="row-chip-time">{{ leg.dep }}</span></div>
               <div class="row-chip"><span class="row-chip-icon"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="7" x2="17" y2="17"></line><polyline points="17 7 17 17 7 17"></polyline></svg></span><span class="row-chip-time">{{ leg.arr }}</span></div>
             </div>
-          </a>
-          <div style="text-align:right">
+          </div>
+          <div class="leg-head-tags">
             {% if leg.status_tag %}<span class="status {{ leg.status_tag|lower|replace(' ', '-') }}">{{ leg.status_tag }}</span>{% endif %}{% if leg.phase_tag %}<span class="status phase {{ 'arrived' if leg.phase_tag == 'Arrived' else '' }}">{{ leg.phase_tag }}</span>{% endif %}
-            <div style="margin-top:0.5rem">
-              {% if settings.show_flightaware %}
-              <a data-fa-link href="{{ leg.links.flightaware }}" target="_blank" rel="noopener" style="color:var(--accent);font-size:0.85rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">FlightAware</a>
-              {% endif %}
-              {% if settings.show_flightaware and settings.show_fr24 %}
-              <span style="color:var(--muted)">·</span>
-              {% endif %}
-              {% if settings.show_fr24 %}
-              <a data-fr24-link href="{{ leg.links.fr24 }}" target="_blank" rel="noopener" style="color:var(--muted);font-size:0.85rem;font-weight:600;text-decoration:none;padding:0.25rem 0.4rem">FR24</a>
-              {% endif %}
-            </div>
+            <span class="row-caret" aria-hidden="true">&#9662;</span>
+          </div>
+        </div>
+        {# Filled on first open from /api/leg/{id}. Empty fields are never
+           rendered, so an unflown leg shows only what actually exists
+           instead of a column of blanks. #}
+        <div class="row-detail" id="rd-{{ leg.id }}" data-loaded="0" hidden>
+          <div class="row-detail-body"><div class="rd-loading">Loading&hellip;</div></div>
+          <div class="rd-links">
+            {% if settings.show_flightaware %}
+            <a data-fa-link href="{{ leg.links.flightaware }}" target="_blank" rel="noopener">FlightAware</a>
+            {% endif %}
+            {% if settings.show_fr24 %}
+            <a data-fr24-link href="{{ leg.links.fr24 }}" target="_blank" rel="noopener">FR24</a>
+            {% endif %}
           </div>
         </div>
       </div>
       {% endfor %}
     </div>
     {% if group.overnight %}
-    <div class="overnight-label">Overnight in {{ group.overnight.city }} — {{ group.overnight.duration }}</div>
+    <div class="overnight-label {% if group.all_past %}is-past{% endif %}">{% if group.overnight.nights > 1 %}{{ group.overnight.nights }} nights in{% else %}Overnight in{% endif %} {{ group.overnight.city }} &mdash; {{ group.overnight.duration }}</div>
     {% endif %}
     {% endfor %}
-    {% endif %}
   </div>
   {% endif %}
 
@@ -822,7 +865,7 @@
     //   .expand-details.open      -> display: block
     //   .expand-wrap.open         -> display: block
     //   .collapsed-card.expanded  -> city name wraps instead of truncating
-    //   #past-section.open        -> display: block
+    //   body.past-open            -> reveals .is-past rows and days
     (function() {
       var card = document.getElementById('collapsed-card');
       var details = document.getElementById('expand-details');
@@ -862,10 +905,41 @@
     // global — a function declared inside an IIFE would not be reachable
     // from the attribute and the button would silently do nothing.
     function togglePast() {
-      var section = document.getElementById('past-section');
       var btn = document.getElementById('past-toggle');
-      if (!section || !btn) return;
-      var open = section.classList.toggle('open');
+      if (!btn) return;
+
+      // The past list sits ABOVE the upcoming list, so opening it inserts
+      // its whole height into the middle of the page and shoves everything
+      // below down by that much. The browser keeps scrollTop where it was,
+      // so from the reader's seat the page appears to jump backwards to the
+      // OLDEST past flight — the least interesting one — and whatever they
+      // were reading is now far below.
+      //
+      // Fix: pick a landmark below the section, note where it sits on
+      // screen, toggle, then scroll by exactly how far it moved. The
+      // landmark stays under the same pixel, the past flights unfold
+      // upwards out of view, and the most recent one — last in the list,
+      // nearest the reader — is a short scroll up.
+      //
+      // Measured with getBoundingClientRect immediately after the class
+      // change, which is safe ONLY because .is-past toggles display:none
+      // with no transition. Give it an animation and this has to move into
+      // a rAF or a transitionend handler.
+      var anchor = document.getElementById('past-anchor');
+      var before = anchor ? anchor.getBoundingClientRect().top : null;
+
+      var open = document.body.classList.toggle('past-open');
+
+      if (before !== null) {
+        var after = anchor.getBoundingClientRect().top;
+        var shift = after - before;
+        if (shift) {
+          // scrollBy with behavior:'instant' — a smooth scroll here reads
+          // as the same jump, just slower.
+          window.scrollBy({ top: shift, left: 0, behavior: 'instant' });
+        }
+      }
+
       // The count comes from the button's own current label rather than a
       // template variable, so this keeps working after the poll swaps legs
       // and the number changes.
@@ -1410,11 +1484,107 @@
           .catch(function() {});
       }
 
+      // Tapping a flight row expands its detail IN PLACE. It deliberately
+      // does NOT move the card or the map: those stay on the flight that
+      // is actually happening. Before, a tap swapped the top card, so
+      // looking up last Tuesday's arrival gate meant losing sight of the
+      // live flight and then hunting back down the list to where you were.
+      //
+      // Detail is fetched once per row, on first open, from the same
+      // /api/leg endpoint the card uses. It is entirely read-only — no
+      // AeroAPI query, so opening every past flight in the month costs
+      // nothing.
+      function renderLegDetail(panel, data) {
+        var body = panel.querySelector('.row-detail-body');
+        if (!body) return;
+        var d = (data && data.current) || {};
+        var rows = [];
+
+        function add(label, value, cls) {
+          // The whole point of hiding empties: an unflown leg has no gate,
+          // no baggage belt and no actual times, and a column of blank
+          // fields reads as broken rather than as "not yet".
+          if (value == null || value === '') return;
+          rows.push('<div class="rd-row"><span class="k">' + label +
+                    '</span><span class="v ' + (cls || '') + '">' + value + '</span></div>');
+        }
+        function esc(t) {
+          return String(t).replace(/[&<>"]/g, function(c) {
+            return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c];
+          });
+        }
+
+        if (d.dep_delay) add('Departure', esc(d.dep_delay.text), d.dep_delay.state);
+        if (d.arr_delay) add('Arrival', esc(d.arr_delay.text), d.arr_delay.state);
+        add('Scheduled', esc((d.dep || '') + ' \u2192 ' + (d.arr || '')), 'was');
+
+        var g = d.gates || {};
+        if (g.origin_gate) {
+          add(esc(d.origin || '') + ' gate', esc(g.origin_gate) +
+              (g.origin_terminal ? ' \u00b7 Terminal ' + esc(g.origin_terminal) : ''));
+        }
+        if (g.dest_gate) {
+          add(esc(d.destination || '') + ' gate', esc(g.dest_gate) +
+              (g.dest_terminal ? ' \u00b7 Terminal ' + esc(g.dest_terminal) : ''));
+        }
+        if (g.baggage) add('Baggage', esc(g.baggage));
+
+        if (d.aircraft && (d.aircraft.registration || d.aircraft.display_type)) {
+          add('Aircraft', esc([d.aircraft.registration, d.aircraft.display_type]
+                              .filter(Boolean).join(' \u00b7 ')));
+        }
+        if (d.diversion && d.diversion.diverted_to) {
+          add('Diverted to', esc(d.diversion.diverted_to), 'late');
+        }
+        if (d.closed_by) add('Closed out', esc(String(d.closed_by).replace(/_/g, ' ')));
+        if (d.arrival_source) add('Arrival time from', esc(d.arrival_source));
+        if (d.enriched_at) add('Airline data', esc(d.enriched_at));
+
+        body.innerHTML = rows.length
+          ? rows.join('')
+          : '<div class="rd-empty">Nothing recorded for this flight yet.</div>';
+      }
+
+      function toggleLegDetail(head) {
+        var legId = head.getAttribute('data-detail-for');
+        var panel = document.getElementById('rd-' + legId);
+        if (!panel) return;
+        var opening = panel.hasAttribute('hidden');
+        if (!opening) {
+          panel.setAttribute('hidden', '');
+          head.setAttribute('aria-expanded', 'false');
+          return;
+        }
+        panel.removeAttribute('hidden');
+        head.setAttribute('aria-expanded', 'true');
+        if (panel.getAttribute('data-loaded') === '1') return;
+        panel.setAttribute('data-loaded', '1');
+        fetch('/api/leg/' + encodeURIComponent(legId))
+          .then(function(r) { return r.json(); })
+          .then(function(data) { renderLegDetail(panel, data); })
+          .catch(function() {
+            panel.setAttribute('data-loaded', '0');
+            var body = panel.querySelector('.row-detail-body');
+            if (body) body.innerHTML = '<div class="rd-empty">Couldn\u2019t load this one.</div>';
+          });
+      }
+
       document.addEventListener('click', function(e) {
-        const link = e.target.closest ? e.target.closest('[data-leg-id]') : null;
-        if (!link) return;
+        // Let the FlightAware / FR24 links inside an open panel behave as
+        // links rather than collapsing the row out from under the tap.
+        if (e.target.closest && e.target.closest('.rd-links')) return;
+        var head = e.target.closest ? e.target.closest('.leg-head[data-detail-for]') : null;
+        if (!head) return;
         e.preventDefault();
-        selectLeg(link.getAttribute('data-leg-id'));
+        toggleLegDetail(head);
+      });
+
+      document.addEventListener('keydown', function(e) {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        var head = e.target.closest ? e.target.closest('.leg-head[data-detail-for]') : null;
+        if (!head) return;
+        e.preventDefault();
+        toggleLegDetail(head);
       });
 
       setInterval(refreshLiveData, {{ poll_ms }});

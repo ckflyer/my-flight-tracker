@@ -82,13 +82,34 @@
     .sub-fields {
       margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid var(--border);
     }
-    .usage-line {
-      display: flex; justify-content: space-between; align-items: baseline;
-      font-size: 0.8rem; color: var(--muted); margin-top: 0.9rem;
-      padding-top: 0.7rem; border-top: 1px solid var(--border);
+    /* Was a space-between flex row. On a phone "Usage this month (2026-08)"
+       plus "18 calls - $0.09 of $4.90" does not fit, so the value wrapped
+       to a second line — and .hint's negative top margin (below) then
+       pulled the following paragraph up on top of it. Stacked block: it
+       cannot wrap into itself, at any width. */
+    .usage-block {
+      margin-top: 0.9rem; padding-top: 0.7rem;
+      border-top: 1px solid var(--border);
     }
-    .usage-line strong { color: var(--text); font-size: 0.95rem; }
+    .usage-label {
+      font-size: 0.8rem; color: var(--muted); display: block;
+      margin-bottom: 0.15rem;
+    }
+    .usage-value {
+      display: block; color: var(--text); font-size: 1.05rem;
+      font-weight: 700; line-height: 1.25; font-variant-numeric: tabular-nums;
+    }
+    .usage-meta {
+      display: block; font-size: 0.75rem; color: var(--muted);
+      margin-top: 0.3rem; line-height: 1.45;
+    }
+    .usage-meta .warn { color: var(--warn); }
+    .usage-meta .bad { color: var(--bad); }
+    /* The negative top margin is what tucks a hint under its own input.
+       It must never apply to a hint following the usage block, or it
+       climbs over it. */
     .hint { font-size: 0.8rem; color: var(--muted); margin-top: -0.5rem; margin-bottom: 0.85rem; }
+    .usage-block + .hint { margin-top: 0.5rem; }
     .topbar {
       display: flex;
       align-items: center;
@@ -179,26 +200,30 @@
           <span class="track"></span>
         </label>
       </div>
-      <p class="hint">Adds real departure and arrival times, delays, diversions, cancellations and gate numbers &mdash; none of which ADS-B broadcasts. Live position keeps using the free ADS-B feed either way.</p>
+      <p class="hint">Adds gates, delays, diversions, cancellations and real gate-to-gate times &mdash; none of which ADS-B broadcasts. Position tracking is free either way.</p>
 
       <div id="aeroapi-fields" class="sub-fields" style="{{ '' if s.aeroapi_enabled else 'display:none' }}">
         <label for="aeroapi-key">API key</label>
         <input type="password" name="aeroapi_key" id="aeroapi-key" autocomplete="off"
                placeholder="{{ 'saved \u2014 leave blank to keep it' if s.aeroapi_key else 'paste your AeroAPI key' }}">
-        <p class="hint">Your own key on your own FlightAware account. The Personal tier includes $5/month of free queries, or $10 if you feed ADS-B.</p>
-        <div class="usage-line">
-          <span>Usage this month ({{ aeroapi_stats.period }})</span>
+        <p class="hint">Your own key, on your own FlightAware account. Sign in at flightaware.com, open AeroAPI, choose the <strong>Personal</strong> tier and copy the key. It includes $5/month free &mdash; $10 if you feed ADS-B.</p>
+        <div class="usage-block">
+          <span class="usage-label">Usage this month ({{ aeroapi_stats.period }})</span>
           {% if aeroapi_stats.has_reading %}
-          <strong{% if aeroapi_stats.over_budget %} style="color:var(--bad)"{% endif %}>{{ aeroapi_stats.reported_calls or aeroapi_stats.queries }} calls &middot; ${{ '%.2f'|format(aeroapi_stats.spent) }} of ${{ '%.2f'|format(aeroapi_stats.budget) }}</strong>
+          <span class="usage-value"{% if aeroapi_stats.over_budget %} style="color:var(--bad)"{% endif %}>${{ '%.2f'|format(aeroapi_stats.spent) }} of ${{ '%.2f'|format(aeroapi_stats.budget) }}</span>
+          <span class="usage-meta">
+            {{ aeroapi_stats.reported_calls or aeroapi_stats.queries }} calls &middot; FlightAware&rsquo;s figure{% if aeroapi_stats.usage_age %}, {{ aeroapi_stats.usage_age }}{% endif %}<br>
+            Tracker last ran <strong{% if poller.stale %} class="warn"{% endif %}>{{ poller.label }}</strong>{% if poller.stale %} &mdash; longer ago than it should be{% endif %}
+            {%- if not aeroapi_stats.reading_fresh %}<br><span class="bad">Spend reading is stale; the limit is being held against a local count until it updates.</span>{% endif %}
+          </span>
           {% else %}
-          <strong style="color:var(--muted)">&mdash; of ${{ '%.2f'|format(aeroapi_stats.budget) }}</strong>
+          <span class="usage-value" style="color:var(--muted)">&mdash; of ${{ '%.2f'|format(aeroapi_stats.budget) }}</span>
+          <span class="usage-meta">
+            No reading yet; it appears within 15 minutes of the key being used.<br>
+            Tracker last ran <strong{% if poller.stale %} class="warn"{% endif %}>{{ poller.label }}</strong>
+          </span>
           {% endif %}
         </div>
-        {% if aeroapi_stats.has_reading %}
-        <p class="hint">FlightAware&rsquo;s own figure{% if aeroapi_stats.usage_age %}, pulled {{ aeroapi_stats.usage_age }}{% endif %}. Read hourly through the free <code>/account/usage</code> call, so checking costs nothing. Their side updates about every 10 minutes.{% if not aeroapi_stats.reading_fresh %} This reading is out of date &mdash; the usage endpoint hasn&rsquo;t responded in a while, so the limit is being enforced against a local count until it does.{% endif %}</p>
-        {% else %}
-        <p class="hint">No reading yet. FlightAware&rsquo;s figure appears here within an hour of the key being used; until then the limit is enforced against a local count.</p>
-        {% endif %}
         {% if aeroapi_stats.exhausted %}
         <p class="hint" style="color:var(--bad);font-weight:600;">
           {% if aeroapi_stats.budget <= 0 %}Limit set to $0 &mdash; AeroAPI queries are off. Live ADS-B tracking is unaffected.
@@ -211,7 +236,7 @@
           <input type="number" name="aeroapi_budget" id="aeroapi-budget" step="0.25" min="0" max="500"
                  value="{{ '%.2f'|format(s.aeroapi_budget) }}">
         </div>
-        <p class="hint">Queries stop for the rest of the month once spend reaches this. The Personal tier includes $5/month free, so the $4.90 default sits just under it. Set it to 0 to stop querying entirely while keeping your key saved. Each flight gets up to 18 queries, spread evenly from 30 minutes before departure to an hour after arrival, and stops early once the airline confirms gate-in &mdash; so a 50-leg month lands around $4.50 at the very most, and usually well under. Only the background tracker queries; opening or refreshing a page never does. Live ADS-B tracking is free and never stops.</p>
+        <p class="hint">A hard stop: queries pause for the rest of the month once spend reaches this. $0 turns them off but keeps your key saved. Each flight gets up to 18 queries, so even a 50-leg month stays under $4.50. Refreshing a page never costs anything, and ADS-B tracking is free and never stops.</p>
       </div>
     </div>
 

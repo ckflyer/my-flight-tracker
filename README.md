@@ -1,7 +1,7 @@
 # flight-tracker
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 5.2.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 5.4.
 
 <!--
 READER: THIS FILE IS OPTIMISED FOR AI CONSUMPTION, NOT HUMAN BROWSING.
@@ -24,7 +24,7 @@ and say so before editing — that has already cost a working feature once.
 2. Add a `## VERSION HISTORY` entry at the top of it.
 3. Update `## STATE` and `## OPEN`.
 4. Record any bug you hit and how it was diagnosed.
-5. Run all five test suites. Package only if all pass.
+5. Run all six test suites. Package only if all pass.
 6. Never ship `data/*.db` or `data/secret_key.txt`.
 
 **Owner context:** no programming background. Explain reasoning in prose in
@@ -41,7 +41,7 @@ seriously.
 v5.1. Deployed target: TrueNAS. Multi-user: the owner plus several FOs,
 who fly the same legs — hence shared flight rows (v5.1).
 
-Tests: 126, five suites, all passing.
+Tests: 166, six suites, all passing.
 
 | Suite | N | Covers |
 |---|---|---|
@@ -50,6 +50,7 @@ Tests: 126, five suites, all passing.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, FFDO placeholder filter |
+| `tests_ui_fixes.py` | 40 | layover labels, untracked phase, sequencing, flight list |
 
 ## OPEN
 
@@ -173,7 +174,7 @@ track.py        breadcrumbs + progress/distance/ETE maths
 livesource.py   shared cache + 1 req/s floor over the ADS-B provider
 airplaneslive.py / aeroapi.py / carrier.py   providers
 db.py           schema + migrations (v4 and v5.0 -> v5.1)
-schedule.py     past/current/upcoming split
+schedule.py     past/current/upcoming split, and which leg is live
 parser.py models.py auth.py settings.py airports.py geo.py ratelimit.py
 templates/viewer.html   the app (65KB, edit surgically)
 ```
@@ -233,6 +234,30 @@ hung. A late airline gate-in **upgrades** an observed/backstop close.
 
 Both halves of `observed` are required: a plane holding off-gate stays
 stationary while transmitting; a coverage hole is silence without a stop.
+
+## WHICH LEG IS CURRENT
+
+Clock first, evidence on top. The window runs T-20 to scheduled arrival
++3h (`CURRENT_GRACE`). Then two overrides, each fixing a failure the clock
+alone produced in the opposite direction:
+
+  * `_still_flying()` — holds the card past the grace while the aircraft
+    is demonstrably UP and has not come down. Three hours late and still
+    at altitude is a normal bad day, and the card used to drop into past
+    flights mid-cruise, exactly when the family is watching hardest.
+  * ...but NOT once it is down. `landed_seen` / `on_actual_api` /
+    `in_actual_api` end the hold even though the leg never closed. Gate-in
+    is the OOOI field most often missing entirely, so a leg can sit open
+    forever with the aeroplane parked — holding the card on that one is
+    what stopped the next flight ever becoming current.
+  * `_has_started()` — when several legs qualify at once, one with real
+    evidence of having departed beats one that has merely reached its
+    scheduled time. Without it a delayed leg 2 took the card off an
+    airborne leg 1, because leg 2's window opened first.
+
+`MAX_AIRBORNE_HOLD` (12h) is the ceiling, so a stuck `airborne_seen` flag
+cannot own the card indefinitely. A candidate that loses is appended to
+`past`, not dropped — it is behind the leg now flying.
 
 ## QUICK START
 
@@ -591,6 +616,74 @@ invariant 1.
   the HTTP layer's perspective (form redisplay, HTTP 200).
 
 ## VERSION HISTORY
+
+### v5.4 - the flight list
+
+- **One list instead of two.** Past, the live flight and upcoming were
+  rendered through separate `group_legs_by_day` calls with the current leg
+  in neither, so the list had a hole exactly where the pilot is. Now built
+  once by `build_flight_list()`, chronological, with the live flight IN it
+  and marked. A day holding both a flown leg and the live one no longer
+  produces two cards with the same label.
+- **Tapping a flight expands it in place.** It no longer swaps the card and
+  map, which meant looking up last Tuesday's arrival gate cost you sight of
+  the live flight. Detail comes from the existing `/api/leg/{id}` on first
+  open, one fetch per row, cached. Entirely read-only: opening every past
+  flight in the month costs no AeroAPI queries.
+- **Past flights keep all their data.** Gates, baggage claim, aircraft,
+  actual times and closeout source were always in the row and always
+  returned by `view.build` — nothing was ever discarded. They simply had
+  nowhere to render. The wife-collecting-the-pilot case works on a leg that
+  landed yesterday.
+- **Empty fields are never drawn.** An unflown leg shows only what exists,
+  rather than a column of blanks that reads as broken.
+- **Past visibility is a body class,** not a wrapper. Past and live rows now
+  interleave inside one list, and a single collapsible container cannot
+  express "hide three rows in this day but keep the fourth".
+
+
+### v5.3 - UI fixes
+
+- **Layovers straddling the past/upcoming split were invisible.** The
+  tracker renders those two lists through separate `group_legs_by_day`
+  calls, so a layover with its arrival in one and its departure in the
+  other had a bucket on each side and a neighbour on neither. Now computed
+  once over the whole schedule by `overnight_index()`. Multi-night gaps
+  read "2 nights in X" rather than "Overnight in X", and layovers are
+  bounded at both ends (3h floor, 35h ceiling) so a midnight-crossing turn
+  isn't an overnight and days off between trips aren't a layover.
+- **`/account/usage` only refreshed while a leg was active.** It lived
+  inside `_settle`, which runs per active leg, so on a day off nothing
+  asked and the reading went 20+ hours stale — and `budget_state` falls
+  back to the local count once a reading is stale, meaning the number the
+  cap is enforced against decayed exactly when nothing was refreshing it.
+  Moved to `poll_once`, all users, every sweep.
+- **Settings usage figure overlapped the text below it.** `.usage-line` was
+  a space-between flex row that wraps on a phone; `.hint`'s negative top
+  margin then climbed over the wrapped line. Rebuilt as a stacked block.
+  Now also shows when the tracker last swept, separately from the spend
+  reading's age — one figure could not distinguish "usage endpoint
+  unhappy" from "poller stopped".
+- **Past legs claimed to be "Scheduled".** `leg_view` falls back to
+  Scheduled with no stored phase, and nothing sweeps a leg once it is past,
+  so a leg imported after it was flown would read Scheduled forever. Reads
+  "Not tracked" past `UNTRACKED_AFTER`.
+- **Flight sequencing conflated two opposite failures.** Purely clock-based
+  selection dropped a leg 3h past SCHEDULED arrival, so a still-airborne
+  leg fell into past flights mid-cruise, while a landed-but-never-closed
+  leg held the card indefinitely. The dividing line is airborne vs. on the
+  ground: `_still_flying` holds the card only while genuinely up, and
+  `_has_started` means a leg that has actually departed beats one that has
+  merely reached its scheduled time. 12h ceiling on the hold.
+- **FFDO placeholder rows imported before v5.2 are purged on boot.** The
+  parser filter only ever helped future imports.
+- **Calendar DH badge moved after the route**, where it no longer shoves
+  every deadhead's origin/destination right by its own width.
+- **Past-flights toggle no longer jumps the page.** The list expands above
+  the upcoming list, so opening it shoved everything down while the browser
+  held scrollTop. `togglePast()` now measures `#past-anchor` before and
+  after and scrolls by the delta.
+- `tests_ui_fixes.py` added (21 assertions).
 
 ### v5.2 - one polling rule instead of six
 

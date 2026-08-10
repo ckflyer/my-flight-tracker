@@ -1,3 +1,3 @@
 """Bump this on every build so the footer version number changes and it's
 obvious at a glance whether an update actually took effect on the server."""
-VERSION = "5.2"
+VERSION = "5.4"

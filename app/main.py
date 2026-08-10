@@ -149,6 +149,14 @@ def _parse_iso(value):
         return None
 
 
+# Shown instead of "Scheduled" on a leg whose arrival is this far past
+# and which the poller never recorded anything for. Matches the 3-hour
+# grace in get_current_info, so a leg stops being current and starts
+# reading as untracked at the same instant rather than in two steps.
+UNTRACKED_AFTER = timedelta(hours=3)
+PHASE_UNTRACKED = "Not tracked"
+
+
 def tag_index(user_id: int) -> dict:
     """{leg_id: (status_tag, phase_tag)} for this user, in one query.
 
@@ -159,10 +167,12 @@ def tag_index(user_id: int) -> dict:
     from .db import get_connection
     conn = get_connection()
     try:
-        return {r["id"]: (r["status_tag"], r["phase_tag"], bool(r["cancelled"]))
+        return {r["id"]: (r["status_tag"], r["phase_tag"], bool(r["cancelled"]),
+                          bool(r["closed"]))
                 for r in conn.execute(
-                    "SELECT f.id, f.status_tag, f.phase_tag, f.cancelled FROM roster r "
-                    "JOIN flights f ON f.id = r.flight_id WHERE r.user_id = ?",
+                    "SELECT f.id, f.status_tag, f.phase_tag, f.cancelled, f.closed "
+                    "FROM roster r JOIN flights f ON f.id = r.flight_id "
+                    "WHERE r.user_id = ?",
                     (user_id,))}
     finally:
         conn.close()
@@ -178,12 +188,23 @@ def leg_view(leg: Optional[FlightLeg], now: datetime, time_format: str = "24",
     # place on the flight lists.
     status_tag, phase_tag = None, tags.PHASE_SCHEDULED
     if tag_lookup is not None:
-        status_tag, stored_phase, cancelled = tag_lookup.get(leg.id, (None, None, False))
+        status_tag, stored_phase, cancelled, closed = tag_lookup.get(
+            leg.id, (None, None, False, False))
         # A leg the poller hasn't reached yet has no stored phase. It still
         # reads Scheduled, matching what view.build sends on the first
         # refresh — otherwise the card renders with no phase pill and then
         # grows one a few seconds later.
         phase_tag = stored_phase or tags.PHASE_SCHEDULED
+        # ...but a flight that left three hours ago is not "Scheduled".
+        # A leg imported after it was flown, or one that fell in a window
+        # when the poller was down, has no stored phase and never will —
+        # nothing sweeps a leg once it is past. Saying Scheduled there is
+        # the app stating something it knows to be false. "Not tracked"
+        # says the true thing: we have no record of this one.
+        arr = leg.arr_datetime_utc()
+        if (not closed and arr and now > arr + UNTRACKED_AFTER
+                and phase_tag == tags.PHASE_SCHEDULED):
+            phase_tag = PHASE_UNTRACKED
         if cancelled or status_tag == tags.STATUS_CANCELLED:
             phase_tag = None
     oi, di = leg.origin_info, leg.dest_info
@@ -242,8 +263,100 @@ def _assign_trip_day_numbers(all_legs: list) -> dict:
     return numbers
 
 
+# Shorter than this and it is a turn, not a layover — even if it happens
+# to straddle midnight. Long enough to leave the airport and sleep.
+MIN_LAYOVER_SECONDS = 3 * 3600
+
+
+def _day_buckets(legs: list) -> list:
+    """Group a leg list into calendar-day buckets, in order."""
+    buckets, current_date = [], None
+    for leg in legs:
+        if leg.date != current_date:
+            buckets.append({"date": leg.date, "legs": [leg], "trip_start": leg.trip_start})
+            current_date = leg.date
+        else:
+            buckets[-1]["legs"].append(leg)
+            if leg.trip_start:
+                buckets[-1]["trip_start"] = True
+    return buckets
+
+
+def overnight_index(all_legs: list) -> dict:
+    """{date: {"city", "duration", "nights"}} for the WHOLE schedule.
+
+    Computed over every leg the pilot has, not per list, because the
+    tracker renders past and upcoming through two separate calls to
+    group_legs_by_day. A layover that straddles that boundary — yesterday's
+    arrival in `past`, tomorrow's departure in `upcoming` — had a bucket on
+    each side and a neighbour on neither, so it silently showed nothing.
+    That is the LFT case: in on the 9th, out on the 11th, and on the 10th
+    the one number the family wants is how long he's actually there.
+
+    Duty-day definition, unchanged: duty ends 15 minutes after block-in and
+    starts 45 minutes before block-out. Nothing is shown across a trip
+    boundary — that gap is time off, not a layover.
+    """
+    out = {}
+    buckets = _day_buckets(all_legs)
+    for i, bucket in enumerate(buckets[:-1]):
+        nxt = buckets[i + 1]
+        if nxt["trip_start"]:
+            continue
+        last_leg, next_leg = bucket["legs"][-1], nxt["legs"][0]
+        last_arr, next_dep = last_leg.arr_datetime_utc(), next_leg.dep_datetime_utc()
+        if not last_arr or not next_dep:
+            continue
+        gap = (next_dep - timedelta(minutes=45)) - (last_arr + timedelta(minutes=15))
+        secs = gap.total_seconds()
+        # Bounded at BOTH ends, because a raw "gap between two flying days"
+        # produces nonsense on either side of a real layover:
+        #
+        #   too short — a turn that happens to cross midnight showed as
+        #   "Overnight in Waco — 0h 42m", which is a 42-minute sit, not a
+        #   hotel.
+        #
+        #   too long — a gap between trips is days off at home. Blank lines
+        #   in the paste normally mark those, but a pilot who pastes one
+        #   unbroken block has no boundaries at all, and every such gap
+        #   became "4 nights in Dallas-Fort Worth — 98h 38m". The ceiling
+        #   is the same figure the import-review page uses to SUGGEST a
+        #   trip break, so the two agree by construction.
+        if secs < MIN_LAYOVER_SECONDS or secs > GAP_TRIP_THRESHOLD_HOURS * 3600:
+            continue
+        hours, minutes = int(secs // 3600), int((secs % 3600) // 60)
+        # A 33-hour layover is two nights, not one, and calling it an
+        # overnight reads as a mistake. Count the calendar dates actually
+        # spent away rather than dividing by 24 — in at 23:50 and out at
+        # 06:00 next morning is one night, not two.
+        #
+        # In the LAYOVER AIRPORT'S local time, not UTC. An evening arrival
+        # in the US is already tomorrow in UTC, so counting UTC dates
+        # reported the real 33-hour LFT layover as a single night.
+        tz = None
+        if last_leg.dest_info and last_leg.dest_info.timezone:
+            try:
+                tz = ZoneInfo(last_leg.dest_info.timezone)
+            except Exception:
+                tz = None
+        if tz is not None:
+            nights = (next_dep.astimezone(tz).date()
+                      - last_arr.astimezone(tz).date()).days
+        else:
+            nights = round(secs / 86400)
+        nights = max(1, nights)
+        out[bucket["date"]] = {
+            "duration": f"{hours}h {minutes:02d}m",
+            "city": (last_leg.dest_info.city if last_leg.dest_info
+                     else last_leg.destination),
+            "nights": nights,
+        }
+    return out
+
+
 def group_legs_by_day(legs: list, day_numbers: dict, now: datetime, time_format: str = "24",
-                      tags_by_leg: Optional[dict] = None) -> list:
+                      tags_by_leg: Optional[dict] = None,
+                      overnights: Optional[dict] = None) -> list:
     """Groups legs by calendar date, labeled 'Day N - March 27' where N
     resets to 1 at each trip boundary (a blank line in the pasted FFDO —
     see parser.py). Trip boundaries are explicit and pilot-controlled, not
@@ -251,62 +364,25 @@ def group_legs_by_day(legs: list, day_numbers: dict, now: datetime, time_format:
     shows correctly while a multi-day gap *between* two separate trips
     (e.g. days off at home) doesn't get mislabeled as one.
 
-    Between consecutive day-groups within the same trip, computes the
-    overnight duration and destination city using the duty-day definition:
-    duty ends 15 minutes after block-in, starts 45 minutes before
-    block-out. No overnight is shown across a trip boundary — that gap is
-    just time off, not a layover.
-
-    day_numbers should come from _assign_trip_day_numbers(info.all_legs) —
-    computed once over the whole schedule, not per past/upcoming list, so
-    numbering stays continuous across a trip that's partly already flown.
+    `overnights` comes from overnight_index(info.all_legs) — computed once
+    over the WHOLE schedule, not per list, so a layover straddling the
+    past/upcoming boundary still gets its label. Same reasoning as
+    day_numbers.
     """
     if not legs:
         return []
 
-    day_buckets = []
-    current_date = None
-    for leg in legs:
-        starts_new_day = leg.date != current_date
-        if starts_new_day:
-            day_buckets.append({"date": leg.date, "legs": [leg], "trip_start": leg.trip_start})
-            current_date = leg.date
-        else:
-            day_buckets[-1]["legs"].append(leg)
-            if leg.trip_start:
-                day_buckets[-1]["trip_start"] = True
-
+    overnights = overnights or {}
     groups = []
-    for i, bucket in enumerate(day_buckets):
-        day_legs = bucket["legs"]
+    for bucket in _day_buckets(legs):
         trip_day_num = day_numbers.get(bucket["date"], 1)
         date_label = bucket["date"].strftime("%B %d").replace(" 0", " ")
-        group = {
+        groups.append({
             "date_label": f"Day {trip_day_num} - {date_label}",
-            "legs": [leg_view(l, now, time_format, tags_by_leg) for l in day_legs],
-            "overnight": None,
+            "legs": [leg_view(l, now, time_format, tags_by_leg) for l in bucket["legs"]],
+            "overnight": overnights.get(bucket["date"]),
             "trip_start": bucket["trip_start"],
-        }
-        if i < len(day_buckets) - 1:
-            next_bucket = day_buckets[i + 1]
-            if not next_bucket["trip_start"]:
-                last_leg = day_legs[-1]
-                next_leg = next_bucket["legs"][0]
-                last_arr_utc = last_leg.arr_datetime_utc()
-                next_dep_utc = next_leg.dep_datetime_utc()
-                if last_arr_utc and next_dep_utc:
-                    duty_ends = last_arr_utc + timedelta(minutes=15)
-                    duty_starts = next_dep_utc - timedelta(minutes=45)
-                    gap_seconds = (duty_starts - duty_ends).total_seconds()
-                    if gap_seconds > 0:
-                        hours = int(gap_seconds // 3600)
-                        minutes = int((gap_seconds % 3600) // 60)
-                        city = (last_leg.dest_info.city if last_leg.dest_info else last_leg.destination)
-                        group["overnight"] = {
-                            "duration": f"{hours}h {minutes:02d}m",
-                            "city": city,
-                        }
-        groups.append(group)
+        })
     return groups
 
 
@@ -649,6 +725,54 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool,
     return live, payload
 
 
+def build_flight_list(info, day_numbers: dict, now: datetime, time_format: str,
+                      tags_by_leg, overnights: dict) -> list:
+    """Past, current and upcoming as ONE chronological list of day groups.
+
+    Previously the page built past and upcoming through two separate calls
+    and left the current flight out of both, so the list had a hole exactly
+    where the pilot is. Scrolling it gave no reference point: yesterday
+    ended, and the next thing shown was tomorrow.
+
+    Building one sequence also fixes two things that fell out of the split:
+    a day holding both a flown leg AND the live leg produced two day-cards
+    with the same "Day 3 - August 16" label, and a layover whose two ends
+    landed on opposite sides of the split had no label at all.
+
+    Each row carries `is_past` / `is_current`, and each group carries
+    `all_past`, so the Show-past-flights toggle can hide a whole day or
+    single rows inside a mixed day without the server rendering twice.
+    """
+    ordered = list(info.past)
+    if info.current:
+        ordered.append(info.current)
+    ordered.extend(info.upcoming)
+
+    past_ids = {l.id for l in info.past}
+    current_id = info.current.id if info.current else None
+
+    groups = group_legs_by_day(ordered, day_numbers, now, time_format,
+                               tags_by_leg, overnights)
+    for group in groups:
+        for row in group["legs"]:
+            row["is_past"] = row["id"] in past_ids
+            row["is_current"] = row["id"] == current_id
+        group["all_past"] = all(r["is_past"] for r in group["legs"])
+        group["first_live"] = False
+    # The scroll landmark goes before the first day that is not entirely
+    # past, so every element the toggle reveals sits above it.
+    for group in groups:
+        if not group["all_past"]:
+            group["first_live"] = True
+            break
+    else:
+        # Everything is past — nothing follows the list to anchor against,
+        # so the landmark goes nowhere and togglePast falls back to leaving
+        # scroll alone.
+        pass
+    return groups
+
+
 @app.get("/", response_class=HTMLResponse)
 async def viewer(request: Request, leg: Optional[str] = None):
     pilot = current_pilot(request)
@@ -689,6 +813,9 @@ async def viewer(request: Request, leg: Optional[str] = None):
     settings_dict["show_flightaware"] = show_fa
     settings_dict["show_fr24"] = show_fr24
     day_numbers = _assign_trip_day_numbers(info.all_legs)
+    # Over the WHOLE schedule, so a layover straddling the past/upcoming
+    # split still gets a label. See overnight_index().
+    overnights = overnight_index(info.all_legs)
     ctx = {
         "request": request,
         "current": selected,
@@ -700,8 +827,8 @@ async def viewer(request: Request, leg: Optional[str] = None):
         # upcoming/past lists, so without this there's no row to tap to
         # return to it.
         "current_leg_id": info.current.id if info.current else None,
-        "upcoming_groups": group_legs_by_day(info.upcoming, day_numbers, now, tf, tags_by_leg),
-        "past_groups": group_legs_by_day(info.past, day_numbers, now, tf, tags_by_leg),
+        "flight_groups": build_flight_list(info, day_numbers, now, tf,
+                                           tags_by_leg, overnights),
         "past_count": len(info.past),
         "settings": settings_dict,
         "poll_ms": max(10, settings.poll_seconds) * 1000,
@@ -970,6 +1097,33 @@ async def admin_regenerate_code(request: Request):
 # Settings — pilot only
 # ---------------------------------------------------------------------------
 
+def poller_status(time_format: str = "24") -> dict:
+    """What the background tracker is doing, for the Settings page.
+
+    Two separate facts that were previously conflated into one "22 hours
+    ago" figure: when the TRACKER last swept, and when the AeroAPI SPEND
+    READING was last pulled. A stale spend reading with a healthy tracker
+    means the usage endpoint is unhappy; both stale means the tracker
+    itself has stopped. One number could not tell those apart.
+    """
+    from . import poller
+    when = poller.last_sweep_at()
+    if when is None:
+        return {"running": poller.is_running(), "when": None,
+                "label": "not since restart", "stale": True}
+    age = (datetime.now(ZoneInfo("UTC")) - when).total_seconds()
+    local = when.astimezone(ZoneInfo("America/Chicago"))
+    fmt = "%a %H:%M" if time_format == "24" else "%a %I:%M %p"
+    return {
+        "running": poller.is_running(),
+        "when": when.isoformat(),
+        "label": local.strftime(fmt).replace(" 0", " "),
+        # Sweeps run every 20 seconds, so anything past two minutes means
+        # the thread is wedged, not merely between ticks.
+        "stale": age > 120,
+    }
+
+
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
     pilot = require_pilot(request)
@@ -978,7 +1132,8 @@ async def settings_page(request: Request):
     s = load_settings(pilot["id"])
     template = jinja_env.get_template("settings.html")
     ctx = {"request": request, "s": s, "saved": False, "is_admin": bool(pilot["is_admin"]),
-           "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"])}
+           "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"]),
+           "poller": poller_status(s.time_format)}
     if pilot["is_admin"]:
         ctx["all_users"] = list_all_users()
     return HTMLResponse(template.render(**ctx))
@@ -1038,7 +1193,8 @@ async def settings_save(
     save_settings(pilot["id"], s)
     template = jinja_env.get_template("settings.html")
     ctx = {"request": request, "s": s, "saved": True, "is_admin": bool(pilot["is_admin"]),
-           "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"])}
+           "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"]),
+           "poller": poller_status(s.time_format)}
     if pilot["is_admin"]:
         ctx["all_users"] = list_all_users()
     return HTMLResponse(template.render(**ctx))

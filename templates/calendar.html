@@ -116,9 +116,13 @@
       .agenda-leg-main strong { font-size: 0.85rem; }
     }
     .agenda-empty { color: var(--muted); font-size: 0.85rem; }
+    /* Sits AFTER the route, not between the flight number and it. In front
+       it pushed every deadhead's route right by the badge width, so the
+       origin/destination column no longer lined up down the day. */
     .dh {
       display: inline-block; padding: 0.1rem 0.4rem; border-radius: 6px; font-size: 0.65rem; font-weight: 600;
-      background: rgba(245,158,11,0.2); color: var(--warn); margin-left: 0.35rem; vertical-align: middle;
+      background: rgba(245,158,11,0.2); color: var(--warn); margin-left: 0.4rem; vertical-align: middle;
+      flex: 0 0 auto;
     }
     .meta { color: var(--muted); font-size: 0.82rem; }
     .footer-version { text-align: center; color: var(--muted); font-size: 0.75rem; margin-top: 1.5rem; }
@@ -185,8 +189,8 @@
       {% for leg in day.legs %}
       <div class="agenda-leg">
         <div class="agenda-leg-main">
-          <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
-          <span class="agenda-route">{{ leg.origin }} &rarr; {{ leg.destination }}</span>
+          <strong>{{ leg.callsign }}</strong>
+          <span class="agenda-route">{{ leg.origin }} &rarr; {{ leg.destination }}</span>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
         </div>
         <div class="meta agenda-leg-times">{{ leg.dep_short or leg.dep }}&ndash;{{ leg.arr_short or leg.arr }}</div>
       </div>

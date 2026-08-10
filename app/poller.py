@@ -71,6 +71,11 @@ ENRICHMENT_FRESH = timedelta(minutes=45)
 _thread: threading.Thread | None = None
 _started = False
 _lock = threading.Lock()
+# When the last sweep ran. Read by Settings so the pilot can tell a poller
+# that has stopped from one that simply has nothing to do — those look
+# identical from the outside, and that ambiguity is what made a 22-hour-old
+# usage reading impossible to interpret.
+_last_sweep_at: datetime | None = None
 _last_purge_at: float = 0.0
 PURGE_INTERVAL_S = 6 * 3600.0
 
@@ -188,13 +193,8 @@ def _settle(leg, now: datetime, has_adsb: bool) -> None:
         except Exception as e:
             print(f"[poller] enrichment failed for {leg.id}: {e}")
 
-    # /account/usage is free, so every crew member's spend figure is kept
-    # honest regardless of who paid. Throttled inside refresh_usage.
-    for user_id in owners_of(leg.id):
-        try:
-            refresh_usage(user_id, now)
-        except Exception as e:
-            print(f"[poller] usage refresh failed for {user_id}: {e}")
+    # Usage is refreshed for EVERY user once per sweep in poll_once, not
+    # here — doing it per active leg meant it never ran on a day off.
 
     try:
         row = get_flight(leg.id)
@@ -212,10 +212,34 @@ def _settle(leg, now: datetime, has_adsb: bool) -> None:
         print(f"[poller] closeout failed for {leg.id}: {e}")
 
 
+def _refresh_all_usage(now: datetime) -> None:
+    """Pull every key's free spend figure, whether or not anyone is flying.
+
+    This used to live only inside _settle, which runs per ACTIVE LEG. So on
+    a day off — or any of the 20-odd hours a day with no flight in its
+    window — nothing asked, and the Settings page showed a reading 22 hours
+    old. Worse than cosmetic: budget_state treats a reading older than
+    USAGE_STALE_AFTER as stale and falls back to the local count, so the
+    figure the cap is enforced against went stale precisely when nothing
+    was happening to refresh it.
+
+    The call is free and throttled inside refresh_usage, so sweeping every
+    user every 20 seconds costs one HTTP request per key per 15 minutes.
+    """
+    for user_id in _all_user_ids():
+        try:
+            refresh_usage(user_id, now)
+        except Exception as e:
+            print(f"[poller] usage refresh failed for {user_id}: {e}")
+
+
 def poll_once(now: Optional[datetime] = None) -> int:
     """One sweep. Returns how many flights had a position recorded."""
+    global _last_sweep_at
     recorded = 0
     now = now or datetime.now(timezone.utc)
+    _last_sweep_at = now
+    _refresh_all_usage(now)
     for leg_id, leg in active_flights(now).items():
         try:
             # A deadhead's FFDO line has no carrier, so the callsign has
@@ -310,3 +334,14 @@ def start() -> bool:
         _thread.start()
         _started = True
         return True
+
+
+def last_sweep_at() -> Optional[datetime]:
+    """When the background poller last completed a sweep, or None if it has
+    not run yet in this process. Resets on restart, deliberately — "not
+    since the container came up" is the answer worth showing."""
+    return _last_sweep_at
+
+
+def is_running() -> bool:
+    return bool(_started and _thread is not None and _thread.is_alive())
