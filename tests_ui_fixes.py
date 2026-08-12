@@ -288,6 +288,43 @@ def test_past_detail_available(uid2):
     check("and how it closed out", payload.get("closed_by") == "airline")
 
 
+# ----------------------------------------------------------- time lines
+def test_time_lines():
+    print("\nTwo rows carrying time AND variance, not three")
+    from app.view import _time_line, _variance
+    base = datetime(2026, 8, 11, 17, 34, tzinfo=timezone.utc)
+
+    late = _variance(base, (base + timedelta(minutes=12)).isoformat(), None, None,
+                     "America/Chicago", "24", "Departing", "Departed")
+    line = _time_line(late, base, "America/Chicago", "24")
+    check("a late departure shows the revised time",
+          line["time"] == "12:46 CDT", str(line))
+    check("...the scheduled one it moved from", line["was"] == "12:34 CDT", str(line))
+    check("...and by how much", line["note"] == "12 min late", str(line))
+    check("...tagged so it can be tinted", line["state"] == "late", str(line))
+
+    early = _variance(base, (base - timedelta(minutes=7)).isoformat(), None, None,
+                      "America/Chicago", "24", "Arriving", "Arrived")
+    eline = _time_line(early, base, "America/Chicago", "24")
+    check("an early arrival reads early", eline["note"] == "7 min early", str(eline))
+
+    ontime = _variance(base, base.isoformat(), None, None,
+                       "America/Chicago", "24", "Arriving", "Arrived")
+    oline = _time_line(ontime, base, "America/Chicago", "24")
+    check("on time says so", oline["note"] == "on time", str(oline))
+    check("...and does not strike through an identical time",
+          oline["was"] is None, str(oline))
+
+    # The case the old "Scheduled" row used to cover.
+    unflown = _time_line(None, base, "America/Chicago", "24")
+    check("an unflown leg still shows its scheduled time",
+          unflown and unflown["time"] == "12:34 CDT", str(unflown))
+    check("...with no variance clutter",
+          unflown["note"] is None and unflown["was"] is None, str(unflown))
+    check("no baseline at all yields nothing to draw",
+          _time_line(None, None, "America/Chicago", "24") is None)
+
+
 def main():
     init_db()
     uid = create_user("uitest", "pw-not-used")
@@ -297,6 +334,7 @@ def main():
     test_sequencing(uid)
     test_flight_list(create_user("listtest", "pw-not-used"))
     test_past_detail_available(create_user("detailtest", "pw-not-used"))
+    test_time_lines()
     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
     return 1 if FAIL else 0
 

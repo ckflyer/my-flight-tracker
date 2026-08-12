@@ -138,6 +138,41 @@ def _variance(baseline: Optional[datetime], actual, observed, estimate,
     return base
 
 
+def _time_line(variance: Optional[Dict[str, Any]], baseline: Optional[datetime],
+               tz_name: Optional[str], time_format: str) -> Optional[Dict[str, Any]]:
+    """One row's worth of "when, and how far off" — time plus variance.
+
+    Replaces the old three-row block (Departure note / Arrival note /
+    Scheduled pair). Those split one fact across three lines and still made
+    you do the arithmetic: the note said "28 min late" on one row while the
+    time it was late RELATIVE TO sat two rows below, next to an unrelated
+    one. Two rows now, each self-contained:
+
+        Departure   12:39 CDT
+                    12 min late  ·  was 12:27 CDT
+
+    Always returns something when a scheduled time exists, so an unflown
+    leg still shows its times rather than nothing at all — the empty-field
+    hiding would otherwise wipe a future flight's block entirely now that
+    the Scheduled row is gone.
+    """
+    if variance:
+        revised, original = variance.get("time"), variance.get("original")
+        return {
+            "time": revised,
+            # Only when it actually moved. Striking through a time
+            # identical to the one above it is noise.
+            "was": original if (original and original != revised) else None,
+            "note": (variance.get("short_text")
+                     or ("on time" if variance.get("state") == "ontime" else None)),
+            "state": variance.get("state"),
+        }
+    shown = _fmt_local(baseline, tz_name, time_format)
+    if not shown:
+        return None
+    return {"time": shown, "was": None, "note": None, "state": "scheduled"}
+
+
 def build(row, leg, now: datetime, time_format: str = "24",
           include_breadcrumb: bool = True) -> Dict[str, Any]:
     """Everything the card needs, from the row and nothing else."""
@@ -215,7 +250,14 @@ def build(row, leg, now: datetime, time_format: str = "24",
             "position_age_s": _col(row, "last_fix_age_s"),
         }
 
+    dep_line = _time_line(dep_delay, leg.dep_datetime_utc(), o_tz, time_format)
+    arr_line = _time_line(arr_delay, leg.arr_datetime_utc(), d_tz, time_format)
+    if cancelled and arr_line:
+        arr_line = dict(arr_line, note="cancelled", state="cancelled")
+
     payload = {
+        "dep_line": dep_line,
+        "arr_line": arr_line,
         "phase_tag": phase_tag,
         "status_tag": status_tag,
         # Kept so anything still reading `status` gets the more urgent of
@@ -244,6 +286,15 @@ def build(row, leg, now: datetime, time_format: str = "24",
         "arrival_source": _col(row, "arrival_source"),
         "enriched": bool(_col(row, "last_api_query_at")),
         "enriched_at": _ago_text(_parse(_col(row, "last_api_query_at")), now),
+        # The same instant as an ISO string, so the page can recompute
+        # "23 min ago" on a timer instead of freezing at whatever it said
+        # when the HTML was generated. The server text above stays as the
+        # value rendered on first paint and as the fallback if the client
+        # can't parse it.
+        "enriched_at_iso": (lambda d: d.isoformat() if d else None)(
+            _parse(_col(row, "last_api_query_at"))),
+        "last_signal_iso": (lambda d: d.isoformat() if d else None)(
+            _parse(_col(row, "last_signal_at"))),
         "last_tracked": _ago_text(_parse(_col(row, "last_signal_at")), now),
         "waiting_on_airline": bool(
             not closed and _col(row, "closeout_tries")

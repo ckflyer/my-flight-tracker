@@ -270,8 +270,8 @@
       display: flex; flex-direction: column; align-items: flex-end; gap: 0.3rem;
     }
     .row-caret {
-      color: var(--muted); font-size: 0.75rem; line-height: 1;
-      transition: transform 0.15s ease;
+      color: var(--muted); font-size: 1.25rem; line-height: 1;
+      transition: transform 0.15s ease; display: inline-block;
     }
     .leg-head[aria-expanded="true"] .row-caret { transform: rotate(180deg); }
 
@@ -306,6 +306,14 @@
     .rd-row .v.late { color: var(--bad); }
     .rd-row .v.early { color: var(--good); }
     .rd-row .v.cancelled { color: var(--bad); }
+    /* Time on top, variance under it in small print. Keeps a long line
+       like "12:39 CDT / 28 min late - was 12:11 CDT" from wrapping into an
+       unreadable ribbon on a phone. */
+    .tl-time { display: block; }
+    .tl-note {
+      display: block; font-size: 0.75rem; font-weight: 500;
+      color: var(--muted); margin-top: 0.1rem;
+    }
     .rd-empty, .rd-loading { font-size: 0.8rem; color: var(--muted); padding: 0.2rem 0; }
     .rd-links { margin-top: 0.55rem; display: flex; gap: 0.9rem; }
     .rd-links a {
@@ -708,17 +716,24 @@
 
       <div class="detail-block" id="flight-detail" style="{{ '' if current.enriched else 'display:none' }}">
         <h3>Flight detail</h3>
-        <div class="detail-row" id="row-dep-delay" style="{{ '' if current.dep_delay else 'display:none' }}">
+        {# Two rows, not three. Each carries its own time AND how far off it
+           ran, so nothing has to be cross-referenced against a separate
+           "Scheduled" line further down. #}
+        <div class="detail-row" id="row-dep-delay" style="{{ '' if current.dep_line else 'display:none' }}">
           <span class="k">Departure</span>
-          <span class="v {{ current.dep_delay.state if current.dep_delay else '' }}" id="v-dep-delay">{{ current.dep_delay.text if current.dep_delay else '' }}</span>
+          <span class="v {{ current.dep_line.state if current.dep_line else '' }}" id="v-dep-delay">
+            {%- if current.dep_line %}<span class="tl-time">{{ current.dep_line.time }}</span>
+            {%- if current.dep_line.note or current.dep_line.was %}<span class="tl-note">{{ current.dep_line.note or '' }}{% if current.dep_line.note and current.dep_line.was %} &middot; {% endif %}{% if current.dep_line.was %}was {{ current.dep_line.was }}{% endif %}</span>{% endif %}
+            {%- endif %}
+          </span>
         </div>
-        <div class="detail-row" id="row-arr-delay" style="{{ '' if current.arr_delay else 'display:none' }}">
+        <div class="detail-row" id="row-arr-delay" style="{{ '' if current.arr_line else 'display:none' }}">
           <span class="k">Arrival</span>
-          <span class="v {{ current.arr_delay.state if current.arr_delay else '' }}" id="v-arr-delay">{{ current.arr_delay.text if current.arr_delay else '' }}</span>
-        </div>
-        <div class="detail-row" id="row-sched">
-          <span class="k">Scheduled</span>
-          <span class="v was" id="v-sched">{{ current.dep }} &rarr; {{ current.arr }}</span>
+          <span class="v {{ current.arr_line.state if current.arr_line else '' }}" id="v-arr-delay">
+            {%- if current.arr_line %}<span class="tl-time">{{ current.arr_line.time }}</span>
+            {%- if current.arr_line.note or current.arr_line.was %}<span class="tl-note">{{ current.arr_line.note or '' }}{% if current.arr_line.note and current.arr_line.was %} &middot; {% endif %}{% if current.arr_line.was %}was {{ current.arr_line.was }}{% endif %}</span>{% endif %}
+            {%- endif %}
+          </span>
         </div>
         <div class="detail-row" id="row-gate-dep" style="{{ '' if (current.gates and current.gates.origin_gate) else 'display:none' }}">
           <span class="k">{{ current.origin }} gate</span>
@@ -742,7 +757,7 @@
         </div>
         <div class="detail-row" id="row-updated" style="{{ '' if current.enriched else 'display:none' }}">
           <span class="k">Airline data</span>
-          <span class="v" id="v-updated">{{ current.enriched_at or '' }}</span>
+          <span class="v" id="v-updated" data-ago="{{ current.enriched_at_iso or '' }}">{{ current.enriched_at or '' }}</span>
         </div>
         <div class="detail-row" id="row-diverted" style="{{ '' if current.diversion else 'display:none' }}">
           <span class="k">Diverted to</span>
@@ -1283,6 +1298,55 @@
       // and a flight switch — when only the poll called it, tapping a
       // future flight left the PREVIOUS leg's delay on screen, so an
       // unflown flight showed "1h 57m late".
+      // Repaint one list row's pills from a live payload. Only the pills:
+      // times and route on a row don't change, and rewriting the whole row
+      // would blow away an open detail panel underneath it.
+      function updateRowTags(legId, data) {
+        if (!legId) return;
+        var head = document.querySelector('.leg-head[data-detail-for="' +
+                                          (window.CSS && CSS.escape ? CSS.escape(legId) : legId) + '"]');
+        if (!head) return;
+        var tags = head.querySelector('.leg-head-tags');
+        if (!tags) return;
+        var caret = tags.querySelector('.row-caret');
+        var html = '';
+        if (data.status_tag) {
+          html += '<span class="status ' +
+                  String(data.status_tag).toLowerCase().replace(/ /g, '-') +
+                  '">' + data.status_tag + '</span>';
+        }
+        if (data.phase_tag) {
+          html += '<span class="status phase ' +
+                  (data.phase_tag === 'Arrived' ? 'arrived' : '') + '">' +
+                  data.phase_tag + '</span>';
+        }
+        tags.innerHTML = html;
+        if (caret) tags.appendChild(caret);
+      }
+
+      // One "12:39 CDT / 12 min late - was 12:27 CDT" cell. Shared by the
+      // card and by every inline row panel, so the two can never drift
+      // into formatting the same fact differently.
+      function timeLineHTML(line, escFn) {
+        if (!line) return '';
+        var e = escFn || function(x) { return x; };
+        var html = '<span class="tl-time">' + e(line.time || '') + '</span>';
+        var bits = [];
+        if (line.note) bits.push(e(line.note));
+        if (line.was) bits.push('was ' + e(line.was));
+        if (bits.length) {
+          html += '<span class="tl-note">' + bits.join(' \u00b7 ') + '</span>';
+        }
+        return html;
+      }
+
+      function applyTimeLine(id, line) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.className = 'v ' + ((line && line.state) || '');
+        el.innerHTML = timeLineHTML(line);
+      }
+
       function applyEnrichment(data) {
         function setText(id, value) {
           var el = document.getElementById(id);
@@ -1323,19 +1387,11 @@
         }
 
         // Expanded detail block.
-        setShown('flight-detail', !!(data.dep_delay || data.arr_delay || data.gates));
-        setShown('row-dep-delay', !!data.dep_delay);
-        setShown('row-arr-delay', !!data.arr_delay);
-        if (data.dep_delay) {
-          setText('v-dep-delay', data.dep_delay.text);
-          var dv = document.getElementById('v-dep-delay');
-          if (dv) dv.className = 'v ' + (data.dep_delay.state || '');
-        }
-        if (data.arr_delay) {
-          setText('v-arr-delay', data.arr_delay.text);
-          var av = document.getElementById('v-arr-delay');
-          if (av) av.className = 'v ' + (data.arr_delay.state || '');
-        }
+        setShown('flight-detail', !!(data.dep_line || data.arr_line || data.gates));
+        setShown('row-dep-delay', !!data.dep_line);
+        setShown('row-arr-delay', !!data.arr_line);
+        applyTimeLine('v-dep-delay', data.dep_line);
+        applyTimeLine('v-arr-delay', data.arr_line);
         var g = data.gates || {};
         setShown('row-gate-dep', !!g.origin_gate);
         setShown('row-gate-arr', !!g.dest_gate);
@@ -1354,7 +1410,16 @@
         // then 14 min ago after a manual refresh, with nothing else having
         // changed. Rendered here, they tick along with the ADS-B position.
         setShown('row-updated', !!data.enriched_at);
+        // The list row for the live flight has to track the card. The row
+        // is server-rendered once at page load, so without this it froze
+        // at whatever phase it had then — open the page before pushback and
+        // the row still read "Scheduled" an hour into the cruise while the
+        // card above it said "In air".
+        updateRowTags(data.current_leg_id || selectedId, data);
+
         setText('v-updated', data.enriched_at);
+        var upd = document.getElementById('v-updated');
+        if (upd) upd.setAttribute('data-ago', data.enriched_at_iso || '');
 
         setShown('row-closed', !!data.closed_by);
         setText('v-closed', (data.closed_by || '').replace(/_/g, ' '));
@@ -1514,9 +1579,8 @@
           });
         }
 
-        if (d.dep_delay) add('Departure', esc(d.dep_delay.text), d.dep_delay.state);
-        if (d.arr_delay) add('Arrival', esc(d.arr_delay.text), d.arr_delay.state);
-        add('Scheduled', esc((d.dep || '') + ' \u2192 ' + (d.arr || '')), 'was');
+        if (d.dep_line) add('Departure', timeLineHTML(d.dep_line, esc), d.dep_line.state);
+        if (d.arr_line) add('Arrival', timeLineHTML(d.arr_line, esc), d.arr_line.state);
 
         var g = d.gates || {};
         if (g.origin_gate) {
@@ -1538,11 +1602,18 @@
         }
         if (d.closed_by) add('Closed out', esc(String(d.closed_by).replace(/_/g, ' ')));
         if (d.arrival_source) add('Arrival time from', esc(d.arrival_source));
-        if (d.enriched_at) add('Airline data', esc(d.enriched_at));
+        if (d.enriched_at) {
+          rows.push('<div class="rd-row"><span class="k">Airline data</span>' +
+                    '<span class="v" data-ago="' + esc(d.enriched_at_iso || '') +
+                    '">' + esc(d.enriched_at) + '</span></div>');
+        }
 
         body.innerHTML = rows.length
           ? rows.join('')
           : '<div class="rd-empty">Nothing recorded for this flight yet.</div>';
+        // Newly inserted [data-ago] nodes need their first tick now, not
+        // in up to 30 seconds' time.
+        window.dispatchEvent(new Event('pt:detail-rendered'));
       }
 
       function toggleLegDetail(head) {
@@ -1586,6 +1657,38 @@
         e.preventDefault();
         toggleLegDetail(head);
       });
+
+      // ---- Relative times, computed here rather than baked into the HTML.
+      // "23 min ago" used to be rendered once by the server and then sit
+      // there getting quietly wronger until the page was reloaded, which
+      // is the opposite of what a freshness indicator is for. The server
+      // still sends the text for first paint; this takes over from it.
+      //
+      // Mirrors app/view.py::_ago_text exactly, so a value the server
+      // rendered and one the page recomputed never disagree.
+      function agoText(iso) {
+        if (!iso) return null;
+        var then = Date.parse(iso);
+        if (isNaN(then)) return null;
+        var mins = (Date.now() - then) / 60000;
+        if (mins < 0) mins = 0;
+        if (mins < 1.5) return 'just now';
+        if (mins < 90) return Math.floor(mins) + ' min ago';
+        return Math.floor(mins / 60) + 'h ago';
+      }
+
+      function tickRelativeTimes() {
+        var els = document.querySelectorAll('[data-ago]');
+        for (var i = 0; i < els.length; i++) {
+          var txt = agoText(els[i].getAttribute('data-ago'));
+          if (txt) els[i].textContent = txt;
+        }
+      }
+      // Every 30s: fine enough that "just now" turns into "2 min ago"
+      // promptly, cheap enough to be invisible.
+      setInterval(tickRelativeTimes, 30000);
+      tickRelativeTimes();
+      window.addEventListener('pt:detail-rendered', tickRelativeTimes);
 
       setInterval(refreshLiveData, {{ poll_ms }});
     })();

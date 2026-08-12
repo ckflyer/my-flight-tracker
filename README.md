@@ -1,7 +1,7 @@
 # flight-tracker
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 5.4.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 5.5.
 
 <!--
 READER: THIS FILE IS OPTIMISED FOR AI CONSUMPTION, NOT HUMAN BROWSING.
@@ -41,7 +41,7 @@ seriously.
 v5.1. Deployed target: TrueNAS. Multi-user: the owner plus several FOs,
 who fly the same legs — hence shared flight rows (v5.1).
 
-Tests: 166, six suites, all passing.
+Tests: 176, six suites, all passing.
 
 | Suite | N | Covers |
 |---|---|---|
@@ -50,7 +50,7 @@ Tests: 166, six suites, all passing.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, FFDO placeholder filter |
-| `tests_ui_fixes.py` | 40 | layover labels, untracked phase, sequencing, flight list |
+| `tests_ui_fixes.py` | 50 | layover labels, untracked phase, sequencing, flight list, time lines |
 
 ## OPEN
 
@@ -616,6 +616,31 @@ invariant 1.
   the HTTP layer's perspective (form redisplay, HTTP 200).
 
 ## VERSION HISTORY
+
+### v5.5 - live rows, live clocks
+
+- **The live flight's list row went stale.** Rows are server-rendered once
+  at page load and only the CARD was repainted by the poll, so a page
+  opened before pushback still read "Scheduled" an hour into the cruise
+  while the card above it said "In air". `updateRowTags()` now repaints the
+  live row's pills each poll — pills only, so an open detail panel beneath
+  survives.
+- **"23 min ago" is computed on the page, not baked into the HTML.**
+  `_ago_text` ran once server-side and the result then sat there getting
+  quietly wronger until a reload. `view.build` now also emits
+  `enriched_at_iso` / `last_signal_iso`, and `tickRelativeTimes()` rewrites
+  every `[data-ago]` element every 30s. The JS formatter mirrors
+  `_ago_text` exactly so server-rendered and client-recomputed values can
+  never disagree.
+- **Three detail rows became two.** Departure / Arrival / Scheduled split
+  one fact across three lines and still left arithmetic to do — the note
+  said "28 min late" on one row while the time it was late relative to sat
+  two rows below. `_time_line()` now builds one self-contained cell per
+  row: revised time, then "28 min late - was 12:11 CDT" in small print
+  under it. An unflown leg still shows its scheduled times, which the
+  deleted Scheduled row used to cover.
+- **Bigger disclosure caret** on list rows (0.75rem -> 1.25rem).
+
 
 ### v5.4 - the flight list
 
