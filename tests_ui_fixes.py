@@ -325,9 +325,64 @@ def test_time_lines():
           _time_line(None, None, "America/Chicago", "24") is None)
 
 
+# ------------------------------------------------------------ template audit
+def test_template_contract():
+    """Grep-level guards on viewer.html.
+
+    Not a substitute for looking at the page, but this template has twice
+    lost working JavaScript to colliding edits (see NOTES in the README),
+    and every check below is something that failed silently rather than
+    loudly when it broke: the page still rendered, it was just wrong.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    # v5.6: the route strip is on the ALWAYS-VISIBLE part of the card.
+    strip_at = html.find('<div class="route-strip">')
+    details_at = html.find('id="expand-details"')
+    check("route strip exists", strip_at != -1)
+    check("...and sits above the collapsible detail",
+          strip_at != -1 and details_at != -1 and strip_at < details_at)
+    for el in ("progress-fill-el", "route-plane-el", "progress-label-el"):
+        check(f"{el} present for the poller to write to", f'id="{el}"' in html)
+
+    # v5.6: the flight list is no longer behind the card's disclosure.
+    check("expand-wrap is not display:none",
+          ".expand-wrap { display: none; }" not in html)
+    check("...and setExpanded no longer toggles it",
+          "wrap.classList.toggle" not in html)
+
+    # v5.6 bug: applyEnrichment was nested inside the progress branch, so
+    # gates and revised times only repainted when a live fix existed.
+    poll = html[html.find("function refreshLiveData"):]
+    poll = poll[:poll.find("function selectLeg")]
+    for call in ("applyPills(", "applyProgress(", "applyEnrichment("):
+        idx = poll.find(call)
+        check(f"{call.rstrip('(')} is called each poll", idx != -1)
+        if idx != -1:
+            line_start = poll.rfind("\n", 0, idx) + 1
+            indent = len(poll[line_start:idx]) - len(poll[line_start:idx].lstrip())
+            check(f"...at the top level of the poll handler ({call.rstrip('(')})",
+                  indent <= 12, f"indent={indent}")
+
+    # Still true from v4.5/v5.5 — these are the two that went missing before.
+    check("togglePast is defined, not just called",
+          html.count("function togglePast") == 1)
+    check("tickRelativeTimes survives", "function tickRelativeTimes" in html)
+
+    # Display-time rounding: track.py keeps one decimal, the card must not
+    # show it now that the figure is permanently on screen.
+    check("percentage is rounded for display",
+          "current.progress_pct|round|int" in html and "Math.round(pct)" in html)
+    check("distance is rounded for display",
+          "current.distance_nm|round|int" in html)
+
+
 def main():
     init_db()
     uid = create_user("uitest", "pw-not-used")
+    test_template_contract()
     test_overnight()
     test_placeholder_purge()
     test_untracked_phase(uid)

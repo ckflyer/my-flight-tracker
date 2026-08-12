@@ -38,10 +38,15 @@ seriously.
 
 ## STATE
 
-v5.1. Deployed target: TrueNAS. Multi-user: the owner plus several FOs,
+v5.6. Deployed target: TrueNAS. Multi-user: the owner plus several FOs,
 who fly the same legs — hence shared flight rows (v5.1).
 
-Tests: 176, six suites, all passing.
+v5.6 is a UI-only pass over `viewer.html`: route strip on the always-visible
+card, schedule no longer hidden behind the card's disclosure, and one real
+bug fixed in the poll path (see VERSION HISTORY). No engine, schema or
+invariant changed.
+
+Tests: 193, six suites, all passing.
 
 | Suite | N | Covers |
 |---|---|---|
@@ -50,7 +55,7 @@ Tests: 176, six suites, all passing.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, FFDO placeholder filter |
-| `tests_ui_fixes.py` | 50 | layover labels, untracked phase, sequencing, flight list, time lines |
+| `tests_ui_fixes.py` | 67 | layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit |
 
 ## OPEN
 
@@ -69,6 +74,16 @@ Tests: 176, six suites, all passing.
   ≈ $1.25; worst case ≈ $2.00. Headroom exists.
 - Distribution undecided. Airplanes.live is non-commercial; AeroAPI
   Personal tier is personal-use only.
+- **UI, agreed but not yet done (v5.6 brainstorm).** Eleven templates each
+  carry a private copy of the colour palette and they already disagree
+  (`--border` is `#2a3548` on the tracker, `#334155` on settings/admin) —
+  one shared stylesheet in `/static` should come before any further visual
+  work. Five templates (`login`, `register`, `setup`, `forgot_password`,
+  `recovery_code`) have no light theme at all, so a light-mode user gets a
+  black login and then a white app. Manifest `theme_color` (#1e3a8a) does
+  not match the app background (#0f1419), and the manifest is linked from
+  only 2 of 11 pages. A bottom tab bar and a full-bleed map were scoped out
+  of v5.6 deliberately, not forgotten.
 
 ## DATA MODEL
 
@@ -527,21 +542,17 @@ the cap, when the figure was last pulled, and which source it came from.
 
 ## NOTES
 
-- **`viewer.html` is missing JavaScript as of v4.5 — see below.** Two
-  behaviours have no code behind them: nothing toggles `#expand-details` /
-  `#expand-wrap`, and `togglePast()` is called by an inline `onclick` but
-  never defined. The markup and CSS for both are intact. A quick audit,
-  worth repeating after any large template edit:
-
-  ```bash
-  grep -c "function togglePast" templates/viewer.html   # must be 1
-  grep -c "expand-details'" templates/viewer.html       # must be >0
-  ```
+- **`viewer.html` loses JavaScript to colliding edits.** It has happened
+  twice: in v4.5 nothing toggled `#expand-details` and `togglePast()` was
+  called by an inline `onclick` but never defined; both were restored, and
+  `#expand-wrap` no longer needs toggling at all as of v5.6. The failure
+  mode is silent — the page still renders, a control just does nothing.
+  `test_template_contract` in `tests_ui_fixes.py` now guards this, so run
+  that suite after any template edit rather than grepping by hand.
 
   A related trace of the same failure sits above `applyEnrichment()`, where
   the docstring for `selectLeg()` has been absorbed into the following
-  comment block. This is the recurring colliding-edit mode: verify after
-  every multi-part edit.
+  comment block. Verify after every multi-part edit.
 - All times shown are **local to the airport**. On the collapsed card the
   zone abbreviation is behind a tap (see v4.6); the expanded detail rows
   still print it inline.
@@ -616,6 +627,63 @@ invariant 1.
   the HTTP layer's perspective (form redisplay, HTTP 200).
 
 ## VERSION HISTORY
+
+### v5.6 - the route strip
+
+UI only. No change to the poller, closure, matching, budget, schema or any
+invariant. `viewer.html` is the only template touched.
+
+- **The route strip replaces three homes for one fact.** How far along the
+  flight is lived in a percentage in the map corner, a progress bar hidden
+  inside the collapsed detail, and nothing at all on the part of the card
+  that is always on screen. Now: origin and destination at the ends of a
+  line, the aeroplane on it, `% en route / nm to go / ETE` under it, all
+  above the fold. The TRACK always draws, because it is the route. The FILL
+  and the plane move only on a real position fix — invariant 9 is intact,
+  and `route-plane-el` is hidden outright when `progress_pct` is null.
+  One deliberate addition: a leg whose phase is **Arrived** fills to the far
+  end, on closure's authority, and still prints no percentage. Nothing is
+  derived from elapsed clock time.
+- **The schedule is no longer behind a tap.** `Tap for more` toggled the
+  card's detail AND `#expand-wrap`, so on first load a viewer saw a map, one
+  card and a 0.72rem grey line — the trip itself was invisible until they
+  found it. `setExpanded` no longer touches the wrapper; the disclosure is
+  now a proper 40px row inside the card and opens only the card's own detail.
+- **BUG: `applyEnrichment` was called from inside the progress branch,**
+  three conditionals deep in `refreshLiveData`, so gates, revised times,
+  the airline-data age line and (since v5.5) the live row's pills only
+  repainted while the aircraft had a live fix. A delayed leg at a gate with
+  no ADS-B coverage — a small outstation, exactly when the family refreshes
+  hardest — showed nothing new until a manual reload. Diagnosed by reading
+  the nesting, not by observation; it needs an enrichment update to arrive
+  during a coverage hole to show itself. Hoisted to the top level beside
+  `applyPills`, with `applyProgress` alongside it.
+- **Progress is rounded at display time.** `track.py` keeps one decimal,
+  correctly. The card was printing "62.3% en route / 48.4 nm to go", which
+  was tolerable inside a collapsed panel and is not on the hero card.
+  Rounded in the template and in `applyProgress` only — `track.py`, the
+  columns and the tests are untouched.
+- Polish: tabular figures on every time and number, so digits stop shifting
+  on each poll; list-row times promoted from muted to full contrast with the
+  route demoted under them; the grey disc icons on list rows replaced by
+  plain glyphs; the card's 2px accent border reduced to a hairline so the
+  live-row marker is the only accent left; fourteen font sizes reduced
+  toward six; a pulsing skeleton instead of the word "Loading"; keyboard
+  support and `prefers-reduced-motion` on the new controls.
+- Removed dead CSS: `.card.current` (never applied to anything),
+  `.times-row` / `.time-chip` / `.chip-body` / `.chip-line` / `.chip-icon` /
+  `.chip-code`, and the old `.progress-*` bar the strip replaced.
+- `tests_ui_fixes.py` gains a template audit (17 assertions), including a
+  check that the three poll-path functions sit at the top level of the
+  handler — that is the bug above, made loud.
+
+**Still open from the brainstorm, deliberately not done here:** bottom tab
+bar; one shared stylesheet (eleven templates each carry a private copy of
+the palette and they already disagree on `--border`); light theme on
+`login` / `register` / `setup` / `forgot_password` / `recovery_code`, which
+are hardcoded dark; manifest `theme_color` (#1e3a8a) not matching the app
+background (#0f1419); manifest linked from only 2 of 11 pages; animating
+the map's plane marker between polls.
 
 ### v5.5 - live rows, live clocks
 

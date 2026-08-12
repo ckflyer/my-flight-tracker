@@ -108,9 +108,8 @@
       margin-bottom: 1rem;
       box-shadow: 0 4px 20px rgba(0,0,0,0.12);
     }
-    .card.current { border: 2px solid var(--accent); }
     .label {
-      font-size: 0.7rem;
+      font-size: 0.75rem;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--muted);
@@ -139,22 +138,72 @@
       font-size: 1.1rem;
       margin: 0 0.15rem;
     }
-    /* A chip is [icon][ code + time ] with the delay note stacked BELOW the
-       code+time line, never beside it. Previously the delay was a fourth
-       flex sibling in the same horizontal row, so "1h 46m late" widened the
-       arrival chip until flex shrank both chips and the text wrapped
-       mid-chip — that's what split "PHX" from "7:03 PM" onto two lines.
-       chip-line is nowrap, so a code and its time can no longer be
-       separated; if a card is genuinely too narrow the whole arrival chip
-       drops to the next line instead, which stays readable. */
-    .times-row { display: flex; gap: 1.5rem; align-items: flex-start; flex-wrap: wrap; }
-    .time-chip { display: flex; align-items: flex-start; gap: 0.4rem; min-width: 0; }
-    .chip-body { display: flex; flex-direction: column; min-width: 0; position: relative; }
-    .chip-line { display: flex; align-items: baseline; gap: 0.4rem; white-space: nowrap; }
+    /* THE ROUTE STRIP. Origin and destination sit at the two ends of a line
+       the aeroplane travels along, so "how far along is he" is answered by
+       the shape of the card instead of by reading a number. This replaced
+       three separate homes for one fact: a percentage in the map corner, a
+       progress bar hidden inside the expanded detail, and nothing at all on
+       the collapsed card — which is the one thing that is always on screen.
+
+       The TRACK is always drawn, because it is the route, not a readout.
+       The FILL and the plane only move on a real position fix (invariant 9:
+       no fix, no figure). A leg that has ARRIVED fills to the end, because
+       closure said so and closure is authoritative — but it still prints no
+       percentage, so nothing is ever derived from the clock. */
+    .route-strip { margin-top: 0.1rem; }
+    .route-ends {
+      display: flex; justify-content: space-between; align-items: flex-start;
+      gap: 1rem;
+    }
+    .route-end { min-width: 0; }
+    .route-end.arr { text-align: right; }
+    .route-code {
+      color: var(--muted); font-size: 0.8125rem; font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    /* Positioning context for the tap-a-time bubble, which used to hang off
+       .chip-body. */
+    .route-time-wrap { position: relative; display: inline-block; }
+    .route-end.arr .time-pop { left: auto; right: 0; }
+    .route-end.arr .time-pop::after { left: auto; right: 0.75rem; }
     /* Tap a time to see which zone it's in. Deliberately opt-in: printing
        the zone on every time is what crowded these rows in the first
        place. */
     .chip-time[data-full] { cursor: pointer; }
+    .chip-time {
+      font-size: 1.0625rem; font-weight: 600; color: var(--text);
+      font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
+    }
+    .chip-time.early { color: var(--good); }
+    .chip-time.late  { color: var(--bad); }
+    .chip-delay {
+      display: block; font-size: 0.75rem; font-weight: 600; margin-top: 0.1rem;
+      white-space: nowrap;
+    }
+    .chip-delay.early { color: var(--good); }
+    .chip-delay.late { color: var(--bad); }
+    .chip-delay.cancelled { color: var(--bad); }
+    .route-line { position: relative; height: 22px; margin: 0.6rem 0 0.15rem; }
+    .route-track {
+      position: absolute; top: 9px; left: 0; right: 0; height: 4px;
+      background: var(--border); border-radius: 999px; overflow: hidden;
+    }
+    .route-fill {
+      height: 100%; width: 0; background: var(--accent); border-radius: 999px;
+      transition: width 0.6s ease;
+    }
+    .route-plane {
+      position: absolute; top: 0; left: 0; margin-left: -11px;
+      color: var(--accent); line-height: 0;
+      transition: left 0.6s ease;
+    }
+    .route-plane svg { display: block; }
+    .route-stats {
+      display: flex; justify-content: space-between; gap: 0.75rem;
+      font-size: 0.75rem; color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .route-stats:empty { display: none; }
     .time-pop {
       position: absolute; bottom: calc(100% + 7px); left: 0;
       background: var(--text); color: var(--card);
@@ -170,15 +219,6 @@
       border: 4px solid transparent; border-top-color: var(--text);
     }
     .time-pop.show { opacity: 1; visibility: visible; transform: translateY(0); }
-    .chip-icon {
-      width: 19px; height: 19px; border-radius: 50%;
-      background: var(--muted);
-      opacity: 0.85;
-      display: flex; align-items: center; justify-content: center;
-      flex-shrink: 0;
-    }
-    .chip-code { color: var(--muted); font-size: 0.92rem; font-weight: 500; }
-    .chip-time { font-size: 0.98rem; font-weight: 600; color: var(--text); }
     .status {
       display: inline-block;
       padding: 0.2rem 0.6rem;
@@ -200,7 +240,7 @@
     .status.cancelled { background: rgba(248,113,113,0.25); color: var(--bad); font-weight: 700; }
     .pills { display: inline-flex; gap: 0.35rem; align-items: center; flex-wrap: wrap; }
     .last-tracked {
-      font-size: 0.78rem; color: var(--muted); margin-left: 0.5rem; font-weight: 500;
+      font-size: 0.75rem; color: var(--muted); margin-left: 0.5rem; font-weight: 500;
     }
     .dh {
       display: inline-block;
@@ -236,9 +276,9 @@
       border-bottom: 1px solid var(--border);
     }
     .list-item:last-child { border-bottom: none; }
-    .list-item .meta { font-size: 0.8rem; color: var(--muted); margin-top: 0.15rem; }
+    .list-item .meta { font-size: 0.8125rem; color: var(--muted); margin-top: 0.15rem; }
     .empty { color: var(--muted); text-align: center; padding: 2rem; }
-    .footer { text-align: center; color: var(--muted); font-size: 0.72rem; margin-top: 0; }
+    .footer { text-align: center; color: var(--muted); font-size: 0.75rem; margin-top: 0; }
     .toggle {
       display: block;
       width: 100%;
@@ -296,12 +336,12 @@
     .row-detail[hidden] { display: none; }
     .rd-row {
       display: flex; justify-content: space-between; gap: 0.75rem;
-      font-size: 0.82rem; padding: 0.22rem 0; align-items: baseline;
+      font-size: 0.8125rem; padding: 0.22rem 0; align-items: baseline;
     }
     .rd-row .k { color: var(--muted); flex: 0 0 auto; }
     .rd-row .v {
       text-align: right; font-weight: 600; min-width: 0;
-      overflow-wrap: anywhere;
+      overflow-wrap: anywhere; font-variant-numeric: tabular-nums;
     }
     .rd-row .v.late { color: var(--bad); }
     .rd-row .v.early { color: var(--good); }
@@ -309,15 +349,28 @@
     /* Time on top, variance under it in small print. Keeps a long line
        like "12:39 CDT / 28 min late - was 12:11 CDT" from wrapping into an
        unreadable ribbon on a phone. */
-    .tl-time { display: block; }
+    .tl-time { display: block; font-variant-numeric: tabular-nums; }
     .tl-note {
       display: block; font-size: 0.75rem; font-weight: 500;
       color: var(--muted); margin-top: 0.1rem;
     }
-    .rd-empty, .rd-loading { font-size: 0.8rem; color: var(--muted); padding: 0.2rem 0; }
+    .rd-empty { font-size: 0.8125rem; color: var(--muted); padding: 0.2rem 0; }
+    .rd-skeleton { padding: 0.3rem 0; }
+    .rd-skeleton span {
+      display: block; height: 0.72rem; border-radius: 4px; margin: 0.35rem 0;
+      background: var(--border);
+      animation: rd-pulse 1.4s ease-in-out infinite;
+    }
+    .rd-skeleton span:nth-child(2) { width: 78%; animation-delay: 0.15s; }
+    .rd-skeleton span:nth-child(3) { width: 55%; animation-delay: 0.3s; }
+    @keyframes rd-pulse { 0%, 100% { opacity: 0.45 } 50% { opacity: 1 } }
+    @media (prefers-reduced-motion: reduce) {
+      .rd-skeleton span { animation: none; }
+      .route-fill, .route-plane { transition: none; }
+    }
     .rd-links { margin-top: 0.55rem; display: flex; gap: 0.9rem; }
     .rd-links a {
-      color: var(--accent); font-size: 0.82rem; font-weight: 600;
+      color: var(--accent); font-size: 0.8125rem; font-weight: 600;
       text-decoration: none;
     }
     .rd-links a[data-fr24-link] { color: var(--muted); }
@@ -329,36 +382,16 @@
       border: 1px solid var(--map-border);
     }
     [data-theme="light"] .live-box { background: #f8fafc; }
-    .live-box.muted-live { color: var(--muted); font-size: 0.85rem; }
+    .live-box.muted-live { color: var(--muted); font-size: 0.8125rem; }
     .live-grid {
       display: flex;
       gap: 1.25rem;
       flex-wrap: wrap;
       margin-top: 0.35rem;
     }
-    .live-val { font-size: 1.15rem; font-weight: 700; }
+    .live-val { font-size: 1.15rem; font-weight: 700; font-variant-numeric: tabular-nums; }
     .live-unit { font-size: 0.75rem; color: var(--muted); }
     .live-meta { font-size: 0.75rem; color: var(--muted); margin-top: 0.4rem; }
-    .progress-wrap { margin-top: 0.85rem; }
-    .progress-track {
-      background: var(--border);
-      height: 8px;
-      border-radius: 999px;
-      overflow: hidden;
-    }
-    .progress-fill {
-      background: var(--accent);
-      height: 100%;
-      border-radius: 999px;
-      transition: width 0.4s ease;
-    }
-    .progress-label {
-      display: flex;
-      justify-content: space-between;
-      font-size: 0.75rem;
-      color: var(--muted);
-      margin-top: 0.3rem;
-    }
     .aircraft-line { font-size: 0.75rem; color: var(--muted); margin-top: 0.3rem; }
     .plane-icon {
       background: transparent !important;
@@ -410,9 +443,10 @@
       backdrop-filter: blur(6px);
       border-radius: 10px;
       padding: 0.5rem 0.75rem;
-      font-size: 0.8rem;
+      font-size: 0.8125rem;
       color: #fff;
       font-weight: 600;
+      font-variant-numeric: tabular-nums;
     }
     .map-overlay-stats .stat-unit { font-weight: 400; opacity: 0.75; font-size: 0.72rem; }
     .map-overlay-stats-inner { display: flex; gap: 0.9rem; }
@@ -451,7 +485,7 @@
     .map-settings-panel.open { display: block; }
     .map-settings-panel label {
       display: flex; align-items: center; gap: 0.5rem;
-      font-size: 0.82rem; color: var(--text); margin: 0.3rem 0; cursor: pointer;
+      font-size: 0.8125rem; color: var(--text); margin: 0.3rem 0; cursor: pointer;
     }
     .map-settings-panel input { width: auto; margin: 0; }
 
@@ -461,7 +495,7 @@
       padding: 1.1rem 1.25rem;
       margin-bottom: 0.85rem;
       box-shadow: 0 4px 20px rgba(0,0,0,0.12);
-      border: 2px solid var(--accent);
+      border: 1px solid var(--border);
     }
     .expand-details { display: none; margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid var(--border); }
     .expand-details.open { display: block; }
@@ -484,32 +518,25 @@
       margin-top: 0.6rem;
     }
     #back-to-active a {
-      display: inline-block; color: var(--accent); font-size: 0.82rem;
+      display: inline-block; color: var(--accent); font-size: 0.8125rem;
       font-weight: 600; text-decoration: none; padding: 0.25rem 0;
     }
     .delay-row {
       display: flex; flex-wrap: wrap; gap: 0.35rem 0.9rem; margin-top: 0.35rem;
     }
     .delay-note {
-      font-size: 0.82rem; font-weight: 600;
+      font-size: 0.8125rem; font-weight: 600;
     }
-    .chip-delay {
-      display: block; font-size: 0.72rem; font-weight: 600; margin-top: 0.1rem;
-      white-space: nowrap;
-    }
-    .chip-delay.early { color: var(--good); }
-    .chip-delay.late { color: var(--bad); }
-    .chip-delay.cancelled { color: var(--bad); }
     /* Expanded-only detail rows: everything that used to crowd the
        collapsed card lives here instead. */
     .detail-block { margin-top: 0.9rem; }
     .detail-block h3 {
-      font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.07em;
+      font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.07em;
       color: var(--muted); margin-bottom: 0.5rem; font-weight: 700;
     }
     .detail-row {
       display: flex; justify-content: space-between; gap: 1rem;
-      font-size: 0.82rem; padding: 0.22rem 0;
+      font-size: 0.8125rem; padding: 0.22rem 0;
     }
     .detail-row .k { color: var(--muted); }
     .detail-row .v { text-align: right; }
@@ -520,40 +547,39 @@
     .delay-note.late  { color: var(--bad); }
     .delay-note.ontime { color: var(--muted); font-weight: 500; }
     .delay-note.cancelled { color: var(--bad); font-weight: 700; }
-    /* The arrival time itself is tinted to match, so a glance at the chip
-       says early/late without reading the note. */
-    .chip-time.early { color: var(--good); }
-    .chip-time.late  { color: var(--bad); }
     .flight-line {
       display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap;
     }
     .flight-line .status { flex-shrink: 0; margin-top: 0; align-self: center; }
-    .collapsed-card .chip-icon { width: 18px; height: 18px; }
-    .collapsed-card .chip-code { font-size: 0.88rem; color: var(--muted); font-weight: 500; }
-    .collapsed-card .chip-time { font-size: 0.95rem; font-weight: 600; }
-    .expand-hint {
-      text-align: center;
-      font-size: 0.72rem;
-      color: var(--muted);
-      margin: -0.35rem 0 0;
-      cursor: pointer;
-      padding: 0.3rem;
+    /* "Flight details" is a row INSIDE the card now, not a floating grey
+       line under it, and it opens only the card's own detail. It used to
+       open the entire flight list as well, which meant the schedule — the
+       reason the page exists — was invisible until you found a 0.72rem line
+       of text and tapped it. The list is always on screen; .expand-wrap is
+       kept as a plain container so nothing else has to move. */
+    .card-more {
+      display: flex; align-items: center; justify-content: center; gap: 0.4rem;
+      margin-top: 0.9rem; padding-top: 0.8rem; min-height: 40px;
+      border-top: 1px solid var(--border);
+      font-size: 0.8125rem; font-weight: 600; color: var(--muted);
+      cursor: pointer; -webkit-tap-highlight-color: transparent;
     }
-    .expand-wrap { display: none; }
-    .expand-wrap.open { display: block; }
+    .card-more .caret {
+      font-size: 1rem; line-height: 1; display: inline-block;
+      transition: transform 0.15s ease;
+    }
+    .collapsed-card.expanded .card-more .caret { transform: rotate(180deg); }
 
-    .row-flight-num { font-size: 0.95rem; font-weight: 700; }
-    .row-city-route { font-size: 0.85rem; font-weight: 600; margin: 0.15rem 0 0.4rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .row-times-row { display: flex; gap: 1rem; }
-    .row-chip { display: flex; align-items: center; gap: 0.3rem; }
-    .row-chip-icon {
-      width: 16px; height: 16px; border-radius: 50%;
-      background: var(--muted);
-      display: flex; align-items: center; justify-content: center;
-      flex-shrink: 0;
-    }
-    .row-chip-code { color: var(--muted); font-size: 0.78rem; font-weight: 600; }
-    .row-chip-time { font-size: 0.82rem; font-weight: 600; color: var(--muted); }
+    .row-flight-num { font-size: 0.95rem; font-weight: 700; letter-spacing: -0.01em; }
+    .row-city-route { font-size: 0.8125rem; font-weight: 500; margin: 0.1rem 0 0.4rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .row-times-row { display: flex; gap: 1.1rem; }
+    .row-chip { display: flex; align-items: center; gap: 0.35rem; }
+    /* The grey filled circles read as UI furniture at this size. A plain
+       glyph in the muted colour says the same thing and lets the TIME be the
+       brightest thing in the row, which is what anyone is scanning for. */
+    .row-chip-icon { color: var(--muted); display: flex; align-items: center; flex-shrink: 0; }
+    .row-chip-code { color: var(--muted); font-size: 0.75rem; font-weight: 600; }
+    .row-chip-time { font-size: 0.875rem; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
     a.flight-row-link { text-decoration: none; color: inherit; display: block; }
   </style>
 </head>
@@ -586,7 +612,7 @@
         {% if live %}
         {% if live.altitude_ft is not none %}<div>{{ live.altitude_ft }}<span class="stat-unit"> ft</span></div>{% endif %}
         {% if live.speed_kts is not none %}<div>{{ live.speed_kts }}<span class="stat-unit"> kts</span></div>{% endif %}
-        {% if current.progress_pct is not none %}<div>{{ current.progress_pct }}<span class="stat-unit">%</span></div>{% endif %}
+        {% if current.progress_pct is not none %}<div>{{ current.progress_pct|round|int }}<span class="stat-unit">%</span></div>{% endif %}
         {% endif %}
       </div>
     </div>
@@ -629,42 +655,43 @@
 
 
       <div class="city-route" id="card-city-route">{{ current.origin_city }} <span class="to-word">to</span> {{ current.dest_city }}</div>
-      <div class="times-row">
-        <div class="time-chip">
-          <span class="chip-icon">
-            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="7" y1="17" x2="17" y2="7"></line>
-              <polyline points="7 7 17 7 17 17"></polyline>
-            </svg>
-          </span>
-          <span class="chip-body">
-            <span class="chip-line">
-              <span class="chip-code" id="card-origin-code">{{ current.origin }}</span>
+
+      {# The fill position when there is no live fix: an arrived leg is at the
+         far end because closure said so, anything else sits at the start. The
+         PERCENTAGE is still only ever printed from a real fix. #}
+      {% set fill_pct = (current.progress_pct|round|int) if current.progress_pct is not none else (100 if current.phase_tag == 'Arrived' else 0) %}
+      <div class="route-strip">
+        <div class="route-ends">
+          <div class="route-end">
+            <div class="route-code" id="card-origin-code">{{ current.origin }}</div>
+            <span class="route-time-wrap">
               <span class="chip-time {{ current.dep_delay.state if current.dep_delay and current.dep_delay.state in ('early','late') else '' }}" id="card-dep-time"
                     data-pop="pop-dep"
                     data-full="{{ (current.dep_delay.time if current.dep_delay and current.dep_delay.time else current.dep) or '' }}">{{ (current.dep_delay.time_short if current.dep_delay and current.dep_delay.time_short else current.dep_short) or current.dep }}</span>
+              <span class="time-pop" id="pop-dep" role="tooltip" aria-hidden="true"></span>
             </span>
-            <span class="time-pop" id="pop-dep" role="tooltip" aria-hidden="true"></span>
-          </span>
-        </div>
-        <div class="time-chip">
-          <span class="chip-icon">
-            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="7" y1="7" x2="17" y2="17"></line>
-              <polyline points="17 7 17 17 7 17"></polyline>
-            </svg>
-          </span>
-          <span class="chip-body">
-            <span class="chip-line">
-              <span class="chip-code" id="card-dest-code">{{ current.destination }}</span>
+          </div>
+          <div class="route-end arr">
+            <div class="route-code" id="card-dest-code">{{ current.destination }}</div>
+            <span class="route-time-wrap">
               <span class="chip-time {{ current.arr_delay.state if current.arr_delay and current.arr_delay.state in ('early','late') else '' }}" id="card-arr-time"
                     data-pop="pop-arr"
                     data-full="{{ (current.arr_delay.time if current.arr_delay and current.arr_delay.time else current.arr) or '' }}">{{ (current.arr_delay.time_short if current.arr_delay and current.arr_delay.time_short else current.arr_short) or current.arr }}</span>
+              <span class="time-pop" id="pop-arr" role="tooltip" aria-hidden="true"></span>
             </span>
             <span class="chip-delay {{ current.arr_delay.state if current.arr_delay else '' }}" id="card-arr-delay"
                   style="{{ '' if (current.arr_delay and current.arr_delay.state in ('early','late','cancelled')) else 'display:none' }}">{{ current.arr_delay.short_text if current.arr_delay and current.arr_delay.short_text else '' }}</span>
-            <span class="time-pop" id="pop-arr" role="tooltip" aria-hidden="true"></span>
-          </span>
+          </div>
+        </div>
+        <div class="route-line" id="progress-wrap-el">
+          <div class="route-track"><div class="route-fill" id="progress-fill-el" style="width: {{ fill_pct }}%"></div></div>
+          <div class="route-plane" id="route-plane-el"
+               style="left: {{ fill_pct }}%;{{ '' if current.progress_pct is not none else ' display:none' }}"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true" style="transform: rotate(90deg);"><path d="M12 2c.9 0 1.6 1.3 1.6 2.9v4.4l7.4 4.3v2l-7.4-2.3v4.6l2.4 1.8v1.7L12 20.3l-4 1.1v-1.7l2.4-1.8v-4.6L3 15.6v-2l7.4-4.3V4.9C10.4 3.3 11.1 2 12 2z"/></svg></div>
+        </div>
+        <div class="route-stats" id="progress-label-el">
+          {%- if current.progress_pct is not none %}<span>{{ current.progress_pct|round|int }}% en route</span>{% endif %}
+          {%- if current.distance_nm is not none %}<span>{{ current.distance_nm|round|int }} nm to go</span>{% endif %}
+          {%- if current.ete %}<span>ETE {{ current.ete }}</span>{% endif %}
         </div>
       </div>
     </div>
@@ -705,15 +732,6 @@
           {% endif %}
         </div>
       </div>
-      <div class="progress-wrap" id="progress-wrap-el" style="{{ '' if current.progress_pct is not none else 'display:none' }}">
-        <div class="progress-track"><div class="progress-fill" id="progress-fill-el" style="width: {{ current.progress_pct or 0 }}%"></div></div>
-        <div class="progress-label" id="progress-label-el">
-          {% if current.progress_pct is not none %}<span>{{ current.progress_pct }}% en route</span>{% endif %}
-          {% if current.distance_nm is not none %}<span>{{ current.distance_nm }} nm to go</span>{% endif %}
-          {% if current.ete %}<span>ETE {{ current.ete }}</span>{% endif %}
-        </div>
-      </div>
-
       <div class="detail-block" id="flight-detail" style="{{ '' if current.enriched else 'display:none' }}">
         <h3>Flight detail</h3>
         {# Two rows, not three. Each carries its own time AND how far off it
@@ -774,8 +792,11 @@
         {% endif %}
       </div>
     </div>
+    <div class="card-more" id="expand-hint" role="button" tabindex="0"
+         aria-expanded="false" aria-controls="expand-details">
+      <span id="expand-hint-label">Flight details</span><span class="caret" aria-hidden="true">&#9662;</span>
+    </div>
   </div>
-  <div class="expand-hint" id="expand-hint">Tap for more &#9662;</div>
 
   <div class="expand-wrap" id="expand-wrap">
     {% if past_count %}
@@ -808,8 +829,8 @@
             <div class="row-flight-num">{{ leg.callsign }}{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}{% if leg.is_current %}<span class="live-dot" title="Current flight"></span>{% endif %}</div>
             <div class="row-city-route">{{ leg.origin }} &rarr; {{ leg.destination }}</div>
             <div class="row-times-row">
-              <div class="row-chip"><span class="row-chip-icon"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline></svg></span><span class="row-chip-time">{{ leg.dep }}</span></div>
-              <div class="row-chip"><span class="row-chip-icon"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="7" x2="17" y2="17"></line><polyline points="17 7 17 17 7 17"></polyline></svg></span><span class="row-chip-time">{{ leg.arr }}</span></div>
+              <div class="row-chip"><span class="row-chip-icon"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline></svg></span><span class="row-chip-time">{{ leg.dep }}</span></div>
+              <div class="row-chip"><span class="row-chip-icon"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="7" y1="7" x2="17" y2="17"></line><polyline points="17 7 17 17 7 17"></polyline></svg></span><span class="row-chip-time">{{ leg.arr }}</span></div>
             </div>
           </div>
           <div class="leg-head-tags">
@@ -821,7 +842,7 @@
            rendered, so an unflown leg shows only what actually exists
            instead of a column of blanks. #}
         <div class="row-detail" id="rd-{{ leg.id }}" data-loaded="0" hidden>
-          <div class="row-detail-body"><div class="rd-loading">Loading&hellip;</div></div>
+          <div class="row-detail-body"><div class="rd-skeleton" aria-label="Loading flight detail"><span></span><span></span><span></span></div></div>
           <div class="rd-links">
             {% if settings.show_flightaware %}
             <a data-fa-link href="{{ leg.links.flightaware }}" target="_blank" rel="noopener">FlightAware</a>
@@ -884,21 +905,28 @@
     (function() {
       var card = document.getElementById('collapsed-card');
       var details = document.getElementById('expand-details');
-      var wrap = document.getElementById('expand-wrap');
       var hint = document.getElementById('expand-hint');
-      if (!card || !details || !wrap || !hint) return;
+      var hintLabel = document.getElementById('expand-hint-label');
+      if (!card || !details || !hint) return;
 
+      // NOTE: this no longer touches #expand-wrap. It used to open the card's
+      // detail AND the whole flight list on one switch, so the schedule was
+      // invisible on first load. The list is always rendered now.
       function setExpanded(open) {
         details.classList.toggle('open', open);
-        wrap.classList.toggle('open', open);
         card.classList.toggle('expanded', open);
-        hint.innerHTML = open ? 'Tap to collapse &#9652;' : 'Tap for more &#9662;';
+        if (hintLabel) hintLabel.textContent = open ? 'Hide details' : 'Flight details';
         hint.setAttribute('aria-expanded', open ? 'true' : 'false');
       }
 
       function toggle() { setExpanded(!details.classList.contains('open')); }
 
       hint.addEventListener('click', toggle);
+      hint.addEventListener('keydown', function(e) {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        toggle();
+      });
 
       // The whole card header is the tap target too — the hint is a 0.72rem
       // line of text and a poor one on a phone. Anything interactive inside
@@ -1196,6 +1224,29 @@
         }
       }
 
+      // The route strip. Fill and plane move only on a real position fix;
+      // with none, an arrived leg parks at the far end and everything else
+      // at the start, and no percentage is printed either way.
+      function applyProgress(pct, distanceNm, ete, phaseTag) {
+        const fill = document.getElementById('progress-fill-el');
+        const plane = document.getElementById('route-plane-el');
+        const stats = document.getElementById('progress-label-el');
+        const known = (pct != null);
+        const at = known ? Math.round(pct) : (phaseTag === 'Arrived' ? 100 : 0);
+        if (fill) fill.style.width = at + '%';
+        if (plane) {
+          plane.style.left = at + '%';
+          plane.style.display = known ? '' : 'none';
+        }
+        if (stats) {
+          const parts = [];
+          if (known) parts.push('<span>' + Math.round(pct) + '% en route</span>');
+          if (distanceNm != null) parts.push('<span>' + Math.round(distanceNm) + ' nm to go</span>');
+          if (ete) parts.push('<span>ETE ' + ete + '</span>');
+          stats.innerHTML = parts.join('');
+        }
+      }
+
       // Poll-driven refresh: updates live stats, status, progress, and the
       // map's plane/trail in place — never touches scroll position,
       // expand/collapse state, or the map's current pan/zoom.
@@ -1246,25 +1297,14 @@
               }
             }
 
-            const progWrap = document.getElementById('progress-wrap-el');
-            const progFill = document.getElementById('progress-fill-el');
-            const progLabel = document.getElementById('progress-label-el');
-            if (progWrap) {
-              if (data.progress_pct != null) {
-                progWrap.style.display = '';
-                if (progFill) progFill.style.width = data.progress_pct + '%';
-                if (progLabel) {
-                  const parts = ['<span>' + data.progress_pct + '% en route</span>'];
-                  if (data.distance_nm != null) parts.push('<span>' + data.distance_nm + ' nm to go</span>');
-                  if (data.ete) parts.push('<span>ETE ' + data.ete + '</span>');
-
-                  applyEnrichment(data);
-                  progLabel.innerHTML = parts.join('');
-                }
-              } else {
-                progWrap.style.display = 'none';
-              }
-            }
+            // applyEnrichment used to be called from INSIDE the progress
+            // branch, three conditionals deep, so gates, revised times and
+            // the "airline data N min ago" line only repainted while the
+            // aeroplane had a live position fix. A delayed leg sitting at a
+            // gate with no ADS-B coverage — exactly when the family is
+            // refreshing hardest — showed nothing new until a page reload.
+            applyProgress(data.progress_pct, data.distance_nm, data.ete, data.phase_tag);
+            applyEnrichment(data);
 
             const overlayEl = document.getElementById('map-overlay-stats');
             const overlayInner = document.getElementById('map-overlay-stats-inner');
@@ -1276,7 +1316,7 @@
                 let oHtml = '';
                 if (data.live.altitude_ft != null) oHtml += '<div>' + data.live.altitude_ft + '<span class="stat-unit"> ft</span></div>';
                 if (data.live.speed_kts != null) oHtml += '<div>' + data.live.speed_kts + '<span class="stat-unit"> kts</span></div>';
-                if (data.progress_pct != null) oHtml += '<div>' + data.progress_pct + '<span class="stat-unit">%</span></div>';
+                if (data.progress_pct != null) oHtml += '<div>' + Math.round(data.progress_pct) + '<span class="stat-unit">%</span></div>';
                 overlayInner.innerHTML = oHtml;
               } else {
                 overlayEl.style.display = 'none';
@@ -1512,6 +1552,10 @@
           arrival_source: cur.arrival_source || null,
           signal_note: cur.signal_note || null,
         });
+        applyProgress(isSelectedLive ? cur.progress_pct : null,
+                      isSelectedLive ? cur.distance_nm : null,
+                      isSelectedLive ? cur.ete : null,
+                      cur.phase_tag);
         renderMap(currentData, liveData, true);
 
         // Keep the URL shareable/refreshable without navigating.
