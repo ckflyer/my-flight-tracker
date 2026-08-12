@@ -244,11 +244,32 @@ RETENTION_DAYS = 30
 
 
 def purge_old(now: Optional[datetime] = None) -> int:
-    """Drop flights past retention, plus orphaned roster rows and tracks.
+    """Drop flights past retention, plus roster rows and tracks left behind.
 
     Rows get a purge_after stamp when they close. A leg that never closed
     is caught by its scheduled date instead, so nothing lingers forever
     just because it never resolved.
+
+    RETENTION IS THE ONLY THING THAT DELETES A FLIGHT. Through v5.6 there
+    was a second rule — "delete any flight nobody has on their schedule any
+    more" — and it was wrong for the way this app is actually used. The
+    flights table records real-world flights, shared by everyone who was on
+    board; whether a given pilot still has the leg on his roster today says
+    nothing about whether the flight happened. Two things that rule broke:
+
+      * Swapping in a test schedule to watch live traffic un-rostered every
+        real leg, and the next sweep (every 6 hours, and on the first tick
+        after the container starts, so any update.sh triggered it) deleted
+        them outright — gates, actual times, closeout, the lot. Re-pasting
+        the real bid line then found no row to adopt and built a blank one
+        from the schedule. The tracks went on the sweep after that.
+      * An FO importing a bid line for a trip already flown could only
+        adopt rows that still happened to be on someone's schedule.
+
+    Now an unrostered flight simply ages out with everything else at
+    RETENTION_DAYS. Nothing polls it in the meantime — the poller walks
+    each user's schedule, not this table — so a retained row costs storage
+    and no AeroAPI queries.
     """
     now = now or datetime.now(timezone.utc)
     cutoff = (now - timedelta(days=RETENTION_DAYS)).date().isoformat()
@@ -258,10 +279,10 @@ def purge_old(now: Optional[datetime] = None) -> int:
             "DELETE FROM flights WHERE (purge_after IS NOT NULL AND purge_after < ?) "
             "OR (purge_after IS NULL AND date < ?)", (now.isoformat(), cutoff))
         removed = cur.rowcount or 0
+        # Cleanup runs AFTER the only deletion above, so a row and its
+        # dependents go in the same sweep rather than one sweep apart.
         conn.execute("DELETE FROM roster WHERE flight_id NOT IN (SELECT id FROM flights)")
         conn.execute("DELETE FROM positions WHERE flight_key NOT IN (SELECT id FROM flights)")
-        # A flight nobody has on their schedule any more.
-        conn.execute("DELETE FROM flights WHERE id NOT IN (SELECT flight_id FROM roster)")
         conn.commit()
         return removed
     finally:

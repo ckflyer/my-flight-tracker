@@ -38,19 +38,19 @@ seriously.
 
 ## STATE
 
-v5.6. Deployed target: TrueNAS. Multi-user: the owner plus several FOs,
+v5.7. Deployed target: TrueNAS. Multi-user: the owner plus several FOs,
 who fly the same legs — hence shared flight rows (v5.1).
 
-v5.6 is a UI-only pass over `viewer.html`: route strip on the always-visible
-card, schedule no longer hidden behind the card's disclosure, and one real
-bug fixed in the poll path (see VERSION HISTORY). No engine, schema or
-invariant changed.
+v5.6 was a UI pass (route strip, always-visible schedule). v5.7 makes the
+route strip's figures honest — ETE was still falling back to the clock —
+and stops the retention sweep deleting flights merely because nobody has
+them rostered. No schema change and no migration in either.
 
-Tests: 193, six suites, all passing.
+Tests: 206, six suites, all passing.
 
 | Suite | N | Covers |
 |---|---|---|
-| `tests_flight_row.py` | 50 | write modes, both tag ladders, closure guards, shared crew, retention |
+| `tests_flight_row.py` | 63 | write modes, both tag ladders, closure guards, shared crew, retention |
 | `tests_poller_end_to_end.py` | 27 | full flight gate-to-gate, scripted ADS-B feed |
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
@@ -163,8 +163,12 @@ Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
    departure gate is identical to blocking in.
 8. **Backstop anchors on revised arrival,** else observed departure +
    scheduled block. Never the original timetable.
-9. **Progress requires a live fix.** No fix → no figure, bar hides. Never
-   derive from elapsed clock time.
+9. **Every figure on the route strip requires a live fix.** Progress,
+   distance AND ETE come from a position, or they do not exist. No fix →
+   no figures, nothing drawn, and never a number derived from the clock.
+   They appear together or not at all: one live-looking figure beside two
+   blanks is worse than three blanks. Progress returns None before
+   departure too — a pinned 0% looks like a measurement and is not one.
 10. **Aircraft identity is the ICAO hex, never geometry.** Heading-based
     rejection breaks on diversions, holds and opposite-flow departures.
 11. **Booleans from SQLite are `0`/`1`, not `False`/`True`.** Normalise
@@ -173,6 +177,11 @@ Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
     `PRAGMA table_info`. `CREATE TABLE IF NOT EXISTS` silently no-ops.
 13. **Deleting a user deletes their `roster` rows only.** Flights and
     tracks are shared.
+14. **Retention is the only thing that deletes a flight.** Not "nobody has
+    it on their schedule any more" — that describes a roster, not a
+    real-world flight, and deleting on it destroyed real data every time a
+    test schedule was imported. Un-rostered rows age out at
+    `RETENTION_DAYS` with everything else. Nothing polls them meanwhile.
 
 ## MODULE MAP
 
@@ -627,6 +636,51 @@ invariant 1.
   the HTTP layer's perspective (form redisplay, HTTP 200).
 
 ## VERSION HISTORY
+
+### v5.7 - honest figures, and flights that outlive a roster
+
+Owner's call on both. No schema change, no migration, no UI restructuring.
+
+- **ETE was the last thing still running on the clock.** Progress and
+  distance were already position-derived; `compute_remaining_minutes` fell
+  back to counting down to the airline's revised arrival whenever there was
+  no fix or the aircraft was below taxi speed. On a coverage hole mid-cruise
+  the percentage and the distance correctly vanished while "ETE 21 min"
+  stayed lit beside them, ticking against a timetable — one figure on the
+  card contradicting the two blanks next to it. Fallback removed; the
+  `revised_arrival` / `now` parameters went with it, and `view.py` no longer
+  computes a revised arrival for this purpose. The airline's estimate is
+  still shown, on the Arrival line, labelled as an estimate.
+- **Progress returns None before departure** instead of a pinned 0.0. Same
+  category of problem, smaller: a zero looks measured and isn't. It only
+  became visible when the figure moved onto the always-on-screen card in
+  v5.6, where a parked aeroplane icon at the origin reads as "tracking"
+  rather than "hasn't gone anywhere yet". The `departed` gate itself stays
+  and is protective, not cosmetic — the hex lock can point at an airframe
+  still inbound on its own previous leg, so a fix taken before pushback can
+  belong to an aeroplane halfway across the state.
+- **The three figures render together or not at all,** server-side and in
+  `applyProgress`.
+- **Retention is now the only thing that deletes a flight** (invariant 14).
+  `purge_old` also ran `DELETE FROM flights WHERE id NOT IN (SELECT
+  flight_id FROM roster)`. The owner imports throwaway schedules to watch
+  live traffic; that un-rosters every real leg, and the next sweep — every
+  6 hours, and on the first tick after container start, so any `update.sh`
+  triggered it — deleted them outright. Gates, actual times, closeout, all
+  of it. Re-pasting the real bid line then found no row to adopt and built a
+  blank one from the timetable; the tracks died on the sweep after that.
+  Diagnosed by running the sequence against a scratch database, not by
+  reading. Cleanup was also reordered so a row and its dependent rows go in
+  the SAME sweep rather than one apart. Un-rostered flights now age out at
+  `RETENTION_DAYS` like everything else and cost nothing meanwhile:
+  `active_flights()` walks each user's schedule, never this table, so a
+  retained row is never polled and never triggers an AeroAPI query.
+- Consequence, and the point of the change: an FO importing a bid line for
+  a trip already flown adopts the existing rows and immediately sees the
+  gates, times, aircraft and track from when they flew it together.
+- `tests_flight_row.py` 50 → 63: the swap-schedule-and-restore sequence end
+  to end, the FO adoption case, un-rostered rows still obeying the 30-day
+  cutoff, and assertions that no revised arrival can manufacture an ETE.
 
 ### v5.6 - the route strip
 

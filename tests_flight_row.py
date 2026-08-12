@@ -232,13 +232,27 @@ check("...and takes the airline's time", row["closed_at"].startswith(gate_in[:16
 check("arrival source is recorded as airline", row["arrival_source"] == "airline")
 
 
-print("\n-- progress can't run on the clock --")
+print("\n-- every figure comes from a position fix, or does not exist --")
 write(LEG.id, always={"last_lat": None, "last_lon": None, "last_on_ground": None,
                            "phase_tag": tags.PHASE_SCHEDULED, "off_actual_api": None,
                            "last_signal_at": None, "cancelled": 0})
 derived = recompute_derived(get_flight(LEG.id), LEG, ARR + timedelta(hours=1))
-check("a flight still at the gate shows 0%, not 100%", derived["progress_pct"] == 0.0)
+check("a flight still at the gate has NO percentage, not 0 and not 100",
+      derived["progress_pct"] is None, str(derived["progress_pct"]))
 check("no live fix means no distance", derived["distance_nm"] is None)
+check("no live fix means no countdown either", derived["ete_min"] is None,
+      str(derived["ete_min"]))
+
+# The failure this replaced: on a coverage hole mid-cruise the percentage
+# and distance correctly vanished while ETE kept ticking down against the
+# airline's revised arrival, so one figure on the card contradicted the two
+# blanks beside it.
+write(LEG.id, always={"last_lat": None, "last_lon": None,
+                           "phase_tag": tags.PHASE_IN_AIR,
+                           "in_estimated": (ARR + timedelta(minutes=40)).isoformat()})
+derived = recompute_derived(get_flight(LEG.id), LEG, ARR)
+check("a revised arrival cannot manufacture an ETE",
+      derived["ete_min"] is None, str(derived["ete_min"]))
 
 o = LEG.origin_info
 mid_lat = (o.lat + d.lat) / 2
@@ -250,6 +264,7 @@ derived = recompute_derived(get_flight(LEG.id), LEG, ARR)
 check("halfway along the route reads about 50%",
       derived["progress_pct"] and 40 < derived["progress_pct"] < 60,
       str(derived["progress_pct"]))
+check("...and a real fix does yield a distance", derived["distance_nm"] is not None)
 
 
 print("\n-- signal note replaces the Unknown phase --")
@@ -305,6 +320,57 @@ removed = purge_old()
 ids = {l.id for l in load_schedule(UID)}
 check("a leg older than 30 days is purged", old.id not in ids, str(ids))
 check("current legs survive the purge", LEG.id in ids)
+
+
+print("\n-- a flight outlives everybody's schedule --")
+# The owner's actual workflow: swap in a throwaway schedule to watch live
+# traffic, then put the real bid line back. Through v5.6 the sweep deleted
+# every un-rostered flight, so the real legs were gone before he swapped
+# back and the re-import built blank rows from the timetable.
+flown = make_leg("2026-08-04-4242-DFW-ICT", on=date(2026, 8, 4))
+save_schedule(UID, [flown])
+write(flown.id, once={"gate_destination": "A17", "baggage_claim": "6",
+                      "tail_api": "N600EN"})
+write(flown.id, latest={"closed": 1, "closed_by": "airline"})
+from app.track import record_position, get_breadcrumb                # noqa: E402
+record_position(flown.id, 32.9, -97.0,
+                datetime(2026, 8, 4, 18, 0, tzinfo=timezone.utc), on_ground=False)
+
+test_sched = make_leg("2026-08-05-9999-LAX-JFK", on=date(2026, 8, 5))
+save_schedule(UID, [test_sched])
+check("swapping schedules takes the leg off the roster",
+      flown.id not in {l.id for l in load_schedule(UID)})
+
+purge_old()
+purge_old()   # the track used to die on the second sweep, not the first
+row = get_flight(flown.id)
+check("...but the FLIGHT survives with nobody rostered on it", row is not None)
+check("...keeping its arrival gate", row is not None and row["gate_destination"] == "A17")
+check("...its baggage belt", row is not None and row["baggage_claim"] == "6")
+check("...its aircraft", row is not None and row["tail_api"] == "N600EN")
+check("...and its track", len(get_breadcrumb(flown.id)) > 0)
+
+save_schedule(UID, [flown])
+back = get_flight(flown.id)
+check("re-adding the schedule adopts the old row, not a blank one",
+      back is not None and back["gate_destination"] == "A17")
+check("...and the closeout record comes back with it",
+      back is not None and back["closed_by"] == "airline")
+
+# The FO case: a different pilot imports a trip they were on and inherits
+# everything already known about it.
+save_schedule(UID2, [flown])
+check("another pilot importing the same leg adopts it too",
+      flown.id in {l.id for l in load_schedule(UID2)}
+      and get_flight(flown.id)["gate_destination"] == "A17")
+
+# Retention still has the last word.
+ancient = make_leg("2019-05-05-1212-DFW-OKC", on=date(2019, 5, 5))
+save_schedule(UID2, [flown, ancient])
+save_schedule(UID2, [flown])          # un-roster it, as a swap would
+purge_old()
+check("an un-rostered flight past 30 days is still purged",
+      get_flight(ancient.id) is None)
 
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")

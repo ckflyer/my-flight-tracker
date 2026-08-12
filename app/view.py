@@ -335,20 +335,19 @@ def recompute_derived(row, leg, now: datetime) -> Dict[str, Any]:
                      tags.PHASE_TAXI_IN, tags.PHASE_ARRIVED)
         or bool(_col(row, "off_actual_api"))
     )
-    # No live fix means no figures at all, and the bar hides. Better than
-    # a number derived from the clock.
+    # No live fix means no figures at all, and the strip draws empty.
+    # Better than a number derived from the clock.
     stale = tags.signal_note(row, now) is not None
     if not departed or stale:
         lat = lon = None
 
-    revised_arr = None
-    for key in ("in_actual_api", "in_estimated", "on_actual_api", "on_estimated"):
-        revised_arr = _parse(_col(row, key))
-        if revised_arr:
-            break
-
+    # progress / distance / ETE are ALL position-derived, or absent. The
+    # revised arrival that used to feed an ETE fallback here is still read
+    # from the row further up and rendered on the Arrival line, where it is
+    # labelled as the airline's estimate rather than dressed as a
+    # measurement.
     remaining = compute_remaining_minutes(
-        leg, lat, lon, _col(row, "last_speed_kts"), revised_arr, now)
+        leg, lat, lon, _col(row, "last_speed_kts"))
     return {
         "progress_pct": compute_progress(leg, lat, lon, departed),
         "distance_nm": compute_distance_nm(leg, lat, lon),

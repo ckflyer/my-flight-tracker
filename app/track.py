@@ -140,15 +140,26 @@ def compute_progress(leg: FlightLeg, lat: Optional[float], lon: Optional[float],
                      departed: bool) -> Optional[float]:
     """Percent along the great-circle route, or None.
 
-    Pinned to zero until there is EVIDENCE the aircraft left. The old
-    elapsed-time fallback measured the clock against the schedule, so a
-    flight still at the gate showed 27% en route and, once past its
-    scheduled arrival, 100%. No live position now means no figure at all
-    and the bar hides, rather than showing a number derived from a
-    timetable everyone already knows is wrong.
+    EVERY figure on the route strip comes from a live position fix or does
+    not exist. The old elapsed-time fallback measured the clock against the
+    schedule, so a flight still at the gate showed 27% en route and, once
+    past its scheduled arrival, 100%.
+
+    Through v5.6 this returned 0.0 for a leg that had not departed, which
+    was a smaller version of the same lie: a pinned zero looks like a
+    measurement and is not one. It also could not stay honest once the
+    figure moved onto the always-visible card, where a parked aeroplane
+    icon sitting at the origin reads as "we are tracking this" rather than
+    "it has not gone anywhere yet". None now means None: no fix, no figure,
+    nothing drawn.
+
+    The `departed` gate stays, and is protective rather than cosmetic. The
+    hex lock can point at an airframe still inbound on ITS previous leg, so
+    a fix taken before this leg pushes back can belong to an aeroplane
+    halfway across the state.
     """
     if not departed:
-        return 0.0
+        return None
     if lat is None or lon is None:
         return None
     o, d = leg.origin_info, leg.dest_info
@@ -169,22 +180,27 @@ def compute_distance_nm(leg: FlightLeg, lat: Optional[float],
     return round(haversine_nm(lat, lon, d.lat, d.lon), 1)
 
 
-def compute_remaining_minutes(leg: FlightLeg, lat, lon, speed_kts,
-                              revised_arrival: Optional[datetime],
-                              now: datetime) -> Optional[float]:
-    """Minutes to go, from live groundspeed and distance where possible.
+def compute_remaining_minutes(leg: FlightLeg, lat, lon,
+                              speed_kts) -> Optional[float]:
+    """Minutes to go, from live groundspeed and distance. Otherwise None.
 
-    Falls back to the airline's REVISED arrival, never to the bare
-    schedule: a flight two hours late does not have five minutes to go
-    just because the timetable says so.
+    Through v5.6 this fell back to counting down to the airline's revised
+    arrival when there was no fix or the aircraft was below taxi speed.
+    That figure is clock arithmetic wearing the same clothes as a measured
+    one, and it failed in the worst place: on a coverage hole mid-cruise
+    the percentage and the distance both correctly vanished while "ETE
+    21 min" stayed lit beside them, ticking down on a timetable. One
+    number on the card contradicting the two next to it is worse than
+    three blanks.
+
+    The revised arrival is still shown — it is the Arrival row, where it
+    is labelled as the airline's estimate and belongs.
     """
     d = leg.dest_info
     if (lat is not None and lon is not None and speed_kts
             and speed_kts > MIN_SPEED_KTS_FOR_ETA and d and d.lat is not None):
         remaining = haversine_nm(lat, lon, d.lat, d.lon)
         return max(0.0, (remaining / speed_kts) * 60)
-    if revised_arrival:
-        return max(0.0, (revised_arrival - now).total_seconds() / 60)
     return None
 
 
