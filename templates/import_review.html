@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="{{ settings.theme }}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pilot Tracker · Review import</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png?v={{ version }}">
+  <link rel="shortcut icon" href="/static/favicon.ico?v={{ version }}">
+  <link rel="stylesheet" href="/static/app.css?v={{ version }}">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text); min-height: 100vh;
+      padding: max(1.5rem, env(safe-area-inset-top)) max(1.5rem, env(safe-area-inset-right)) max(1.5rem, env(safe-area-inset-bottom)) max(1.5rem, env(safe-area-inset-left));
+      max-width: 640px; margin: 0 auto;
+    }
+    .brand { font-size: 0.95rem; font-weight: 700; margin-bottom: 0.35rem; }
+    h1 { font-size: 1.3rem; margin-bottom: 0.35rem; }
+    .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 1.25rem; line-height: 1.5; }
+
+    .leg-item { background: var(--card); border-radius: 12px; padding: 0.85rem 1rem; margin-bottom: 0.5rem; }
+    .leg-row { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; }
+    .leg-row .meta { color: var(--muted); font-size: 0.8rem; margin-top: 0.2rem; }
+    .dh {
+      display: inline-block; padding: 0.1rem 0.4rem; border-radius: 6px;
+      font-size: 0.65rem; font-weight: 600; background: rgba(245,158,11,0.2);
+      color: var(--warn); margin-left: 0.35rem; vertical-align: middle;
+    }
+    .add-break-btn {
+      flex-shrink: 0; width: 30px; height: 30px; border-radius: 8px;
+      background: transparent; border: 1px solid var(--border); color: var(--muted);
+      font-size: 1.1rem; line-height: 1; cursor: pointer;
+    }
+    .add-break-btn:hover { color: var(--text); border-color: var(--muted); }
+
+    .break-marker {
+      display: flex; align-items: center; gap: 0.6rem;
+      background: rgba(59,130,246,0.1);
+      border: 1px dashed var(--accent);
+      border-radius: 10px;
+      padding: 0.55rem 0.7rem;
+      margin: 0.6rem 0;
+      font-size: 0.85rem;
+      color: var(--accent);
+      cursor: default;
+    }
+    .drag-handle { cursor: grab; color: var(--accent); flex-shrink: 0; display: flex; }
+    .drag-handle:active { cursor: grabbing; }
+    .break-label { flex: 1; font-weight: 600; }
+    .break-delete {
+      flex-shrink: 0; width: 26px; height: 26px; border-radius: 6px;
+      background: transparent; border: none; color: var(--accent);
+      font-size: 1.1rem; line-height: 1; cursor: pointer;
+    }
+    .break-delete:hover { background: rgba(59,130,246,0.15); }
+    .break-marker.sortable-ghost { opacity: 0.4; }
+
+    .actions { display: flex; gap: 0.6rem; margin-top: 1.5rem; }
+    .actions a, .actions button {
+      flex: 1; text-align: center; padding: 0.75rem; border-radius: 8px;
+      font-weight: 600; font-size: 0.95rem; cursor: pointer; text-decoration: none; border: none;
+    }
+    .btn-cancel { background: transparent; border: 1px solid var(--border) !important; color: var(--text); }
+    .btn-confirm { background: var(--accent); color: white; }
+  </style>
+</head>
+<body>
+  <div class="brand">Pilot Tracker</div>
+  <h1>Review before importing</h1>
+  <p class="sub">
+    Trip breaks 35+ hours apart were guessed and placed automatically.
+    Drag the <strong>☰</strong> handle to move one, tap <strong>×</strong> to remove one,
+    or tap <strong>+</strong> on any flight to add a break before it. Nothing is saved until you confirm.
+  </p>
+
+  <form method="post" action="/admin/import/confirm" id="review-form">
+    <div id="break-list">
+      {% for leg in legs %}
+        {% if leg.suggested_break_before %}
+        <div class="break-marker">
+          <span class="drag-handle" title="Drag to move">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+              <line x1="4" y1="7" x2="20" y2="7"></line>
+              <line x1="4" y1="12" x2="20" y2="12"></line>
+              <line x1="4" y1="17" x2="20" y2="17"></line>
+            </svg>
+          </span>
+          <span class="break-label">New trip starts here</span>
+          <button type="button" class="break-delete" aria-label="Remove break">&times;</button>
+        </div>
+        {% endif %}
+        <div class="leg-item">
+          <div class="leg-row">
+            <div>
+              <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
+              {{ leg.route }}
+              <div class="meta">{{ leg.date_label }} · {{ leg.dep }} – {{ leg.arr }}{% if leg.same_zone and leg.dep_zone %} <span class="tz">{{ leg.dep_zone }}</span>{% elif leg.dep_zone %} <span class="tz">{{ leg.dep_zone }}/{{ leg.arr_zone }}</span>{% endif %}</div>
+            </div>
+            {% if not loop.first %}
+            <button type="button" class="add-break-btn" title="Add trip break before this flight">+</button>
+            {% endif %}
+          </div>
+          <input type="hidden" name="leg_date" value="{{ leg.raw_date }}">
+          <input type="hidden" name="leg_flight" value="{{ leg.raw_flight }}">
+          <input type="hidden" name="leg_origin" value="{{ leg.raw_origin }}">
+          <input type="hidden" name="leg_dest" value="{{ leg.raw_dest }}">
+          <input type="hidden" name="leg_dep" value="{{ leg.raw_dep }}">
+          <input type="hidden" name="leg_arr" value="{{ leg.raw_arr }}">
+          <input type="hidden" name="leg_dh" value="{{ leg.raw_dh }}">
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="actions">
+      <a href="/admin" class="btn-cancel">Cancel</a>
+      <button type="submit" class="btn-confirm">Confirm &amp; Import</button>
+    </div>
+  </form>
+
+  <script src="/static/vendor/Sortable.min.js?v={{ version }}"></script>
+  <script>
+    const breakList = document.getElementById('break-list');
+
+    new Sortable(breakList, {
+      draggable: '.break-marker',
+      handle: '.drag-handle',
+      animation: 150,
+    });
+
+    function makeBreakMarker() {
+      const div = document.createElement('div');
+      div.className = 'break-marker';
+      div.innerHTML =
+        '<span class="drag-handle" title="Drag to move">' +
+        '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">' +
+        '<line x1="4" y1="7" x2="20" y2="7"></line><line x1="4" y1="12" x2="20" y2="12"></line><line x1="4" y1="17" x2="20" y2="17"></line>' +
+        '</svg></span>' +
+        '<span class="break-label">New trip starts here</span>' +
+        '<button type="button" class="break-delete" aria-label="Remove break">&times;</button>';
+      return div;
+    }
+
+    breakList.addEventListener('click', function(e) {
+      if (e.target.classList.contains('break-delete')) {
+        e.target.closest('.break-marker').remove();
+        return;
+      }
+      if (e.target.classList.contains('add-break-btn')) {
+        const legItem = e.target.closest('.leg-item');
+        const prev = legItem.previousElementSibling;
+        if (prev && prev.classList.contains('break-marker')) {
+          return; // already has a break right before this flight
+        }
+        breakList.insertBefore(makeBreakMarker(), legItem);
+      }
+    });
+
+    document.getElementById('review-form').addEventListener('submit', function(e) {
+      const form = e.target;
+      const tripStarts = [];
+      let precededByBreak = true; // the very first flight is always a trip start
+      Array.from(breakList.children).forEach(function(child) {
+        if (child.classList.contains('break-marker')) {
+          precededByBreak = true;
+        } else if (child.classList.contains('leg-item')) {
+          tripStarts.push(precededByBreak ? '1' : '0');
+          precededByBreak = false;
+        }
+      });
+      tripStarts.forEach(function(val) {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'leg_trip_start';
+        input.value = val;
+        form.appendChild(input);
+      });
+    });
+  </script>
+</body>
+</html>

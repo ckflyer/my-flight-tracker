@@ -3,9 +3,10 @@
 Run: python tests_ui_fixes.py
 """
 import os
+import re
 import sys
 import tempfile
-from datetime import datetime, time as _t, timedelta, timezone
+from datetime import date, datetime, time as _t, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 os.environ["PT_DB_FILE"] = os.path.join(tempfile.mkdtemp(), "ui_test.db")
@@ -189,8 +190,15 @@ def test_sequencing(uid):
 # ------------------------------------------------------- the flight list
 def test_flight_list(uid):
     print("\nOne list: past, the live flight, then upcoming")
-    base = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    # Pinned to midday LOCAL, not the real clock. "L-old" sits 1400 minutes
+    # back, which only lands on yesterday if the suite runs before about
+    # 23:20 — after that it folds into today, the wholly-past day group
+    # vanishes and the suite fails. It failed exactly once, at 23:34, which
+    # is how this was spotted. Anchoring to noon keeps every offset inside
+    # the day it was written for, whatever time the suite is run.
     tz = ZoneInfo("America/Chicago")
+    base = (datetime.now(tz).replace(hour=12, minute=0, second=0, microsecond=0)
+            .astimezone(timezone.utc))
 
     def mk(lid, dep_off, arr_off, num):
         dl = (base + timedelta(minutes=dep_off)).astimezone(tz)
@@ -379,10 +387,239 @@ def test_template_contract():
           "current.distance_nm|round|int" in html)
 
 
+def test_today_is_a_local_day():
+    """"Today" must be resolved in the local zone, not UTC.
+
+    An instant is fine in UTC. A CALENDAR DAY is not: `now.date()` on a
+    UTC clock rolls over at 7pm Central, so all evening the calendar
+    highlighted tomorrow and the agenda anchor pointed at the wrong day.
+    Reported from a screenshot timestamped 23:19 local.
+    """
+    utc = ZoneInfo("UTC")
+    central = ZoneInfo("America/Chicago")
+    evening = datetime(2026, 8, 13, 4, 19, tzinfo=utc)   # 23:19 on the 12th
+    check("a UTC date() is wrong late in the evening",
+          evening.date() == date(2026, 8, 13))
+    check("...and converting to local first is right",
+          evening.astimezone(central).date() == date(2026, 8, 12))
+
+    # Midday is the case that hid this for so long: both agree.
+    midday = datetime(2026, 8, 12, 17, 0, tzinfo=utc)    # 12:00 Central
+    check("both agree at midday, which is why it went unnoticed",
+          midday.date() == midday.astimezone(central).date() == date(2026, 8, 12))
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "app", "main.py"), encoding="utf-8") as fh:
+        src = fh.read()
+    cal = src[src.find("async def calendar_page"):]
+    cal = cal[:cal.find("template = jinja_env.get_template")]
+    check("the calendar route converts before taking a date",
+          "now.astimezone().date()" in cal)
+    check("...and no bare now.date() survives there",
+          "= now.date()" not in cal)
+
+
+def test_one_palette_everywhere():
+    """No template may carry its own copy of the colour variables."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    tdir = os.path.join(here, "templates")
+    names = sorted(n for n in os.listdir(tdir) if n.endswith(".html"))
+    check("all eleven templates collapsed to ten", len(names) == 10, str(len(names)))
+
+    for name in names:
+        with open(os.path.join(tdir, name), encoding="utf-8") as fh:
+            html = fh.read()
+        check(f"{name} declares no palette of its own", "--bg:" not in html)
+        check(f"{name} links the shared stylesheet", "/static/app.css" in html)
+
+    with open(os.path.join(here, "static", "app.css"), encoding="utf-8") as fh:
+        css = fh.read()
+    # The five logged-out pages have no data-theme attribute to read and no
+    # account to read a preference from, so they follow the OS. The :not()
+    # guard stops that overriding a pilot who explicitly chose dark.
+    check("logged-out pages follow the system theme",
+          "prefers-color-scheme: light" in css)
+    check("...without overriding an explicit choice",
+          ":root:not([data-theme])" in css)
+    for var in ("--bg", "--card", "--text", "--muted", "--border", "--input-bg"):
+        check(f"{var} is defined for dark and light",
+              css.count(var + ":") >= 3, str(css.count(var + ":")))
+
+
+def test_settings_is_one_page():
+    """Viewers and pilots share a template; role decides what renders."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "settings.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    check("the API key section is pilot-only",
+          html.find("{% if is_pilot %}") < html.find("Airline flight data"))
+    check("the admin roster needs BOTH flags", "{% if is_pilot and is_admin %}" in html)
+    check("the form action is supplied by the route", 'action="{{ post_to }}"' in html)
+    check("account recovery is gated", "{% if is_pilot %}\n  <div class=\"card\">\n    <h2>Account recovery" in html)
+    check("the old viewer template is gone",
+          not os.path.exists(os.path.join(here, "templates", "viewer_settings.html")))
+
+    # Both forms post the same field names now — they used to disagree
+    # (show_flightaware vs show_fa), which is what two templates cost.
+    with open(os.path.join(here, "app", "main.py"), encoding="utf-8") as fh:
+        src = fh.read()
+    vp = src[src.find("async def viewer_settings_post"):]
+    vp = vp[:vp.find("return resp")]
+    check("the viewer route accepts the pilot field name",
+          "show_flightaware" in vp)
+    check("...while the stored cookie name is unchanged",
+          "pt_viewer_show_fa" in vp)
+
+
+def test_zone_never_wraps_a_time():
+    """A zone is its own element, and is stated once when it can be."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    check("list rows print the bare time, not time+zone",
+          '<span class="row-chip-time">{{ leg.dep_short or leg.dep }}</span>' in html)
+    check("same zone both ends says it once", "row-tz-single" in html)
+    check("different zones say it per end", "not leg.same_zone and leg.dep_zone" in html)
+    check("the card states its zone outright", "All times" in html)
+
+    # The tap-to-reveal bubble is gone: undiscoverable, and it made the
+    # card and the list state zones by two different rules.
+    for dead in ("time-pop", "data-full", "data-pop"):
+        check(f"no trace of the old {dead} bubble", dead not in html)
+
+
+def test_zone_rule_reaches_every_page():
+    """The Flights table and import review follow the same zone rule."""
+    here = os.path.dirname(os.path.abspath(__file__))
+
+    with open(os.path.join(here, "app", "main.py"), encoding="utf-8") as fh:
+        src = fh.read()
+    check("the Flights table asks for bare times",
+          src.count('fmt_local(leg, "dep", settings.time_format, with_zone=False)') == 1)
+    check("...and carries the zone separately",
+          '"dep_zone": tz_abbr(leg, "dep")' in src)
+    # Scoped to the Flights route: leg_view's "date" is a machine-readable
+    # ISO string used for grouping and anchors, and should stay that way.
+    admin_rows = src[src.find('"date_iso"') - 900:src.find('"date_iso"') + 400]
+    check("the Flights table prints a date a person would say",
+          'leg.date.strftime("%b %d")' in admin_rows)
+    check("...keeping the ISO one only for the delete confirmation",
+          '"date_iso": str(leg.date)' in admin_rows)
+
+    with open(os.path.join(here, "templates", "admin.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    check("zone gets its own column", 'class="zone-cell"' in html)
+    check("...and the divider spans all seven", 'colspan="7"' in html)
+    check("the leg counter pluralises properly", "leg(s)" not in html)
+    check("...with real logic behind it",
+          "{{ '' if count == 1 else 's' }}" in html)
+    check("delete still confirms against an unambiguous date",
+          "row.date_iso" in html)
+
+
+def test_nothing_render_blocking_is_remote():
+    """No page may pull a script or stylesheet from someone else's server."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    tdir = os.path.join(here, "templates")
+    for name in sorted(n for n in os.listdir(tdir) if n.endswith(".html")):
+        with open(os.path.join(tdir, name), encoding="utf-8") as fh:
+            html = fh.read()
+        remote = re.findall(r'(?:src|href)="(https?://[^"]+)"', html)
+        check(f"{name} loads nothing offsite", not remote, str(remote))
+
+    for rel in ("static/vendor/leaflet/leaflet.js",
+                "static/vendor/leaflet/leaflet.css",
+                "static/vendor/leaflet/images/marker-icon.png",
+                "static/vendor/Sortable.min.js"):
+        check(f"{rel} is vendored", os.path.exists(os.path.join(here, rel)))
+
+    # Leaflet's stylesheet points at its images relatively, so they have to
+    # sit beside it or markers silently vanish.
+    with open(os.path.join(here, "static/vendor/leaflet/leaflet.css"), encoding="utf-8") as fh:
+        css = fh.read()
+    check("leaflet css uses relative image paths", "images/marker-icon.png" in css)
+
+
+def test_bottom_tab_bar():
+    here = os.path.dirname(os.path.abspath(__file__))
+    tdir = os.path.join(here, "templates")
+    for name in ("viewer.html", "calendar.html", "admin.html", "settings.html"):
+        with open(os.path.join(tdir, name), encoding="utf-8") as fh:
+            html = fh.read()
+        check(f"{name} has a tab bar", '<nav class="tabbar"' in html)
+        check(f"{name} dropped the old top nav", "topnav" not in html)
+        check(f"{name} marks exactly one tab active", html.count('class="active"') == 1,
+              str(html.count('class="active"')))
+
+    with open(os.path.join(here, "static", "app.css"), encoding="utf-8") as fh:
+        css = fh.read()
+    check("the bar clears the home indicator", "env(safe-area-inset-bottom)" in css)
+    check("pages reserve room so it covers nothing",
+          "padding-bottom: calc(56px" in css)
+
+    # Viewers have no Flights page to reach.
+    with open(os.path.join(tdir, "viewer.html"), encoding="utf-8") as fh:
+        v = fh.read()
+    i = v.find('<nav class="tabbar"')
+    check("Flights is pilot-only in the bar", "{% if is_pilot %}" in v[i:i + 2000])
+
+
+def test_full_bleed_map():
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    wrap = html[html.find(".map-wrap {"):]
+    wrap = wrap[:wrap.find("}")]
+    check("the map reaches the screen edges", "margin-left: calc(-1 *" in wrap)
+    check("...and runs up under the status bar", "env(safe-area-inset-top)" in wrap)
+    check("...with square corners", "border-radius: 0" in wrap)
+    # Leaflet's panes reach z-index 800; without a stacking context here
+    # they would paint over the topbar sitting above them.
+    check("leaflet stacking is confined to the map box", "z-index: 1;" in wrap)
+    check("the topbar stays above the map", "z-index: 600;" in html)
+    check("the topbar gets a legibility scrim", ".topbar::before" in html)
+
+
+def test_two_letter_zones():
+    from app.main import tz_abbr, _TWO_LETTER_ZONE
+    from app.models import FlightLeg
+    from app.airports import enrich_leg
+    from datetime import date as _d, time as _tm
+
+    def leg(o, d, on):
+        l = FlightLeg(id="z", date=on, flight_number="1", origin=o, destination=d,
+                      dep_time_local=_tm(7, 0), arr_time_local=_tm(9, 0))
+        enrich_leg(l)
+        return l
+
+    winter = leg("DFW", "PHX", _d(2026, 12, 15))
+    summer = leg("DFW", "PHX", _d(2026, 7, 15))
+    check("central reads CT in December", tz_abbr(winter, "dep") == "CT",
+          str(tz_abbr(winter, "dep")))
+    check("...and CT in July too", tz_abbr(summer, "dep") == "CT")
+    check("mountain reads MT", tz_abbr(winter, "arr") == "MT")
+    check("eastern reads ET", tz_abbr(leg("DFW", "JFK", _d(2026, 1, 5)), "arr") == "ET")
+    check("hawaii reads HT", tz_abbr(leg("LAX", "HNL", _d(2026, 1, 5)), "arr") == "HT")
+    # The whole point: a label that never claims daylight or standard time
+    # cannot be wrong about which one is in force, which retires the
+    # fixed-July-sample bug rather than fixing it.
+    for v in _TWO_LETTER_ZONE.values():
+        check(f"{v} states no daylight/standard", "S" not in v[:-1] and "D" not in v[:-1])
+
+
 def main():
     init_db()
     uid = create_user("uitest", "pw-not-used")
     test_template_contract()
+    test_today_is_a_local_day()
+    test_one_palette_everywhere()
+    test_settings_is_one_page()
+    test_zone_never_wraps_a_time()
+    test_zone_rule_reaches_every_page()
+    test_nothing_render_blocking_is_remote()
+    test_bottom_tab_bar()
+    test_full_bleed_map()
+    test_two_letter_zones()
     test_overnight()
     test_placeholder_purge()
     test_untracked_phase(uid)

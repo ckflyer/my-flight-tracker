@@ -7,6 +7,7 @@ from datetime import datetime, date, timedelta, time as dtime
 from zoneinfo import ZoneInfo
 from typing import Optional
 import calendar as cal_module
+from types import SimpleNamespace
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from .schedule import load_schedule, get_current_info, delete_leg, save_schedule
@@ -119,6 +120,48 @@ def fmt_local(leg: FlightLeg, which: str = "dep", time_format: str = "24",
     return f"{time_str} {abbr}"
 
 
+# Daylight and standard forms of the same zone collapse to one label:
+# "CDT" and "CST" both become "CT". Two characters instead of three, and
+# it is what consumer apps show.
+#
+# This RETIRES a bug rather than fixing it. tz_abbr and fmt_local both
+# sample a fixed July date to get an abbreviation, so every leg read as
+# daylight time and a December flight said CDT where CST was correct. A
+# label that never claims daylight or standard cannot be wrong about which
+# one applies, so the July sample stops mattering.
+#
+# Phoenix is the loose end: Arizona skips daylight time, so MT is a broad
+# name for it. Still the right zone, and no worse than the MST it showed.
+_TWO_LETTER_ZONE = {
+    "EST": "ET", "EDT": "ET",
+    "CST": "CT", "CDT": "CT",
+    "MST": "MT", "MDT": "MT",
+    "PST": "PT", "PDT": "PT",
+    "AKST": "AKT", "AKDT": "AKT",
+    "HST": "HT", "HDT": "HT",
+    "AST": "AT", "ADT": "AT",
+}
+
+
+def tz_abbr(leg: FlightLeg, which: str = "dep") -> Optional[str]:
+    """The zone label on its own — "CT", "MT", "ET".
+
+    fmt_local glues the zone onto the time and returns one string, which
+    left templates no way to lay the two out separately. On a phone that
+    string was long enough to wrap, so a departure read "7:00 AM" on one
+    line and "CDT" on the next, twice per row.
+    """
+    info = leg.origin_info if which == "dep" else leg.dest_info
+    if not info:
+        return None
+    tz = ZoneInfo(info.timezone)
+    sample = datetime(2026, 7, 1, 12, 0, tzinfo=tz)
+    raw = sample.tzname() or info.timezone.split("/")[-1]
+    # Anything outside North America keeps whatever the zone database calls
+    # it rather than being forced into a shape it does not have.
+    return _TWO_LETTER_ZONE.get(raw, raw)
+
+
 def tracking_links(leg: FlightLeg) -> dict:
     cs = leg.callsign
     return {
@@ -221,6 +264,14 @@ def leg_view(leg: Optional[FlightLeg], now: datetime, time_format: str = "24",
         # each airport, and the expanded detail carries the full form.
         "dep_short": fmt_local(leg, "dep", time_format, with_zone=False),
         "arr_short": fmt_local(leg, "arr", time_format, with_zone=False),
+        # The zone on its own, so a template can place it instead of being
+        # handed "7:00 AM CDT" as one blob it has to wrap. A leg that
+        # starts and ends in the same zone says it once; a leg that crosses
+        # one says it twice, which is exactly when it matters. See
+        # same_zone below.
+        "dep_zone": tz_abbr(leg, "dep"),
+        "arr_zone": tz_abbr(leg, "arr"),
+        "same_zone": tz_abbr(leg, "dep") == tz_abbr(leg, "arr"),
         "status_tag": status_tag,
         "phase_tag": phase_tag,
         # One word for anywhere that still shows a single badge: the more
@@ -439,8 +490,11 @@ def build_review_legs(legs: list, time_format: str = "24") -> list:
             "callsign": leg.callsign,
             "route": f"{leg.origin} → {leg.destination}",
             "date_label": leg.date.strftime("%B %d").replace(" 0", " "),
-            "dep": fmt_local(leg, "dep", time_format),
-            "arr": fmt_local(leg, "arr", time_format),
+            "dep": fmt_local(leg, "dep", time_format, with_zone=False),
+            "arr": fmt_local(leg, "arr", time_format, with_zone=False),
+            "dep_zone": tz_abbr(leg, "dep"),
+            "arr_zone": tz_abbr(leg, "arr"),
+            "same_zone": tz_abbr(leg, "dep") == tz_abbr(leg, "arr"),
             "is_deadhead": leg.is_deadhead,
             "suggested_break_before": bool(leg.trip_start and i > 0),
         })
@@ -840,6 +894,20 @@ async def viewer(request: Request, leg: Optional[str] = None):
 
 @app.get("/viewer-settings", response_class=HTMLResponse)
 async def viewer_settings_get(request: Request):
+    """Viewers get the SAME settings page as pilots, minus what they can't own.
+
+    There used to be a second template, viewer_settings.html, holding a
+    stripped copy of the display controls. Two files meant two chances to
+    drift, and they already had: the pilot form named its checkbox
+    show_flightaware while the viewer form called it show_fa. One template
+    now, with the pilot-only sections behind {% if is_pilot %} — the API
+    key, the poll interval, account recovery — and the admin roster behind
+    is_admin on top of that.
+
+    Storage still differs and should: a pilot's settings live in the
+    database and follow their account, a viewer's live in a cookie on the
+    device in front of them. Only the form's action changes.
+    """
     pilot = current_pilot(request)
     viewer_uid = None if pilot else current_viewer_user_id(request)
     if not pilot and not viewer_uid:
@@ -850,10 +918,17 @@ async def viewer_settings_get(request: Request):
         theme = "dark"
     if tf not in ("12", "24"):
         tf = "24"
-    show_fa = request.cookies.get("pt_viewer_show_fa", "1") == "1"
-    show_fr24 = request.cookies.get("pt_viewer_show_fr24", "1") == "1"
-    template = jinja_env.get_template("viewer_settings.html")
-    return HTMLResponse(template.render(request=request, theme=theme, tf=tf, show_fa=show_fa, show_fr24=show_fr24))
+    view_settings = SimpleNamespace(
+        theme=theme,
+        time_format=tf,
+        show_flightaware=request.cookies.get("pt_viewer_show_fa", "1") == "1",
+        show_fr24=request.cookies.get("pt_viewer_show_fr24", "1") == "1",
+    )
+    template = jinja_env.get_template("settings.html")
+    return HTMLResponse(template.render(
+        request=request, s=view_settings, saved=False,
+        is_pilot=False, is_admin=False, post_to="/viewer-settings",
+    ))
 
 
 @app.post("/viewer-settings")
@@ -861,7 +936,10 @@ async def viewer_settings_post(
     request: Request,
     theme: str = Form("dark"),
     time_format: str = Form("24"),
-    show_fa: Optional[str] = Form(None),
+    # Renamed from show_fa to match the pilot form now that both post from
+    # the same template. The COOKIE name is unchanged, so nobody's saved
+    # preference resets on upgrade.
+    show_flightaware: Optional[str] = Form(None),
     show_fr24: Optional[str] = Form(None),
 ):
     pilot = current_pilot(request)
@@ -871,7 +949,7 @@ async def viewer_settings_post(
     resp = RedirectResponse(url="/", status_code=303)
     resp.set_cookie("pt_viewer_theme", "light" if theme == "light" else "dark", max_age=60 * 60 * 24 * 365)
     resp.set_cookie("pt_viewer_tf", "12" if time_format == "12" else "24", max_age=60 * 60 * 24 * 365)
-    resp.set_cookie("pt_viewer_show_fa", "1" if show_fa is not None else "0", max_age=60 * 60 * 24 * 365)
+    resp.set_cookie("pt_viewer_show_fa", "1" if show_flightaware is not None else "0", max_age=60 * 60 * 24 * 365)
     resp.set_cookie("pt_viewer_show_fr24", "1" if show_fr24 is not None else "0", max_age=60 * 60 * 24 * 365)
     return resp
 
@@ -890,7 +968,14 @@ async def calendar_page(request: Request):
 
     settings = load_settings(user_id)
     now = datetime.now(ZoneInfo("UTC"))
-    today = now.date()
+    # An INSTANT is fine in UTC and compares correctly against anything.
+    # A CALENDAR DAY is not: turning an instant into a date needs a zone,
+    # and doing it in UTC meant "today" rolled over at 7pm Central. Every
+    # evening the calendar highlighted tomorrow and the agenda scrolled to
+    # the wrong day. astimezone() with no argument converts to the
+    # container's local zone, which docker-compose already pins with
+    # TZ (America/Chicago by default).
+    today = now.astimezone().date()
 
     legs = load_schedule(user_id)
     tags_by_leg = tag_index(user_id)
@@ -997,11 +1082,19 @@ async def admin(request: Request):
                 rows.append({"divider": True})
             rows.append({
                 "id": leg.id,
-                "date": str(leg.date),
+                # Was str(leg.date) — a raw ISO "2026-08-15" in the one
+                # table a person reads to check their own schedule, while
+                # the import review two clicks earlier said "August 15".
+                # Same app, same data, two formats.
+                "date": leg.date.strftime("%b %d").replace(" 0", " "),
+                "date_iso": str(leg.date),
                 "callsign": leg.callsign,
                 "route": f"{leg.origin} → {leg.destination}",
-                "dep": fmt_local(leg, "dep", settings.time_format),
-                "arr": fmt_local(leg, "arr", settings.time_format),
+                "dep": fmt_local(leg, "dep", settings.time_format, with_zone=False),
+                "arr": fmt_local(leg, "arr", settings.time_format, with_zone=False),
+                "dep_zone": tz_abbr(leg, "dep"),
+                "arr_zone": tz_abbr(leg, "arr"),
+                "same_zone": tz_abbr(leg, "dep") == tz_abbr(leg, "arr"),
                 "is_deadhead": leg.is_deadhead,
             })
         return rows
@@ -1132,6 +1225,7 @@ async def settings_page(request: Request):
     s = load_settings(pilot["id"])
     template = jinja_env.get_template("settings.html")
     ctx = {"request": request, "s": s, "saved": False, "is_admin": bool(pilot["is_admin"]),
+           "is_pilot": True, "post_to": "/settings",
            "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"]),
            "poller": poller_status(s.time_format)}
     if pilot["is_admin"]:
@@ -1193,6 +1287,7 @@ async def settings_save(
     save_settings(pilot["id"], s)
     template = jinja_env.get_template("settings.html")
     ctx = {"request": request, "s": s, "saved": True, "is_admin": bool(pilot["is_admin"]),
+           "is_pilot": True, "post_to": "/settings",
            "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"]),
            "poller": poller_status(s.time_format)}
     if pilot["is_admin"]:

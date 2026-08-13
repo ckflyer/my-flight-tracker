@@ -38,7 +38,7 @@ seriously.
 
 ## STATE
 
-v5.7. Deployed target: TrueNAS. Multi-user: the owner plus several FOs,
+v6.0. Deployed target: TrueNAS. Multi-user: the owner plus several FOs,
 who fly the same legs — hence shared flight rows (v5.1).
 
 v5.6 was a UI pass (route strip, always-visible schedule). v5.7 makes the
@@ -46,7 +46,7 @@ route strip's figures honest — ETE was still falling back to the clock —
 and stops the retention sweep deleting flights merely because nobody has
 them rostered. No schema change and no migration in either.
 
-Tests: 206, six suites, all passing.
+Tests: 318, six suites, all passing.
 
 | Suite | N | Covers |
 |---|---|---|
@@ -55,7 +55,7 @@ Tests: 206, six suites, all passing.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, FFDO placeholder filter |
-| `tests_ui_fixes.py` | 67 | layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit |
+| `tests_ui_fixes.py` | 179 | layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit |
 
 ## OPEN
 
@@ -177,6 +177,12 @@ Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
     `PRAGMA table_info`. `CREATE TABLE IF NOT EXISTS` silently no-ops.
 13. **Deleting a user deletes their `roster` rows only.** Flights and
     tracks are shared.
+15. **No page loads a script or stylesheet from someone else's server.**
+    Leaflet came from unpkg.com in a render-blocking tag, so a slow or
+    unreachable third party produced a white screen while this box sat
+    healthy. Everything render-blocking is vendored under `static/vendor/`.
+    Map TILES and the radar layer are live services and stay remote — lose
+    them and you get an empty map inside a working app, which is survivable.
 14. **Retention is the only thing that deletes a flight.** Not "nobody has
     it on their schedule any more" — that describes a roster, not a
     real-world flight, and deleting on it destroyed real data every time a
@@ -636,6 +642,140 @@ invariant 1.
   the HTTP layer's perspective (form redisplay, HTTP 200).
 
 ## VERSION HISTORY
+
+### v6.0 - it stops looking like a web page
+
+- **Nothing render-blocking is remote any more** (invariant 15). Leaflet
+  loaded from `unpkg.com` in the `<head>` with no `defer`, so the browser
+  drew NOTHING until a public CDN answered. That is a white screen caused
+  by a third party while this server is healthy, and it is indistinguishable
+  from the app being down. Leaflet 1.9.4 and Sortable 1.15.2 are now under
+  `static/vendor/`, pulled from the npm registry and version-matched to
+  what the tags requested. Leaflet's CSS references its marker images
+  relatively, so `images/` sits beside it — a test asserts this, because
+  getting it wrong makes markers vanish silently.
+- **Navigation moved to the bottom.** `.topnav` was a strip of small text
+  links at the top beside the logout button: the hardest part of a phone to
+  reach, and it wrapped to two lines on a narrow screen. Now a fixed bottom
+  tab bar with icons, in `app.css` so all four pages share one definition,
+  padded for the home indicator. Viewers get three tabs; Flights is behind
+  `is_pilot`.
+- **The map is full-bleed.** Negative margins cancel the body padding so it
+  reaches the physical screen edges and runs up under the status bar, with
+  square corners — a rounded rectangle reads as a picture placed on a page,
+  which was the impression being removed. The card overlaps its bottom edge
+  by 2.25rem so the two read as one surface. The topbar keeps only the
+  brand and logout, sits at `z-index: 600` with a scrim that fades from
+  `var(--bg)` (theme-agnostic, so it needs no knowledge of which theme is
+  live). `.map-wrap` carries `z-index: 1` to confine Leaflet's own stacking,
+  whose panes climb to 800 and would otherwise paint over the topbar.
+- **Zones are two letters: CT, MT, PT, ET, AKT, HT, AT.** Owner's idea was
+  a superscript ±offset; that notation is already taken in aviation, where
+  a small +1 beside an arrival means it lands the NEXT DAY — overloading it
+  in a crew app would be actively misleading, and "+2 relative to what?"
+  has no obvious answer. Two-letter labels are shorter, are what consumer
+  apps use, and **retire the fixed-July-sample bug rather than fixing it**:
+  a label that never claims daylight or standard time cannot be wrong about
+  which is in force, so a December leg reading CDT is no longer possible.
+  Phoenix is the loose end — Arizona skips daylight time, so MT is a broad
+  name for it, still correct as a zone and no worse than the MST it showed.
+  Anything outside North America keeps whatever the zone database calls it.
+- `tests_ui_fixes.py` 124 → 179.
+
+### v5.10 - finishing what v5.9 started
+
+v5.9 claimed the zone rule was applied everywhere. It was applied to the
+tracker card, the flight list and the calendar agenda, and not to the two
+pilot-facing pages.
+
+- **Flights table and import review follow the zone rule now.** Both still
+  called `fmt_local()` with the zone glued on. The Flights table is six
+  columns already needing a horizontal scroll on a phone, and two of them
+  were half again as wide for no information, since almost every leg starts
+  and ends in the same zone. Zone is its own column: one abbreviation when
+  both ends match, `CDT/MST` when they don't.
+- **The Flights table printed raw ISO dates** (`2026-08-15`) while the
+  import review two clicks earlier said `August 15`. Now `Aug 15`. The ISO
+  form is kept as `date_iso` purely for the delete confirmation, where
+  ambiguity would be expensive.
+- **"12 leg(s) loaded"** now pluralises properly.
+- Nine new assertions, including one that had to be narrowed: the first
+  version asserted no `"date": str(leg.date)` anywhere in `main.py`, which
+  also caught `leg_view`'s date — that one is machine-readable, used for
+  grouping and anchors, and should stay ISO.
+
+### v5.9 - one palette, one settings page, zones that fit
+
+- **One stylesheet.** `static/app.css` now owns the colour variables and
+  every template links it. All eleven carried a private copy; they had
+  already drifted (`--border` was `#2a3548` on the tracker, `#334155` on
+  settings and admin), and a colour change meant eleven edits.
+- **Light mode now works everywhere.** Five pages — login, register, setup,
+  forgot_password, recovery_code — declared only the dark block and had no
+  `data-theme` attribute, so a light-mode user got a black login then a
+  white app. They have no account to read a preference from, so they follow
+  `prefers-color-scheme`. The `:root:not([data-theme])` guard is
+  load-bearing: without it a pilot who chose dark would be overridden by
+  their phone being in light mode. Settings itself was also dark-only, so
+  choosing "light" there did nothing to the page you chose it on.
+- **BUG: `--input-bg` was only ever declared inside settings.html's light
+  block,** while admin.html used it too. Text inputs on both pages fell
+  back to transparent in dark mode. Now in the shared palette, both themes.
+- **Settings is one page.** `viewer_settings.html` is deleted. Pilot-only
+  sections (AeroAPI key and budget, poll interval, account recovery) sit
+  behind `{% if is_pilot %}`; the roster needs `is_pilot and is_admin`.
+  Storage still differs and should — a pilot's settings are in the database
+  and follow the account, a viewer's are a cookie on their device — so only
+  the form's action changes. The two templates had already drifted: the
+  pilot form named its checkbox `show_flightaware`, the viewer form
+  `show_fa`. The viewer route now takes the pilot name; the COOKIE name is
+  unchanged, so nobody's saved preference resets on upgrade.
+- **Zone labels stopped wrapping times.** `fmt_local` glues the zone onto
+  the time and returns one string, so on a phone a departure read "7:00 AM"
+  on one line and "CDT" on the next, twice per row. New `tz_abbr()` plus
+  `dep_zone` / `arr_zone` / `same_zone` on the leg payload let templates
+  place the two separately. The rule, applied on the card, the flight list
+  and the calendar agenda alike: **a leg that starts and ends in the same
+  zone states it once; a leg that crosses one states it at both ends**,
+  which is the only time it carries information.
+- **The tap-to-reveal zone bubble is gone.** With zones on screen there was
+  nothing left to reveal, and the owner's objection was right — a tap
+  target with no affordance is undiscoverable, and it left the card and the
+  list stating zones by two different rules. Roughly 40 lines of JS and CSS
+  removed. The expanded detail rows keep the full "04:13 CDT" form: they
+  are one value per line with room, and that is where a revised time
+  matters most.
+- **Registration says who it is for** — "For crew only", and a line
+  pointing a family member at the tracking code instead. "(optional, for
+  later)" dropped from the email label; the field is still optional.
+- `tests_ui_fixes.py` 72 → 115: no template may declare a palette, every
+  template links the stylesheet, both themes define every variable,
+  logged-out pages follow the system, the settings gating, and the zone
+  layout including that no trace of the old bubble survives.
+
+**Known, not fixed:** `tz_abbr` samples July, so abbreviations read as
+daylight time year-round — a December leg says CDT where it should say CST.
+Pre-existing in `fmt_local`; fixing it means resolving each leg's zone
+against its own date. Logged in OPEN.
+
+### v5.8 - "today" is a local day
+
+- **BUG: the calendar highlighted tomorrow every evening.** `calendar_page`
+  did `now = datetime.now(ZoneInfo("UTC"))` and then `today = now.date()`.
+  An INSTANT is fine in UTC and compares correctly against anything; a
+  CALENDAR DAY is not, because turning an instant into a date needs a zone.
+  From 19:00 Central onward, UTC is already tomorrow, so the grid ringed
+  the wrong cell and the agenda anchor pointed a day ahead. Reported from a
+  screenshot stamped 23:19 local showing the 13th on the 12th. Fixed with
+  `now.astimezone().date()`, which converts to the container zone that
+  docker-compose already pins via `TZ` (America/Chicago by default). The
+  three other UTC clocks in `main.py` are instants, are correct, and were
+  left alone.
+- **A latent flaky test, found by the same clock.** `test_flight_list` built
+  its "yesterday" leg 1400 minutes back from the real time, which only lands
+  on yesterday if the suite runs before roughly 23:20. It failed once, at
+  23:34, during this session. Now anchored to midday local so every offset
+  stays in the day it was written for.
 
 ### v5.7 - honest figures, and flights that outlive a roster
 

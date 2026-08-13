@@ -1,0 +1,127 @@
+/* ONE palette for every page.
+
+   Through v5.8 all eleven templates carried a private copy of these
+   variables. They had already drifted — --border was #2a3548 on the
+   tracker and #334155 on settings and admin — and a colour change meant
+   eleven edits, which is why nobody made one.
+
+   More importantly, five pages (login, register, setup, forgot_password,
+   recovery_code) declared only the dark block. There was no [data-theme]
+   attribute on those pages and no light values anywhere in them, so a
+   light-mode user got a black login screen followed by a white app.
+
+   How a page picks a theme now:
+
+     1. Logged in  -> the <html data-theme="..."> attribute wins, because
+        the pilot or viewer chose it in settings.
+     2. Not logged in -> there is no attribute to read and no account to
+        read a preference from, so the page follows the operating system
+        via prefers-color-scheme. That is the correct default for a login
+        screen: it is the only signal available.
+
+   The :not([data-theme]) guard on the media query is load-bearing. Without
+   it, a pilot who has explicitly chosen dark would be overridden by their
+   phone being in light mode. */
+
+:root,
+[data-theme="dark"] {
+  --bg: #0f1419;
+  --card: #1a2332;
+  --accent: #3b82f6;
+  --text: #e7ecf3;
+  --muted: #8b9bb4;
+  --good: #22c55e;
+  --bad: #f87171;
+  --warn: #f59e0b;
+  --border: #2a3548;
+  --map-border: #334155;
+  /* Was only ever declared inside settings.html's light block, so text
+     inputs on settings and admin fell back to transparent in dark mode. */
+  --input-bg: #131c28;
+}
+
+[data-theme="light"] {
+  --bg: #f1f5f9;
+  --card: #ffffff;
+  --accent: #2563eb;
+  --text: #0f172a;
+  --muted: #64748b;
+  --bad: #dc2626;
+  --good: #16a34a;
+  --warn: #d97706;
+  --border: #e2e8f0;
+  --map-border: #cbd5e1;
+  --input-bg: #f8fafc;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --bg: #f1f5f9;
+    --card: #ffffff;
+    --accent: #2563eb;
+    --text: #0f172a;
+    --muted: #64748b;
+    --bad: #dc2626;
+    --good: #16a34a;
+    --warn: #d97706;
+    --border: #e2e8f0;
+    --map-border: #cbd5e1;
+    --input-bg: #f8fafc;
+  }
+}
+
+/* Zone labels sit beside a time and must never be the reason a row wraps.
+   Kept here rather than in one template because the tracker, the calendar
+   agenda and the flight list all show times and all used to disagree. */
+.tz {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+/* The card lays these out inline rather than in a flex row, so they need
+   their own gap; .row-chip and the agenda supply their own. */
+.route-time-wrap .tz { margin-left: 0.28rem; }
+
+/* ---------------------------------------------------------------- TAB BAR
+   Navigation lives at the BOTTOM on every page now. It used to be a strip
+   of small text links at the top, beside the logout button, which is the
+   hardest part of a phone to reach one-handed and which wrapped to two
+   lines on a narrow screen. A bottom bar with icons is what every phone
+   app does and no website does, so it is the strongest single signal that
+   this is an app. It also frees the top of the screen for the map.
+
+   Fixed, so it survives scrolling, and padded for the home indicator. */
+.tabbar {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 900;
+  display: flex;
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom);
+  /* Opaque rather than translucent: content scrolls under it and a blur
+     costs a repaint on every frame on older phones. */
+}
+.tabbar a {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+  padding: 0.5rem 0.25rem 0.45rem;
+  min-height: 52px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  -webkit-tap-highlight-color: transparent;
+}
+.tabbar a.active { color: var(--accent); }
+.tabbar a svg { width: 22px; height: 22px; display: block; }
+
+/* Every page has to reserve room or the bar covers its last element. */
+body { padding-bottom: calc(56px + env(safe-area-inset-bottom)) !important; }

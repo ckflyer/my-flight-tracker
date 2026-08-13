@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="{{ s.theme }}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pilot Tracker · Settings</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png?v={{ version }}">
+  <link rel="shortcut icon" href="/static/favicon.ico?v={{ version }}">
+  <link rel="stylesheet" href="/static/app.css?v={{ version }}">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg); color: var(--text);
+      min-height: 100vh; max-width: 640px; margin: 0 auto;
+      padding: max(1.5rem, env(safe-area-inset-top)) max(1.5rem, env(safe-area-inset-right)) max(1.5rem, env(safe-area-inset-bottom)) max(1.5rem, env(safe-area-inset-left));
+    }
+    h1 { font-size: 1.5rem; margin-bottom: 0.35rem; }
+    .sub { color: var(--muted); margin-bottom: 1.25rem; font-size: 0.9rem; }
+    .sub a { color: var(--accent); }
+    .card {
+      background: var(--card); border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem;
+    }
+    .card h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 0.85rem; }
+    label { display: block; margin-bottom: 0.35rem; font-size: 0.9rem; }
+    input[type=text], input[type=password], input[type=number], select {
+      width: 100%; padding: 0.6rem 0.75rem; margin-bottom: 0.85rem;
+      background: var(--input-bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text);
+      font-size: 0.95rem;
+    }
+    .row { display: flex; gap: 1rem; flex-wrap: wrap; }
+    .row > div { flex: 1; min-width: 140px; }
+    .check { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.65rem; }
+    .check input { width: auto; margin: 0; }
+    button {
+      margin-top: 0.5rem; padding: 0.7rem 1.4rem; background: var(--accent);
+      color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.95rem;
+    }
+    .save-settings-btn {
+      display: block;
+      width: 100%;
+      margin: 1.5rem 0 2rem;
+      padding: 0.75rem;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      cursor: pointer;
+    }
+    .saved {
+      background: rgba(34,197,94,0.15); color: #22c55e; padding: 0.65rem 0.85rem;
+      border-radius: 8px; margin-bottom: 1rem; font-size: 0.9rem;
+    }
+    .budget-input { position: relative; }
+    .budget-input .budget-prefix {
+      position: absolute; left: 0.75rem; top: 0.6rem;
+      color: var(--muted); font-size: 0.95rem; pointer-events: none;
+    }
+    .budget-input input { padding-left: 1.6rem; }
+    .switch-row {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 1rem; margin-bottom: 0.6rem;
+    }
+    .switch-row .switch-label { font-size: 0.95rem; font-weight: 600; }
+    .switch { position: relative; display: inline-block; width: 46px; height: 26px; flex-shrink: 0; }
+    .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
+    .switch .track {
+      position: absolute; inset: 0; cursor: pointer; border-radius: 999px;
+      background: var(--border); transition: background 0.18s ease;
+    }
+    .switch .track:before {
+      content: ""; position: absolute; height: 20px; width: 20px; left: 3px; top: 3px;
+      background: #fff; border-radius: 50%; transition: transform 0.18s ease;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    }
+    .switch input:checked + .track { background: var(--accent); }
+    .switch input:checked + .track:before { transform: translateX(20px); }
+    .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .sub-fields {
+      margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid var(--border);
+    }
+    /* Was a space-between flex row. On a phone "Usage this month (2026-08)"
+       plus "18 calls - $0.09 of $4.90" does not fit, so the value wrapped
+       to a second line — and .hint's negative top margin (below) then
+       pulled the following paragraph up on top of it. Stacked block: it
+       cannot wrap into itself, at any width. */
+    .usage-block {
+      margin-top: 0.9rem; padding-top: 0.7rem;
+      border-top: 1px solid var(--border);
+    }
+    .usage-label {
+      font-size: 0.8rem; color: var(--muted); display: block;
+      margin-bottom: 0.15rem;
+    }
+    .usage-value {
+      display: block; color: var(--text); font-size: 1.05rem;
+      font-weight: 700; line-height: 1.25; font-variant-numeric: tabular-nums;
+    }
+    .usage-meta {
+      display: block; font-size: 0.75rem; color: var(--muted);
+      margin-top: 0.3rem; line-height: 1.45;
+    }
+    .usage-meta .warn { color: var(--warn); }
+    .usage-meta .bad { color: var(--bad); }
+    /* The negative top margin is what tucks a hint under its own input.
+       It must never apply to a hint following the usage block, or it
+       climbs over it. */
+    .hint { font-size: 0.8rem; color: var(--muted); margin-top: -0.5rem; margin-bottom: 0.85rem; }
+    .usage-block + .hint { margin-top: 0.5rem; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-bottom: 1.25rem;
+    }
+    .brand { font-size: 0.95rem; font-weight: 700; letter-spacing: 0.02em; }
+    .topbar-right { display: flex; align-items: center; gap: 0.5rem; }
+    .logout-btn {
+      margin: 0;
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .logout-btn:hover { color: var(--text); border-color: var(--muted); }
+    .topbar-right { flex-wrap: wrap; justify-content: flex-end; }
+    @media (max-width: 400px) {
+    }
+    .logout-btn:hover { color: var(--text); border-color: var(--muted); }
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .table-scroll table td:last-child, .table-scroll table th:last-child { width: 72px; white-space: nowrap; }
+    @media (max-width: 480px) {
+      .table-scroll table { font-size: 0.78rem; }
+      .table-scroll table td, .table-scroll table th { padding: 0.35rem 0.25rem !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">Pilot Tracker</div>
+    <div class="topbar-right">
+      <form method="post" action="/logout" style="margin:0;">
+        <button type="submit" class="logout-btn" title="Log out" aria-label="Log out"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg></button>
+      </form>
+    </div>
+  </div>
+  <h1>Settings</h1>
+  {% if not is_pilot %}
+  <p class="hint" style="margin:-0.35rem 0 1rem;">
+    These apply to you on this device only &mdash; they don't change anything
+    for anyone else following this schedule.
+  </p>
+  {% endif %}
+
+  {% if saved %}
+  <div class="saved">Settings saved.</div>
+  {% endif %}
+
+  <form method="post" action="{{ post_to }}">
+    {% if is_pilot %}
+    <div class="card">
+      <h2>Airline flight data</h2>
+      <div class="switch-row">
+        <span class="switch-label">FlightAware AeroAPI</span>
+        <label class="switch">
+          <input type="checkbox" name="aeroapi_enabled" value="1" id="aeroapi-toggle"
+                 {{ 'checked' if s.aeroapi_enabled else '' }}>
+          <span class="track"></span>
+        </label>
+      </div>
+      <p class="hint">Adds gates, delays, diversions, cancellations and real gate-to-gate times &mdash; none of which ADS-B broadcasts. Position tracking is free either way.</p>
+
+      <div id="aeroapi-fields" class="sub-fields" style="{{ '' if s.aeroapi_enabled else 'display:none' }}">
+        <label for="aeroapi-key">API key</label>
+        <input type="password" name="aeroapi_key" id="aeroapi-key" autocomplete="off"
+               placeholder="{{ 'saved \u2014 leave blank to keep it' if s.aeroapi_key else 'paste your AeroAPI key' }}">
+        <p class="hint">Your own key, on your own FlightAware account. Sign in at flightaware.com, open AeroAPI, choose the <strong>Personal</strong> tier and copy the key. It includes $5/month free &mdash; $10 if you feed ADS-B.</p>
+        <div class="usage-block">
+          <span class="usage-label">Usage this month ({{ aeroapi_stats.period }})</span>
+          {% if aeroapi_stats.has_reading %}
+          <span class="usage-value"{% if aeroapi_stats.over_budget %} style="color:var(--bad)"{% endif %}>${{ '%.2f'|format(aeroapi_stats.spent) }} of ${{ '%.2f'|format(aeroapi_stats.budget) }}</span>
+          <span class="usage-meta">
+            {{ aeroapi_stats.reported_calls or aeroapi_stats.queries }} calls &middot; FlightAware&rsquo;s figure{% if aeroapi_stats.usage_age %}, {{ aeroapi_stats.usage_age }}{% endif %}<br>
+            Tracker last ran <strong{% if poller.stale %} class="warn"{% endif %}>{{ poller.label }}</strong>{% if poller.stale %} &mdash; longer ago than it should be{% endif %}
+            {%- if not aeroapi_stats.reading_fresh %}<br><span class="bad">Spend reading is stale; the limit is being held against a local count until it updates.</span>{% endif %}
+          </span>
+          {% else %}
+          <span class="usage-value" style="color:var(--muted)">&mdash; of ${{ '%.2f'|format(aeroapi_stats.budget) }}</span>
+          <span class="usage-meta">
+            No reading yet; it appears within 15 minutes of the key being used.<br>
+            Tracker last ran <strong{% if poller.stale %} class="warn"{% endif %}>{{ poller.label }}</strong>
+          </span>
+          {% endif %}
+        </div>
+        {% if aeroapi_stats.exhausted %}
+        <p class="hint" style="color:var(--bad);font-weight:600;">
+          {% if aeroapi_stats.budget <= 0 %}Limit set to $0 &mdash; AeroAPI queries are off. Live ADS-B tracking is unaffected.
+          {%- else %}Limit reached &mdash; AeroAPI is paused until the month rolls over. Live ADS-B tracking is unaffected.{% endif %}
+        </p>
+        {% endif %}
+        <label for="aeroapi-budget" style="margin-top:1rem;">Monthly spend limit (USD)</label>
+        <div class="budget-input">
+          <span class="budget-prefix">$</span>
+          <input type="number" name="aeroapi_budget" id="aeroapi-budget" step="0.25" min="0" max="500"
+                 value="{{ '%.2f'|format(s.aeroapi_budget) }}">
+        </div>
+        <p class="hint">A hard stop: queries pause for the rest of the month once spend reaches this. $0 turns them off but keeps your key saved. Each flight gets up to 18 queries, so even a 50-leg month stays under $4.50. Refreshing a page never costs anything, and ADS-B tracking is free and never stops.</p>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <h2>Display</h2>
+      <div class="row">
+        <div>
+          <label>Time format</label>
+          <select name="time_format">
+            <option value="24" {% if s.time_format == '24' %}selected{% endif %}>24-hour</option>
+            <option value="12" {% if s.time_format == '12' %}selected{% endif %}>12-hour</option>
+          </select>
+        </div>
+        <div>
+          <label>Theme</label>
+          <select name="theme">
+            <option value="dark" {% if s.theme == 'dark' %}selected{% endif %}>Dark</option>
+            <option value="light" {% if s.theme == 'light' %}selected{% endif %}>Light</option>
+          </select>
+        </div>
+      </div>
+      {% if is_pilot %}
+      <label>Live poll interval (seconds)</label>
+      <input type="number" name="poll_seconds" value="{{ s.poll_seconds }}" min="10" max="300">
+      <p class="hint">How often to refresh live position while a flight is airborne. 15 is a good balance. Everyone watching a flight shares one lookup, so a lower number here doesn't multiply load.</p>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <h2>Tracking links</h2>
+      <div class="check">
+        <input type="checkbox" name="show_flightaware" id="fa" {% if s.show_flightaware %}checked{% endif %}>
+        <label for="fa" style="margin:0">Show FlightAware</label>
+      </div>
+      <div class="check">
+        <input type="checkbox" name="show_fr24" id="fr" {% if s.show_fr24 %}checked{% endif %}>
+        <label for="fr" style="margin:0">Show FlightRadar24</label>
+      </div>
+    </div>
+
+    <button type="submit" class="save-settings-btn">Save settings</button>
+  </form>
+
+  {% if is_pilot %}
+  <div class="card">
+    <h2>Account recovery</h2>
+    <p class="hint" style="margin-bottom:0.85rem;">
+      Lost your recovery code, or just want a fresh one? Generating a new
+      one immediately retires your old code.
+    </p>
+    <form method="post" action="/settings/regenerate-recovery" onsubmit="return confirm('Generate a new recovery code? Your current one will stop working immediately.');" style="margin:0;">
+      <button type="submit" style="margin:0;">Generate new recovery code</button>
+    </form>
+  </div>
+  {% endif %}
+
+  {% if is_pilot and is_admin %}
+  <div class="card">
+    <h2>Admin · Registered pilots</h2>
+    <div class="table-scroll">
+    <table style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+      <thead>
+        <tr style="color:var(--muted); text-align:left; font-size:0.75rem; text-transform:uppercase;">
+          <th style="padding:0.4rem 0.3rem;">Username</th>
+          <th style="padding:0.4rem 0.3rem;">Email</th>
+          <th style="padding:0.4rem 0.3rem;">Created</th>
+          <th style="padding:0.4rem 0.3rem;"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in all_users %}
+        <tr style="border-top:1px solid var(--border);">
+          <td style="padding:0.5rem 0.3rem;">{{ u.username }}{% if u.is_admin %} <span style="color:var(--accent); font-size:0.75rem;">(admin)</span>{% endif %}</td>
+          <td style="padding:0.5rem 0.3rem; color:var(--muted);">{{ u.email or '—' }}</td>
+          <td style="padding:0.5rem 0.3rem; color:var(--muted); white-space:nowrap;">{{ u.created_at[:10] if u.created_at else '—' }}</td>
+          <td style="padding:0.5rem 0.3rem; text-align:right;">
+            {% if u.id != pilot_id %}
+            <form method="post" action="/settings/users/delete/{{ u.id }}" onsubmit="return confirm('Delete {{ u.username }}\'s account and all their flight data? This can\'t be undone.');" style="margin:0;">
+              <button type="submit" style="margin:0; padding:0.35rem 0.7rem; font-size:0.8rem; background:transparent; border:1px solid var(--border); color:#ef4444;">Delete</button>
+            </form>
+            {% else %}
+            <span style="color:var(--muted); font-size:0.75rem;">you</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+  {% endif %}
+  <div style="text-align:center; color:var(--muted); font-size:0.75rem; margin-top:2rem;">v{{ version }}</div>
+<script>
+  (function() {
+    var t = document.getElementById('aeroapi-toggle');
+    var f = document.getElementById('aeroapi-fields');
+    if (t && f) t.addEventListener('change', function() {
+      f.style.display = t.checked ? '' : 'none';
+    });
+  })();
+</script>
+  <nav class="tabbar" aria-label="Main">
+    <a href="/"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2c.9 0 1.6 1.3 1.6 2.9v4.4l7.4 4.3v2l-7.4-2.3v4.6l2.4 1.8v1.7L12 20.3l-4 1.1v-1.7l2.4-1.8v-4.6L3 15.6v-2l7.4-4.3V4.9C10.4 3.3 11.1 2 12 2z"/></svg><span>Tracker</span></a>
+    <a href="/calendar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16" rx="2.5"/><line x1="3" y1="9.5" x2="21" y2="9.5"/><line x1="8" y1="2.5" x2="8" y2="6"/><line x1="16" y1="2.5" x2="16" y2="6"/></svg><span>Calendar</span></a>
+    {% if is_pilot %}<a href="/admin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="9" y1="6.5" x2="20" y2="6.5"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="17.5" x2="20" y2="17.5"/><circle cx="4.5" cy="6.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="4.5" cy="17.5" r="1.4" fill="currentColor" stroke="none"/></svg><span>Flights</span></a>{% endif %}
+    <a href="{{ post_to }}" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 14.5a1.6 1.6 0 0 0 .32 1.77l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.6 1.6 0 0 0-1.77-.32 1.6 1.6 0 0 0-.97 1.47V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9.1 19.4a1.6 1.6 0 0 0-1.77.32l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.6 1.6 0 0 0 .32-1.77 1.6 1.6 0 0 0-1.47-.97H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.47-1.05 1.6 1.6 0 0 0-.32-1.77l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.6 1.6 0 0 0 1.77.32H9.1A1.6 1.6 0 0 0 10.15 3.1V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 .97 1.47 1.6 1.6 0 0 0 1.77-.32l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.6 1.6 0 0 0-.32 1.77V9.1a1.6 1.6 0 0 0 1.47.97H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5.43z"/></svg><span>Settings</span></a>
+  </nav>
+</body>
+</html>
