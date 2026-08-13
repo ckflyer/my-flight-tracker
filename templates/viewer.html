@@ -373,10 +373,13 @@
     }
 
     /* --- Full-bleed map + overlay + collapsed/expand redesign --- */
-    /* --hero is how far down the screen the flight card starts, and so how
-       much map you see before scrolling. Everything in the heads-up layer
-       is positioned off it rather than off its own guesses. */
-    :root { --hero: min(46vh, 420px); }
+    /* --card-top is where the flight card comes to rest, measured in pixels
+       down from the top of the screen. The script sets it for real once it
+       can measure the card; the value here is only what the page uses in the
+       half-second before that happens, so it is a rough guess on purpose.
+       Everything in the heads-up layer is positioned off it rather than off
+       its own separate guess, so nothing can drift out of step. */
+    :root { --card-top: 58vh; }
     .map-bg {
       position: fixed;
       inset: 0;
@@ -385,7 +388,6 @@
          so nothing inside can paint over the page above it. */
       isolation: isolate;
     }
-    #flight-map { height: 100%; width: 100%; }
     /* Fades in as you scroll, so the map recedes and the schedule takes
        over. Sits between the map and the page. */
     .scroll-scrim {
@@ -396,17 +398,31 @@
       opacity: 0;
       pointer-events: none;
     }
-    /* Empty space that lets the fixed map show through above the card. */
-    .hero-space { height: calc(var(--hero) - 46px); }
-    /* Map buttons and the live readout ride above the map but fade out with
-       it. Positioned against --hero so they stay inside the visible strip
-       instead of drifting to the bottom of a full-screen map. */
-    .map-hud { position: absolute; inset: 0; pointer-events: none; }
-    .map-hud > * { pointer-events: auto; }
+    /* Empty space that lets the fixed map show through above the card. This
+       is what pushes the card down the screen. The script overwrites the
+       height with a measured pixel value on load and on resize; the calc is
+       the pre-script fallback. */
+    .hero-space { height: calc(var(--card-top) - 46px - 1rem); }
+
+    /* THE MAP AND THE HEADS-UP LAYER, and why both carry a z-index.
+
+       #flight-map needs z-index:1 because Leaflet gives its own panes values
+       up to 800. Setting a z-index here traps all of them inside this box,
+       so a map marker cannot paint over the flight card.
+
+       .map-hud then needs a HIGHER number than that. It used to have none,
+       which worked by luck while its children carried z-index:5 and could be
+       compared against the map directly. The moment the scroll script set an
+       opacity on .map-hud, the browser sealed those children inside it, the
+       whole layer fell back to its own z-index of nothing, and the map
+       buttons vanished underneath the map on the first pixel of scroll. */
     #flight-map { height: 100%; width: 100%; z-index: 1; }
+    .map-hud { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
+    .map-hud > * { pointer-events: auto; }
     .map-overlay-stats {
       position: absolute;
-      top: calc(max(1rem, env(safe-area-inset-top)) + var(--hero) - 4.1rem);
+      /* Rides just above the card, wherever the card has ended up. */
+      top: calc(var(--card-top) - 3.4rem);
       right: 0.9rem;
       z-index: 5;
       background: rgba(15,20,25,0.72);
@@ -422,9 +438,17 @@
     .map-overlay-stats-inner { display: flex; gap: 0.9rem; }
     .map-controls {
       position: absolute;
-      top: calc(max(1rem, env(safe-area-inset-top)) + 52px);
+      top: calc(max(1rem, env(safe-area-inset-top)) + 8px);
       right: 0.9rem; z-index: 5;
       display: flex; flex-direction: column; gap: 0.5rem;
+    }
+    /* The map is a fixed, full-screen layer starting at the very top of the
+       screen, so Leaflet parks its +/- buttons 10px from the top-left corner
+       — which is exactly where "Pilot Tracker" is printed. They were sitting
+       on each other. Drop the zoom stack below the title instead. */
+    .leaflet-top.leaflet-left {
+      top: calc(max(1rem, env(safe-area-inset-top)) + 40px);
+      left: calc(max(0px, env(safe-area-inset-left)) + 4px);
     }
     .map-recenter-btn {
       width: 34px; height: 34px; border-radius: 50%;
@@ -573,10 +597,16 @@
       text-align: center; color: var(--muted); font-size: 0.8125rem;
     }
     #back-to-active { position: relative; z-index: 20; }
-    @media (prefers-reduced-motion: reduce) {
-      .reveal { opacity: 1 !important; }
-      .scroll-scrim { opacity: 1 !important; }
-    }
+    /* NOTE: there used to be a (prefers-reduced-motion: reduce) block here
+       that forced .scroll-scrim to opacity 1. The scrim is a solid sheet of
+       --bg laid over the whole map, so on any phone with iOS Accessibility >
+       Reduce Motion switched on, that rule painted the page background over
+       the entire map, permanently. The map was never broken; it was buried.
+       That is the "no map, just background, flights already visible" bug.
+
+       It is not reinstated in a softer form because there is no motion here
+       to reduce: the effect is opacity tied to scroll position, which moves
+       nothing across the screen and is not what that setting is for. */
   </style>
 </head>
 <body>
@@ -853,6 +883,11 @@
     {% endif %}
     {% endfor %}
   </div>
+  </div>{# /.reveal — opened inside this same {% if current %}, so it has to
+           close inside it too. It used to close after the {% endif %}, which
+           left a stray </div> on the empty-schedule page; the browser then
+           silently closed something else early and the tab bar and footer
+           ended up nested inside the wrong box. #}
   {% endif %}
 
   {% if not current %}
@@ -862,7 +897,6 @@
   </div>
   {% endif %}
 
-  </div>
   <div class="footer">
     Auto-refreshes · Times are local to each airport · v{{ version }}
   </div>
@@ -911,6 +945,10 @@
         card.classList.toggle('expanded', open);
         if (hintLabel) hintLabel.textContent = open ? 'Hide details' : 'Flight details';
         hint.setAttribute('aria-expanded', open ? 'true' : 'false');
+        // The card changes height here, so where it should sit changes too.
+        // Guarded because this runs once at start-up, before that script has
+        // had a chance to define itself.
+        if (window._ptLayoutHero) window._ptLayoutHero();
       }
 
       function toggle() { setExpanded(!details.classList.contains('open')); }
@@ -1027,6 +1065,110 @@
       window._ptRadarPrefOff = (radarPref === '0');
     })();
 
+    // ---- Where the flight card comes to rest.
+    //
+    // The card used to start at a fixed fraction of the screen (46vh), which
+    // is a guess about a card whose height nobody knows in advance — a
+    // two-pill delayed flight is taller than a plain one, and a phone is not
+    // a laptop. It landed miles up the page and left dead map underneath it.
+    //
+    // Measure instead. The spacer above the card is stretched until the
+    // BOTTOM of the card sits just above the tab pills, so the card floats at
+    // the bottom of the screen over a full-height map, and the whole of the
+    // map above it is usable. Recomputed on resize, on rotation, and when the
+    // card is expanded or collapsed.
+    (function() {
+      var card = document.getElementById('collapsed-card');
+      var space = document.querySelector('.hero-space');
+      if (!card || !space) return;
+
+      var tabbar = document.querySelector('.tabbar');
+      var GAP = 14;   // breathing room between card and pills
+
+      // Where the top of the tab pills sits. Measured rather than assumed:
+      // the pills are a fixed element, so this is already in screen
+      // coordinates and does not move when the page scrolls. The fallback is
+      // only for a page with no tab bar at all.
+      function tabTop() {
+        if (!tabbar) return window.innerHeight - 92;
+        var r = tabbar.getBoundingClientRect();
+        return r.height ? r.top : window.innerHeight - 92;
+      }
+
+      var lastTop = null;
+
+      function layout() {
+        var vh = window.innerHeight;
+        var cardH = card.getBoundingClientRect().height;
+        var desiredTop;
+        if (card.classList.contains('expanded')) {
+          // Opened up, the card is far too tall to hang off the bottom, so
+          // it rises to near the top and shows its detail instead. No clamp
+          // here: the clamp below exists to keep a strip of map visible above
+          // a bottom-parked card, and applying it to an expanded card would
+          // shove it back down over its own contents.
+          desiredTop = Math.max(56, Math.round(vh * 0.10));
+        } else {
+          desiredTop = tabTop() - GAP - cardH;
+          // Never let it climb over the title bar, and always leave a usable
+          // strip of map above it on very short screens (a phone in
+          // landscape, a half-height desktop window).
+          desiredTop = Math.max(Math.round(vh * 0.18),
+                                Math.min(desiredTop, vh - 120));
+        }
+
+        // Where it actually sits right now, in page coordinates. The
+        // difference is exactly how much the spacer has to grow or shrink;
+        // one pass is enough because the relationship is a straight line.
+        var currentTop = card.getBoundingClientRect().top + (window.scrollY || 0);
+        var currentSpace = space.getBoundingClientRect().height;
+        var next = Math.max(0, Math.round(currentSpace + (desiredTop - currentTop)));
+        space.style.height = next + 'px';
+
+        // Publish where the card ACTUALLY ended up, not where we asked it to
+        // go. On a short screen the spacer can bottom out at zero and the
+        // card comes to rest lower than requested; the live-stats readout and
+        // the map framing must follow the real card, not the wish.
+        var actualTop = Math.round(card.getBoundingClientRect().top + (window.scrollY || 0));
+        document.documentElement.style.setProperty('--card-top', actualTop + 'px');
+        window._ptCardTop = actualTop;
+
+        // Re-frame the route only when the card has genuinely moved. Firing
+        // this on every pass would quietly undo a manual pan or zoom each
+        // time anything nudged the layout.
+        if (lastTop === null || Math.abs(actualTop - lastTop) > 2) {
+          lastTop = actualTop;
+          if (window._ptRefit) window._ptRefit();
+        }
+      }
+
+      window._ptLayoutHero = layout;
+      layout();
+      // Fonts and icons can land after first paint and change the card's
+      // height by a few pixels; a second pass costs nothing.
+      window.requestAnimationFrame(layout);
+      window.addEventListener('load', layout);
+
+      // On a phone, the address bar sliding away as you scroll fires a
+      // resize and changes innerHeight by 60-120px. Relaying out then would
+      // shift the whole page under the reader's thumb, mid-scroll, for no
+      // reason. Only respond to a change big enough to be a real one: a
+      // rotation, or someone dragging a desktop window.
+      var lastW = window.innerWidth, lastH = window.innerHeight;
+      window.addEventListener('resize', function() {
+        var w = window.innerWidth, h = window.innerHeight;
+        if (w === lastW && Math.abs(h - lastH) < 130) return;
+        lastW = w; lastH = h;
+        layout();
+      });
+      window.addEventListener('orientationchange', function() {
+        setTimeout(function() {
+          lastW = window.innerWidth; lastH = window.innerHeight;
+          layout();
+        }, 250);
+      });
+    })();
+
     // ---- Scroll reveal. At rest the map is the background of the app,
     // with only the live flight card over it. Scrolling fades the map back
     // and the schedule forward. Driven by scroll position rather than a
@@ -1039,11 +1181,9 @@
       // No map on this page (no flights at all) means nothing to reveal
       // from behind — show the schedule outright.
       if (!scrim) { reveal.style.opacity = '1'; return; }
-      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        reveal.style.opacity = '1';
-        scrim.style.opacity = '1';
-        return;
-      }
+      // No reduced-motion bail-out. The old one set scrim opacity to 1 and
+      // returned, which hid the map behind a solid panel for the whole
+      // session on any device with Reduce Motion on.
       // Opt in only now that we know the script is alive.
       reveal.style.opacity = '0';
       const RANGE = 190;
@@ -1127,6 +1267,12 @@
       function remeasure() { try { map.invalidateSize(false); } catch (e) {} }
       window.requestAnimationFrame(function() { window.requestAnimationFrame(remeasure); });
       window.addEventListener('load', remeasure);
+      // Two more, late. A ResizeObserver only fires when the box CHANGES
+      // size; if Safari hands Leaflet 0x0 and the box then settles to its
+      // real size in the same frame, there is no change left to observe and
+      // no tile is ever requested. These two cost nothing and close that gap.
+      setTimeout(remeasure, 300);
+      setTimeout(remeasure, 1200);
       window.addEventListener('orientationchange', function() {
         setTimeout(remeasure, 200);
       });
@@ -1165,6 +1311,39 @@
               d="M20 2 L23.5 14 L36 18 L36 21 L23.5 19.5 L22 30 L27 34 L27 36 L20 33 L13 36 L13 34 L18 30 L16.5 19.5 L4 21 L4 18 L16.5 14 Z"/>
           </svg>`;
         return L.divIcon({ className: 'plane-icon', html: svg, iconSize: [40, 40], iconAnchor: [20, 20] });
+      }
+
+      // The map fills the whole screen, but the bottom of it is under the
+      // flight card and the top is under the title. Centring the route in the
+      // MAP therefore puts it behind the card. These paddings tell Leaflet to
+      // centre it in the strip that is actually visible, so the aeroplane
+      // lands in the middle of the window rather than half under a panel.
+      function fitOpts() {
+        const vh = window.innerHeight;
+        const cardTop = window._ptCardTop || Math.round(vh * 0.58);
+        let top = 96;
+        let bottom = Math.max(48, vh - cardTop + 20);
+        // On a very short window the two paddings can ask for more room than
+        // exists, which makes Leaflet zoom out to the whole planet. Cap them.
+        if (top + bottom > vh - 90) {
+          bottom = Math.max(40, vh - 90 - top);
+          if (bottom < 40) { top = 40; bottom = 40; }
+        }
+        return { paddingTopLeft: [30, top], paddingBottomRight: [30, bottom], maxZoom: 8 };
+      }
+
+      function fitToPoints(pts) {
+        if (!pts || !pts.length) return;
+        if (pts.length === 1) {
+          map.setView(pts[0], 7);
+          // A single point sits dead centre of the map, which is behind the
+          // card. Nudge the view up by half the hidden strip.
+          const vh = window.innerHeight;
+          const hidden = Math.max(0, vh - (window._ptCardTop || vh));
+          if (hidden > 40) map.panBy([0, hidden / 2], { animate: false });
+        } else {
+          map.fitBounds(pts, fitOpts());
+        }
       }
 
       // Redraws markers/lines/plane from scratch each call, but only ever
@@ -1232,20 +1411,21 @@
         }
 
         lastFitPts = pts;
-        if (doFit) {
-          if (pts.length === 1) map.setView(pts[0], 7);
-          else if (pts.length > 1) map.fitBounds(pts, { padding: [36, 36], maxZoom: 8 });
-        }
+        if (doFit) fitToPoints(pts);
       }
 
       renderMap(currentData, liveData, true);
 
+      // Called by the card-layout script once it knows where the card rests,
+      // so the first frame — drawn before that measurement exists — gets
+      // re-framed against the real position instead of the fallback guess.
+      window._ptRefit = function() { fitToPoints(lastFitPts); };
+      window.requestAnimationFrame(function() { fitToPoints(lastFitPts); });
+
       const recenterBtn = document.getElementById('map-recenter-btn');
       if (recenterBtn) {
         recenterBtn.addEventListener('click', function() {
-          if (!lastFitPts.length) return;
-          if (lastFitPts.length === 1) map.setView(lastFitPts[0], 7);
-          else map.fitBounds(lastFitPts, { padding: [36, 36], maxZoom: 8 });
+          fitToPoints(lastFitPts);
         });
       }
 

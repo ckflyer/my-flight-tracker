@@ -594,7 +594,21 @@ def test_full_bleed_map():
 
     check("there is a scrim that fades the map back", ".scroll-scrim" in html)
     check("...and a spacer letting it show above the card", ".hero-space" in html)
-    check("controls are positioned against the hero strip", "--hero" in html)
+    # Was "--hero" (a fixed fraction of the screen). The card is now measured
+    # and parked just above the tab bar, and the variable that everything
+    # else lines up against is where the card actually landed.
+    check("controls are positioned against the card", "--card-top" in html)
+    check("...and the card position is measured, not guessed",
+          "_ptLayoutHero" in html)
+    # The reduce-motion rule used to force the scrim opaque, which painted
+    # the page background over the whole map for anyone with that setting on.
+    # The remaining reduce-motion block (skeleton pulse, route transitions)
+    # is fine and stays; what must never come back is anything that pins the
+    # scrim or the reveal to full opacity.
+    check("reduce-motion no longer buries the map",
+          ".scroll-scrim { opacity: 1 !important; }" not in html)
+    check("...and the script has no reduce-motion bail-out either",
+          "matchMedia('(prefers-reduced-motion: reduce)')" not in html)
 
 
 def test_scroll_reveal():
