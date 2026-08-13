@@ -85,43 +85,44 @@
 .route-time-wrap .tz { margin-left: 0.28rem; }
 
 /* ---------------------------------------------------------------- TAB BAR
-   Navigation lives at the BOTTOM on every page now. It used to be a strip
-   of small text links at the top, beside the logout button, which is the
-   hardest part of a phone to reach one-handed and which wrapped to two
-   lines on a narrow screen. A bottom bar with icons is what every phone
-   app does and no website does, so it is the strongest single signal that
-   this is an app. It also frees the top of the screen for the map.
+   A floating pill, offset to the left rather than a full-width bar. Left
+   because that is where a right-handed thumb rests and because a bar
+   spanning the whole screen would cut the map in half; the map now runs to
+   the bottom edge and the pill sits on top of it.
 
-   Fixed, so it survives scrolling, and padded for the home indicator. */
+   Opaque rather than translucent: content scrolls beneath it, and a blur
+   costs a repaint every frame on older phones. */
 .tabbar {
   position: fixed;
-  left: 0; right: 0; bottom: 0;
+  left: max(1rem, env(safe-area-inset-left));
+  bottom: calc(0.9rem + env(safe-area-inset-bottom));
   z-index: 900;
-  display: flex;
+  display: inline-flex;
+  gap: 0.15rem;
   background: var(--card);
-  border-top: 1px solid var(--border);
-  padding-bottom: env(safe-area-inset-bottom);
-  /* Opaque rather than translucent: content scrolls under it and a blur
-     costs a repaint on every frame on older phones. */
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.3rem;
+  box-shadow: 0 6px 22px rgba(0,0,0,0.3);
 }
 .tabbar a {
-  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.15rem;
-  padding: 0.5rem 0.25rem 0.45rem;
-  min-height: 52px;
+  gap: 0.1rem;
+  min-width: 56px;
+  padding: 0.42rem 0.3rem 0.36rem;
+  border-radius: 999px;
   color: var(--muted);
   text-decoration: none;
   font-size: 0.625rem;
   font-weight: 600;
-  letter-spacing: 0.01em;
   -webkit-tap-highlight-color: transparent;
+  transition: color 0.15s ease, background 0.15s ease;
 }
-.tabbar a.active { color: var(--accent); }
-.tabbar a svg { width: 22px; height: 22px; display: block; }
+.tabbar a.active { color: var(--accent); background: var(--bg); }
+.tabbar a svg { width: 20px; height: 20px; display: block; }
 
-/* Every page has to reserve room or the bar covers its last element. */
-body { padding-bottom: calc(56px + env(safe-area-inset-bottom)) !important; }
+/* Room for the pill so it covers nothing at the end of a page. */
+body { padding-bottom: calc(78px + env(safe-area-inset-bottom)) !important; }

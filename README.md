@@ -38,7 +38,7 @@ seriously.
 
 ## STATE
 
-v6.0. Deployed target: TrueNAS. Multi-user: the owner plus several FOs,
+v6.1. Deployed target: TrueNAS. Multi-user: the owner plus several FOs,
 who fly the same legs — hence shared flight rows (v5.1).
 
 v5.6 was a UI pass (route strip, always-visible schedule). v5.7 makes the
@@ -46,7 +46,7 @@ route strip's figures honest — ETE was still falling back to the clock —
 and stops the retention sweep deleting flights merely because nobody has
 them rostered. No schema change and no migration in either.
 
-Tests: 318, six suites, all passing.
+Tests: 338, six suites, all passing.
 
 | Suite | N | Covers |
 |---|---|---|
@@ -55,7 +55,7 @@ Tests: 318, six suites, all passing.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, FFDO placeholder filter |
-| `tests_ui_fixes.py` | 179 | layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit |
+| `tests_ui_fixes.py` | 199 | layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit |
 
 ## OPEN
 
@@ -642,6 +642,50 @@ invariant 1.
   the HTTP layer's perspective (form redisplay, HTTP 200).
 
 ## VERSION HISTORY
+
+### v6.1 - the map really is the background now
+
+- **BUG: settings could not be saved.** The spend limit input carried
+  `step="0.25"`, so the browser only accepted multiples of a quarter. The
+  DEFAULT budget is 4.90. A fresh account therefore could not save ANY
+  setting — theme, time format, poll interval, nothing — because the form
+  failed validation on a value the app itself had put in the box, and the
+  browser blamed the user with "please enter a valid value". Now steps in
+  cents. A test asserts the default would have failed the old step, so the
+  pairing can never silently drift apart again.
+- **v6.0's full bleed was not full bleed.** The map was still a block in
+  the flow with negative margins faking it, ending partway down the page.
+  It is now a FIXED backdrop covering the entire viewport, top to bottom,
+  with the page scrolling over it. `isolation: isolate` confines Leaflet's
+  panes (which climb to z-index 800) instead of the z-index juggling v6.0
+  used.
+- **The gradient over the topbar is gone.** It was covering the top of the
+  map layer and recentre buttons. The brand keeps its position and gets a
+  text halo, which is legible over any map without covering anything.
+- **Scroll reveal.** At rest you see the map, the live flight card and the
+  nav pill. Scrolling fades a scrim in over the map and the schedule up
+  from nothing, tracking the finger via `requestAnimationFrame` rather than
+  a timed transition. The list is `pointer-events: none` while effectively
+  invisible so a stray tap cannot land on a row nobody can see, and carries
+  `min-height: 72vh` because a one-leg day would otherwise leave the page
+  too short to scroll — the schedule could never be revealed at all.
+  `prefers-reduced-motion` skips the whole effect.
+- **The tab bar is a floating pill, offset left,** rather than a full-width
+  bar that would have cut the map in half now that it reaches the bottom
+  edge.
+- **Sign out now appears only on Settings,** in the same place it was.
+- **"All times CT" removed from the card.** Cross-zone legs still label
+  each end, which is the case that carries information.
+- **Row zone labels moved next to their times.** `margin-left: auto` had
+  stranded them at the far right of the row, in space, away from the number
+  they described. A same-zone leg now states it once on the arrival; a
+  crossing states it at both ends.
+- **Show on map is back, as an explicit action** in each row's detail panel.
+  A bare tap on a row still expands in place and deliberately does not move
+  the card or map — that was v5.4's fix for losing sight of the live flight
+  while checking last Tuesday's gate — so this is an added action rather
+  than a reversal. It selects the leg and scrolls back up to the map.
+- `tests_ui_fixes.py` 179 → 199.
 
 ### v6.0 - it stops looking like a web page
 

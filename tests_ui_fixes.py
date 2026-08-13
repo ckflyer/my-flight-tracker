@@ -478,9 +478,16 @@ def test_zone_never_wraps_a_time():
         html = fh.read()
     check("list rows print the bare time, not time+zone",
           '<span class="row-chip-time">{{ leg.dep_short or leg.dep }}</span>' in html)
-    check("same zone both ends says it once", "row-tz-single" in html)
-    check("different zones say it per end", "not leg.same_zone and leg.dep_zone" in html)
-    check("the card states its zone outright", "All times" in html)
+    # The label rides beside the time it belongs to. It used to sit at the
+    # far right of the row, pushed there by margin-left:auto, stranded in
+    # empty space away from the number it described.
+    check("the zone is no longer flung to the row's edge", "row-tz-single" not in html)
+    check("same zone both ends states it once, on the arrival",
+          '{% if leg.arr_zone %}<span class="tz">{{ leg.arr_zone }}</span>{% endif %}' in html)
+    check("a crossing states it at the departure too",
+          "not leg.same_zone and leg.dep_zone" in html)
+    check("the card no longer prints an 'All times' line", "All times" not in html)
+    check("...and the style that positioned it is gone", ".route-tz" not in html)
 
     # The tap-to-reveal bubble is gone: undiscoverable, and it made the
     # card and the list state zones by two different rules.
@@ -555,7 +562,9 @@ def test_bottom_tab_bar():
         css = fh.read()
     check("the bar clears the home indicator", "env(safe-area-inset-bottom)" in css)
     check("pages reserve room so it covers nothing",
-          "padding-bottom: calc(56px" in css)
+          "padding-bottom: calc(78px" in css)
+    check("the pill is offset to the left, not full width",
+          "border-radius: 999px" in css and "display: inline-flex" in css)
 
     # Viewers have no Flights page to reach.
     with open(os.path.join(tdir, "viewer.html"), encoding="utf-8") as fh:
@@ -565,19 +574,74 @@ def test_bottom_tab_bar():
 
 
 def test_full_bleed_map():
+    """The map is a fixed backdrop; the page scrolls over it."""
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
         html = fh.read()
-    wrap = html[html.find(".map-wrap {"):]
-    wrap = wrap[:wrap.find("}")]
-    check("the map reaches the screen edges", "margin-left: calc(-1 *" in wrap)
-    check("...and runs up under the status bar", "env(safe-area-inset-top)" in wrap)
-    check("...with square corners", "border-radius: 0" in wrap)
-    # Leaflet's panes reach z-index 800; without a stacking context here
-    # they would paint over the topbar sitting above them.
-    check("leaflet stacking is confined to the map box", "z-index: 1;" in wrap)
-    check("the topbar stays above the map", "z-index: 600;" in html)
-    check("the topbar gets a legibility scrim", ".topbar::before" in html)
+    bg = html[html.find(".map-bg {"):]
+    bg = bg[:bg.find("}")]
+    check("the map covers the whole viewport", "position: fixed" in bg and "inset: 0" in bg)
+    check("...behind everything else", "z-index: 0" in bg)
+    # Leaflet's panes climb to z-index 800 and would otherwise paint over
+    # the card and the tab bar sitting above them.
+    check("leaflet stacking is confined", "isolation: isolate" in bg)
+    check("the negative-margin fake bleed is gone", ".map-wrap" not in html)
+
+    # The gradient panel over the topbar was covering the map buttons
+    # beneath it. A halo on the text is legible and covers nothing.
+    check("no scrim panel over the controls", ".topbar::before" not in html)
+    check("the brand gets a text halo instead", "text-shadow" in html)
+
+    check("there is a scrim that fades the map back", ".scroll-scrim" in html)
+    check("...and a spacer letting it show above the card", ".hero-space" in html)
+    check("controls are positioned against the hero strip", "--hero" in html)
+
+
+def test_scroll_reveal():
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    check("the schedule starts hidden behind the map", 'id="reveal"' in html)
+    rev = html[html.find(".reveal {"):]
+    rev = rev[:rev.find("}")]
+    check("...at zero opacity", "opacity: 0" in rev)
+    # A one-leg day would otherwise leave the page too short to scroll, so
+    # the list could never be revealed at all.
+    check("...with the page guaranteed scrollable", "min-height" in rev)
+    check("scroll drives it, not a timed animation", "requestAnimationFrame(paint)" in html)
+    check("invisible rows cannot be tapped", "pointerEvents" in html)
+    check("reduced motion skips the effect", "prefers-reduced-motion" in html)
+
+
+def test_show_on_map_action():
+    """Tapping a row still expands in place; the map move is explicit."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    check("each row offers Show on map", "data-show-on-map" in html)
+    check("...wired to selectLeg", "selectLeg(onMap.getAttribute('data-show-on-map'))" in html)
+    check("...and returns you to the map", "window.scrollTo({ top: 0" in html)
+    check("a bare row tap still only expands",
+          "It deliberately\n      // does NOT move the card or the map" in html
+          or "does NOT move the card" in html)
+
+
+def test_settings_budget_saves():
+    """The default budget must satisfy the field's own validation."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "settings.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    check("the spend limit steps in cents", 'id="aeroapi-budget" step="0.01"' in html)
+    check("...not quarters", 'step="0.25"' not in html)
+
+    from app.settings import AppSettings
+    default = AppSettings().aeroapi_budget
+    cents = round(default * 100)
+    check("the default budget is a whole number of cents",
+          abs(default * 100 - cents) < 1e-9, str(default))
+    # This is the bug: 4.90 is not a multiple of 0.25, so the browser
+    # rejected the value the app itself had put in the box.
+    check("...and would have failed a 0.25 step", cents % 25 != 0, str(default))
 
 
 def test_two_letter_zones():
@@ -620,6 +684,9 @@ def main():
     test_bottom_tab_bar()
     test_full_bleed_map()
     test_two_letter_zones()
+    test_scroll_reveal()
+    test_show_on_map_action()
+    test_settings_budget_saves()
     test_overnight()
     test_placeholder_purge()
     test_untracked_phase(uid)

@@ -213,7 +213,13 @@
         <label for="aeroapi-budget" style="margin-top:1rem;">Monthly spend limit (USD)</label>
         <div class="budget-input">
           <span class="budget-prefix">$</span>
-          <input type="number" name="aeroapi_budget" id="aeroapi-budget" step="0.25" min="0" max="500"
+          {# step was 0.25, which means the browser only accepts multiples of
+             a quarter. The DEFAULT budget is 4.90, so a fresh account could
+             not save settings at all: the field failed validation before the
+             form was ever submitted and the browser said "please enter a
+             valid value" against a number the app itself had put there.
+             Cents are the real unit of a dollar budget. #}
+          <input type="number" name="aeroapi_budget" id="aeroapi-budget" step="0.01" min="0" max="500"
                  value="{{ '%.2f'|format(s.aeroapi_budget) }}">
         </div>
         <p class="hint">A hard stop: queries pause for the rest of the month once spend reaches this. $0 turns them off but keeps your key saved. Each flight gets up to 18 queries, so even a 50-leg month stays under $4.50. Refreshing a page never costs anything, and ADS-B tracking is free and never stops.</p>

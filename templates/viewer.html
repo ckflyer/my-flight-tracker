@@ -38,25 +38,16 @@
       justify-content: space-between;
       gap: 0.5rem;
       height: 46px;
-      margin-bottom: 1rem;
+      margin-bottom: 0;
       position: relative;
-      z-index: 600;
+      z-index: 40;
     }
-    /* A scrim so the brand and logout stay legible once the map is running
-       underneath them. Fades from the page background rather than from
-       black, so it works in both themes without knowing which is active. */
-    .topbar::before {
-      content: "";
-      position: absolute;
-      left: calc(-1 * max(1rem, env(safe-area-inset-left)));
-      right: calc(-1 * max(1rem, env(safe-area-inset-right)));
-      top: calc(-1 * max(1rem, env(safe-area-inset-top)));
-      bottom: -1.4rem;
-      background: linear-gradient(to bottom, var(--bg) 42%, transparent);
-      pointer-events: none;
-      z-index: -1;
+    .brand {
+      font-size: 0.95rem; font-weight: 700; letter-spacing: 0.02em;
+      /* Legible over whatever the map happens to be showing, without a
+         gradient panel covering the controls underneath. */
+      text-shadow: 0 0 3px var(--bg), 0 1px 10px var(--bg);
     }
-    .brand { font-size: 0.95rem; font-weight: 700; letter-spacing: 0.02em; }
     .topbar-right { display: flex; align-items: center; gap: 0.5rem; }
     .logout-btn {
       margin: 0;
@@ -175,7 +166,6 @@
       font-variant-numeric: tabular-nums;
     }
     .route-stats:empty { display: none; }
-    .route-tz { text-align: center; margin: 0.15rem 0 0.35rem; }
     .status {
       display: inline-block;
       padding: 0.2rem 0.6rem;
@@ -383,25 +373,42 @@
     }
 
     /* --- Full-bleed map + overlay + collapsed/expand redesign --- */
-    .map-wrap {
-      position: relative;
-      /* z-index here confines Leaflet's own stacking (its panes climb to
-         z-index 800) inside this box, so the topbar above stays on top. */
-      z-index: 1;
-      height: min(58vh, 520px);
-      margin-top: calc(-46px - 1rem - max(1rem, env(safe-area-inset-top)));
-      margin-left: calc(-1 * max(1rem, env(safe-area-inset-left)));
-      margin-right: calc(-1 * max(1rem, env(safe-area-inset-right)));
-      margin-bottom: 0.85rem;
-      border-radius: 0;
-      overflow: hidden;
+    /* --hero is how far down the screen the flight card starts, and so how
+       much map you see before scrolling. Everything in the heads-up layer
+       is positioned off it rather than off its own guesses. */
+    :root { --hero: min(46vh, 420px); }
+    .map-bg {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      /* Confines Leaflet's own stacking — its panes climb to z-index 800 —
+         so nothing inside can paint over the page above it. */
+      isolation: isolate;
     }
+    #flight-map { height: 100%; width: 100%; }
+    /* Fades in as you scroll, so the map recedes and the schedule takes
+       over. Sits between the map and the page. */
+    .scroll-scrim {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      background: var(--bg);
+      opacity: 0;
+      pointer-events: none;
+    }
+    /* Empty space that lets the fixed map show through above the card. */
+    .hero-space { height: calc(var(--hero) - 46px); }
+    /* Map buttons and the live readout ride above the map but fade out with
+       it. Positioned against --hero so they stay inside the visible strip
+       instead of drifting to the bottom of a full-screen map. */
+    .map-hud { position: absolute; inset: 0; pointer-events: none; }
+    .map-hud > * { pointer-events: auto; }
     #flight-map { height: 100%; width: 100%; z-index: 1; }
     .map-overlay-stats {
       position: absolute;
-      bottom: 1.9rem;
-      right: 0.75rem;
-      z-index: 500;
+      top: calc(max(1rem, env(safe-area-inset-top)) + var(--hero) - 4.1rem);
+      right: 0.9rem;
+      z-index: 5;
       background: rgba(15,20,25,0.72);
       backdrop-filter: blur(6px);
       border-radius: 10px;
@@ -414,7 +421,9 @@
     .map-overlay-stats .stat-unit { font-weight: 400; opacity: 0.75; font-size: 0.72rem; }
     .map-overlay-stats-inner { display: flex; gap: 0.9rem; }
     .map-controls {
-      position: absolute; top: 0.75rem; right: 0.75rem; z-index: 500;
+      position: absolute;
+      top: calc(max(1rem, env(safe-area-inset-top)) + 52px);
+      right: 0.9rem; z-index: 5;
       display: flex; flex-direction: column; gap: 0.5rem;
     }
     .map-recenter-btn {
@@ -454,8 +463,8 @@
 
     .collapsed-card {
       position: relative;
-      z-index: 2;
-      margin-top: -2.25rem;
+      z-index: 20;
+      margin-top: 0;
       background: var(--card);
       border-radius: 16px;
       padding: 1.1rem 1.25rem;
@@ -539,7 +548,6 @@
     .row-flight-num { font-size: 0.95rem; font-weight: 700; letter-spacing: -0.01em; }
     .row-city-route { font-size: 0.8125rem; font-weight: 500; margin: 0.1rem 0 0.4rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .row-times-row { display: flex; gap: 1.1rem; align-items: baseline; }
-    .row-tz-single { margin-left: auto; }
     .row-chip { display: flex; align-items: center; gap: 0.35rem; }
     /* The grey filled circles read as UI furniture at this size. A plain
        glyph in the muted colour says the same thing and lets the TIME be the
@@ -548,21 +556,27 @@
     .row-chip-code { color: var(--muted); font-size: 0.75rem; font-weight: 600; }
     .row-chip-time { font-size: 0.875rem; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
     a.flight-row-link { text-decoration: none; color: inherit; display: block; }
+    /* The schedule below the card. Transparent at rest so the map reads as
+       the background of the app, fading in as you scroll. min-height
+       guarantees the page CAN scroll even on a one-leg day — otherwise the
+       list would have no way to appear. */
+    .reveal {
+      position: relative; z-index: 20;
+      opacity: 0;
+      min-height: 72vh;
+    }
+    #back-to-active { position: relative; z-index: 20; }
+    @media (prefers-reduced-motion: reduce) {
+      .reveal { opacity: 1 !important; }
+      .scroll-scrim { opacity: 1 !important; }
+    }
   </style>
 </head>
 <body>
-  <div class="topbar">
-    <div class="brand">Pilot Tracker</div>
-    <div class="topbar-right">
-      <form method="post" action="/logout" style="margin:0;">
-        <button type="submit" class="logout-btn" title="Log out" aria-label="Log out"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg></button>
-      </form>
-    </div>
-  </div>
-
   {% if current %}
-  <div class="map-wrap">
+  <div class="map-bg">
     <div id="flight-map"></div>
+    <div class="map-hud">
     {% if is_selected_live %}
     <div class="map-overlay-stats" id="map-overlay-stats" style="{{ '' if live else 'display:none' }}">
       <div class="map-overlay-stats-inner" id="map-overlay-stats-inner">
@@ -594,7 +608,17 @@
         </svg>
       </button>
     </div>
+    </div>
   </div>
+  <div class="scroll-scrim" id="scroll-scrim"></div>
+  {% endif %}
+
+  <div class="topbar">
+    <div class="brand">Pilot Tracker</div>
+  </div>
+
+  {% if current %}
+  <div class="hero-space"></div>
 
   <div class="collapsed-card" id="collapsed-card">
     <div id="collapsed-card-header">
@@ -641,7 +665,6 @@
           <div class="route-plane" id="route-plane-el"
                style="left: {{ fill_pct }}%;{{ '' if current.progress_pct is not none else ' display:none' }}"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true" style="transform: rotate(90deg);"><path d="M12 2c.9 0 1.6 1.3 1.6 2.9v4.4l7.4 4.3v2l-7.4-2.3v4.6l2.4 1.8v1.7L12 20.3l-4 1.1v-1.7l2.4-1.8v-4.6L3 15.6v-2l7.4-4.3V4.9C10.4 3.3 11.1 2 12 2z"/></svg></div>
         </div>
-        {% if current.same_zone and current.dep_zone %}<div class="route-tz"><span class="tz">All times {{ current.dep_zone }}</span></div>{% endif %}
         <div class="route-stats" id="progress-label-el">
           {%- if current.progress_pct is not none %}
           <span>{{ current.progress_pct|round|int }}% en route</span>
@@ -754,6 +777,7 @@
     </div>
   </div>
 
+  <div class="reveal" id="reveal">
   <div class="expand-wrap" id="expand-wrap">
     {% if past_count %}
     <button class="toggle" id="past-toggle" onclick="togglePast()">Show past flights ({{ past_count }})</button>
@@ -785,13 +809,13 @@
             <div class="row-flight-num">{{ leg.callsign }}{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}{% if leg.is_current %}<span class="live-dot" title="Current flight"></span>{% endif %}</div>
             <div class="row-city-route">{{ leg.origin }} &rarr; {{ leg.destination }}</div>
             <div class="row-times-row">
-              {# Same zone both ends -> say it ONCE, at the end of the row.
-                 Different zones -> say it twice, which is the only time it
-                 carries information. Either way the label is its own element
-                 so it can never be the thing that wraps a time. #}
+              {# The zone rides directly beside the time it belongs to. A leg
+                 that starts and ends in the same zone states it once, on the
+                 arrival; one that crosses a zone states it at both ends. The
+                 label is always its own element, so it can never be the thing
+                 that wraps a time onto a second line. #}
               <div class="row-chip"><span class="row-chip-icon"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline></svg></span><span class="row-chip-time">{{ leg.dep_short or leg.dep }}</span>{% if not leg.same_zone and leg.dep_zone %}<span class="tz">{{ leg.dep_zone }}</span>{% endif %}</div>
-              <div class="row-chip"><span class="row-chip-icon"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="7" y1="7" x2="17" y2="17"></line><polyline points="17 7 17 17 7 17"></polyline></svg></span><span class="row-chip-time">{{ leg.arr_short or leg.arr }}</span>{% if not leg.same_zone and leg.arr_zone %}<span class="tz">{{ leg.arr_zone }}</span>{% endif %}</div>
-              {% if leg.same_zone and leg.dep_zone %}<span class="tz row-tz-single">{{ leg.dep_zone }}</span>{% endif %}
+              <div class="row-chip"><span class="row-chip-icon"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="7" y1="7" x2="17" y2="17"></line><polyline points="17 7 17 17 7 17"></polyline></svg></span><span class="row-chip-time">{{ leg.arr_short or leg.arr }}</span>{% if leg.arr_zone %}<span class="tz">{{ leg.arr_zone }}</span>{% endif %}</div>
             </div>
           </div>
           <div class="leg-head-tags">
@@ -805,6 +829,7 @@
         <div class="row-detail" id="rd-{{ leg.id }}" data-loaded="0" hidden>
           <div class="row-detail-body"><div class="rd-skeleton" aria-label="Loading flight detail"><span></span><span></span><span></span></div></div>
           <div class="rd-links">
+            <a href="#" data-show-on-map="{{ leg.id }}">Show on map</a>
             {% if settings.show_flightaware %}
             <a data-fa-link href="{{ leg.links.flightaware }}" target="_blank" rel="noopener">FlightAware</a>
             {% endif %}
@@ -830,6 +855,7 @@
   </div>
   {% endif %}
 
+  </div>
   <div class="footer">
     Auto-refreshes · Times are local to each airport · v{{ version }}
   </div>
@@ -1605,6 +1631,15 @@
       }
 
       document.addEventListener('click', function(e) {
+        const onMap = e.target.closest ? e.target.closest('[data-show-on-map]') : null;
+        if (onMap) {
+          e.preventDefault();
+          e.stopPropagation();
+          selectLeg(onMap.getAttribute('data-show-on-map'));
+          // Send them back up to the map they just asked to look at.
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+          return;
+        }
         // Let the FlightAware / FR24 links inside an open panel behave as
         // links rather than collapsing the row out from under the tap.
         if (e.target.closest && e.target.closest('.rd-links')) return;
@@ -1621,6 +1656,47 @@
         e.preventDefault();
         toggleLegDetail(head);
       });
+
+      // ---- Scroll reveal. At rest the map is the background of the app,
+      // with only the live flight card over it. Scrolling fades the map back
+      // and the schedule forward. Driven by scroll position rather than a
+      // transition so it tracks the finger instead of lagging behind it.
+      (function() {
+        const scrim = document.getElementById('scroll-scrim');
+        const reveal = document.getElementById('reveal');
+        const hud = document.querySelector('.map-hud');
+        if (!reveal) return;
+        // No map on this page (no flights at all) means nothing to reveal
+        // from behind — show the schedule outright.
+        if (!scrim) { reveal.style.opacity = '1'; return; }
+        if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          reveal.style.opacity = '1';
+          scrim.style.opacity = '1';
+          return;
+        }
+        const RANGE = 190;
+        let queued = false;
+        function paint() {
+          queued = false;
+          const p = Math.min(1, Math.max(0, (window.scrollY || 0) / RANGE));
+          scrim.style.opacity = p;
+          reveal.style.opacity = p;
+          // Untouchable while invisible, or a stray tap lands on a row
+          // nobody can see. Scrolling still works: that is on the page.
+          reveal.style.pointerEvents = p > 0.12 ? 'auto' : 'none';
+          if (hud) {
+            hud.style.opacity = 1 - p;
+            hud.style.pointerEvents = p > 0.5 ? 'none' : '';
+          }
+        }
+        window.addEventListener('scroll', function() {
+          if (queued) return;
+          queued = true;
+          window.requestAnimationFrame(paint);
+        }, { passive: true });
+        window.addEventListener('resize', paint);
+        paint();
+      })();
 
       // ---- Relative times, computed here rather than baked into the HTML.
       // "23 min ago" used to be rendered once by the server and then sit
