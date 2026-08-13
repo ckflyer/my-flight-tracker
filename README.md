@@ -38,7 +38,7 @@ seriously.
 
 ## STATE
 
-v6.2. Deployed target: TrueNAS. Multi-user: the owner plus several FOs,
+v6.3. Deployed target: TrueNAS. Multi-user: the owner plus several FOs,
 who fly the same legs — hence shared flight rows (v5.1).
 
 v5.6 was a UI pass (route strip, always-visible schedule). v5.7 makes the
@@ -46,7 +46,7 @@ route strip's figures honest — ETE was still falling back to the clock —
 and stops the retention sweep deleting flights merely because nobody has
 them rostered. No schema change and no migration in either.
 
-Tests: 343, six suites, all passing.
+Tests: 400, six suites, all passing.
 
 | Suite | N | Covers |
 |---|---|---|
@@ -55,7 +55,7 @@ Tests: 343, six suites, all passing.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, FFDO placeholder filter |
-| `tests_ui_fixes.py` | 204 | layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit |
+| `tests_ui_fixes.py` | 261 | layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit |
 
 ## OPEN
 
@@ -648,6 +648,34 @@ invariant 1.
   the HTTP layer's perspective (form redisplay, HTTP 200).
 
 ## VERSION HISTORY
+
+### v6.3 - three separate reasons the phone looked broken
+
+- **BUG: the map drew nothing on mobile.** It is sized by a FIXED,
+  full-viewport parent, and this script runs while the page is still laying
+  out. Mobile Safari routinely measures that box as 0x0 at that instant, so
+  Leaflet cached zero dimensions and never requested a tile — blank on
+  phones, fine on desktop, which resolves layout early enough to get away
+  with it. Before v6.1 the map had an explicit pixel height and the
+  question could not arise. Now `invalidateSize()` runs after two animation
+  frames, on `load`, on `orientationchange`, and through a `ResizeObserver`
+  on the map element so the iOS URL bar collapsing or a rotation re-measures
+  too.
+- **BUG: black input boxes on the logged-out pages.** All five hardcoded
+  `background: #0f1419`. Invisible while those pages were dark regardless
+  of preference; the moment v5.9 made them follow the system theme, a
+  light-mode user got a white page with black fields. Now `var(--input-bg)`.
+  A test forbids any dark-palette hex in any template.
+- **Pages are no longer cacheable.** Every asset URL carries `?v=VERSION`,
+  so assets can be cached hard and a new build asks for new names. The HTML
+  had no such handle and the browser decided for itself — mobile Safari
+  will hand back a page from before the last deploy. That made a fixed bug
+  look unfixed on one device and fixed on another. HTML now sends
+  `no-store`; static assets are untouched and still cache.
+
+**Diagnosing "it works on desktop but not my phone":** compare the version
+in the footer on both. If they disagree, the phone is running old markup
+and the answer is cache, not code.
 
 ### v6.2 - one missing file should not cost the whole page
 

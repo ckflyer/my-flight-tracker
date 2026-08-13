@@ -37,6 +37,32 @@ jinja_env.globals["version"] = VERSION
 
 app = FastAPI(title="Pilot Tracker")
 app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
+
+
+@app.middleware("http")
+async def _no_stale_html(request: Request, call_next):
+    """Pages must never be served from cache; assets always may.
+
+    Every asset URL carries ?v={VERSION}, so a new build asks for new
+    filenames and old copies can be cached hard. The HTML has no such
+    handle: the browser decides on its own how long to keep it, and mobile
+    Safari in particular will happily hand back a page from before the last
+    deploy. That produced a genuinely confusing bug report — a fix worked on
+    desktop and appeared to do nothing on a phone, because the phone was
+    still running the previous version's markup and script.
+
+    The footer prints VERSION for exactly this reason. If it disagrees
+    across two devices, one of them is stale.
+    """
+    response = await call_next(request)
+    ctype = response.headers.get("content-type", "")
+    if ctype.startswith("text/html"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
 app.add_middleware(
     SessionMiddleware,
     secret_key=get_or_create_secret_key(),

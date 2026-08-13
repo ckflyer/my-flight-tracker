@@ -1113,6 +1113,29 @@
       L.control.zoom({ position: 'topleft' }).addTo(map);
       mapEl._leafletInstance = map;
 
+      // The map is sized by a FIXED, full-viewport parent, and this script
+      // runs while the page is still laying out. Mobile Safari routinely
+      // reports that box as 0x0 at this moment, so Leaflet caches zero
+      // dimensions and never requests a single tile — a blank background
+      // where the map should be, on phones only, while desktop resolves
+      // layout early enough to get away with it. Before v6.1 the map had an
+      // explicit pixel height and the question never arose.
+      //
+      // invalidateSize() makes Leaflet re-measure. Fire it once layout has
+      // certainly happened, and again whenever the box actually changes -
+      // rotation, the iOS URL bar collapsing, a split-screen resize.
+      function remeasure() { try { map.invalidateSize(false); } catch (e) {} }
+      window.requestAnimationFrame(function() { window.requestAnimationFrame(remeasure); });
+      window.addEventListener('load', remeasure);
+      window.addEventListener('orientationchange', function() {
+        setTimeout(remeasure, 200);
+      });
+      if (window.ResizeObserver) {
+        new ResizeObserver(remeasure).observe(mapEl);
+      } else {
+        window.addEventListener('resize', remeasure);
+      }
+
       const mapTheme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light_all' : 'dark_all';
       L.tileLayer('https://{s}.basemaps.cartocdn.com/' + mapTheme + '/{z}/{x}/{y}{r}.png', {
         maxZoom: 18,

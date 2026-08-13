@@ -688,6 +688,53 @@ def test_two_letter_zones():
         check(f"{v} states no daylight/standard", "S" not in v[:-1] and "D" not in v[:-1])
 
 
+def test_no_hardcoded_palette_colours():
+    """A hex from the dark palette must not survive in any template.
+
+    The five logged-out pages hardcoded background: #0f1419 on their text
+    inputs. That was invisible while those pages were dark no matter what;
+    once they started following the system theme, a light-mode user got a
+    white page with black input boxes.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    tdir = os.path.join(here, "templates")
+    dark = ("#0f1419", "#1a2332", "#e7ecf3", "#8b9bb4", "#2a3548")
+    for name in sorted(n for n in os.listdir(tdir) if n.endswith(".html")):
+        with open(os.path.join(tdir, name), encoding="utf-8") as fh:
+            html = fh.read()
+        for hexcode in dark:
+            check(f"{name} does not hardcode {hexcode}", hexcode not in html)
+
+
+def test_map_remeasures():
+    """Leaflet must re-measure once layout has actually happened.
+
+    The map is sized by a fixed, full-viewport parent and the script runs
+    mid-layout. Mobile Safari reports that box as 0x0 at that point, so
+    Leaflet cached zero dimensions and requested no tiles at all — blank on
+    phones, fine on desktop.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    check("the map re-measures itself", "invalidateSize" in html)
+    check("...after layout, not during it", "requestAnimationFrame(remeasure)" in html)
+    check("...and on rotation", "orientationchange" in html)
+    check("...and whenever the box changes size", "ResizeObserver" in html)
+
+
+def test_html_is_never_cached():
+    """Assets are versioned and cacheable; pages are not and must not be."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "app", "main.py"), encoding="utf-8") as fh:
+        src = fh.read()
+    mw = src[src.find("async def _no_stale_html"):]
+    mw = mw[:mw.find("app.add_middleware")]
+    check("html responses are marked uncacheable", "no-store" in mw)
+    check("...scoped to html only", 'ctype.startswith("text/html")' in mw)
+    check("...leaving versioned assets alone", "static" not in mw.split('"""')[-1])
+
+
 def main():
     init_db()
     uid = create_user("uitest", "pw-not-used")
@@ -704,6 +751,9 @@ def main():
     test_scroll_reveal()
     test_show_on_map_action()
     test_settings_budget_saves()
+    test_no_hardcoded_palette_colours()
+    test_map_remeasures()
+    test_html_is_never_cached()
     test_overnight()
     test_placeholder_purge()
     test_untracked_phase(uid)
