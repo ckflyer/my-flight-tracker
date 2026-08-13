@@ -38,7 +38,7 @@ seriously.
 
 ## STATE
 
-v6.1. Deployed target: TrueNAS. Multi-user: the owner plus several FOs,
+v6.2. Deployed target: TrueNAS. Multi-user: the owner plus several FOs,
 who fly the same legs — hence shared flight rows (v5.1).
 
 v5.6 was a UI pass (route strip, always-visible schedule). v5.7 makes the
@@ -46,7 +46,7 @@ route strip's figures honest — ETE was still falling back to the clock —
 and stops the retention sweep deleting flights merely because nobody has
 them rostered. No schema change and no migration in either.
 
-Tests: 338, six suites, all passing.
+Tests: 343, six suites, all passing.
 
 | Suite | N | Covers |
 |---|---|---|
@@ -55,7 +55,7 @@ Tests: 338, six suites, all passing.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, FFDO placeholder filter |
-| `tests_ui_fixes.py` | 199 | layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit |
+| `tests_ui_fixes.py` | 204 | layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit |
 
 ## OPEN
 
@@ -177,6 +177,12 @@ Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
     `PRAGMA table_info`. `CREATE TABLE IF NOT EXISTS` silently no-ops.
 13. **Deleting a user deletes their `roster` rows only.** Flights and
     tracks are shared.
+16. **A missing asset must not take the page with it.** Anything that
+    depends on a separately-loaded file guards for its absence and degrades
+    to something honest. v6.1 put the scroll reveal inside the map's IIFE:
+    Leaflet 404'd on deploy, every line below it threw, and the page lost
+    its map AND its schedule at once. Nothing that hides content in CSS may
+    rely on script to bring it back.
 15. **No page loads a script or stylesheet from someone else's server.**
     Leaflet came from unpkg.com in a render-blocking tag, so a slow or
     unreachable third party produced a white screen while this box sat
@@ -642,6 +648,37 @@ invariant 1.
   the HTTP layer's perspective (form redisplay, HTTP 200).
 
 ## VERSION HISTORY
+
+### v6.2 - one missing file should not cost the whole page
+
+Reported as "the map is not visible at all and the scroll/fade is not
+working". Those were one fault, not two.
+
+- **The map and the reveal shared a fate.** The scroll reveal was written
+  inside the same IIFE as the map setup. `L.map(...)` is the third line of
+  that block, so if `leaflet.js` does not load, `L` is undefined, that line
+  throws, and EVERYTHING after it in the block never runs — including the
+  reveal. One absent file, and the page lost its map and its schedule
+  together. The reveal is now its own top-level block, placed BEFORE the
+  map block, and the map block opens with a `typeof L === 'undefined'`
+  guard that logs, shows "Map unavailable" in place of a silent blank, and
+  returns. Now invariant 16.
+- **CSS must not hide what only script can restore.** `.reveal` shipped as
+  `opacity: 0` with the script expected to animate it back, so a dead
+  script meant an invisible schedule. It now defaults to visible and the
+  script sets the starting opacity itself, once it is known to be running.
+  Verified by executing the page's JS against a DOM stub with no Leaflet
+  present: no throw, schedule at full opacity, fallback message shown.
+- **No map means no reveal.** With nothing behind it to reveal, the effect
+  is just a way of hiding the schedule, so the map's failure path calls
+  `_ptRevealOff()` and hands the list back at full opacity.
+- Nav pills widened (56px -> 76px minimum) and dropped closer to the
+  bottom edge; page padding trimmed to match.
+
+**Deploy note:** the likely trigger was `static/vendor/` not reaching the
+repo — browser folder uploads routinely drop nested directories. If the map
+is missing, check `/static/vendor/leaflet/leaflet.js` returns a file rather
+than a 404 before looking anywhere else.
 
 ### v6.1 - the map really is the background now
 

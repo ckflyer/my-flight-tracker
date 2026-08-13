@@ -95,7 +95,7 @@
 .tabbar {
   position: fixed;
   left: max(1rem, env(safe-area-inset-left));
-  bottom: calc(0.9rem + env(safe-area-inset-bottom));
+  bottom: calc(0.35rem + env(safe-area-inset-bottom));
   z-index: 900;
   display: inline-flex;
   gap: 0.15rem;
@@ -111,8 +111,8 @@
   align-items: center;
   justify-content: center;
   gap: 0.1rem;
-  min-width: 56px;
-  padding: 0.42rem 0.3rem 0.36rem;
+  min-width: 76px;
+  padding: 0.42rem 0.55rem 0.36rem;
   border-radius: 999px;
   color: var(--muted);
   text-decoration: none;
@@ -125,4 +125,4 @@
 .tabbar a svg { width: 20px; height: 20px; display: block; }
 
 /* Room for the pill so it covers nothing at the end of a page. */
-body { padding-bottom: calc(78px + env(safe-area-inset-bottom)) !important; }
+body { padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important; }

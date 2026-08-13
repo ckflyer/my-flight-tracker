@@ -562,8 +562,15 @@
        list would have no way to appear. */
     .reveal {
       position: relative; z-index: 20;
-      opacity: 0;
       min-height: 72vh;
+      /* Deliberately NOT opacity:0 here. If the script dies the schedule
+         still has to be readable — hiding it in CSS and relying on JS to
+         bring it back means one broken file costs the whole page. The
+         script sets the starting opacity itself once it is running. */
+    }
+    .map-missing {
+      position: absolute; top: 42%; left: 0; right: 0;
+      text-align: center; color: var(--muted); font-size: 0.8125rem;
     }
     #back-to-active { position: relative; z-index: 20; }
     @media (prefers-reduced-motion: reduce) {
@@ -1020,9 +1027,75 @@
       window._ptRadarPrefOff = (radarPref === '0');
     })();
 
+    // ---- Scroll reveal. At rest the map is the background of the app,
+    // with only the live flight card over it. Scrolling fades the map back
+    // and the schedule forward. Driven by scroll position rather than a
+    // transition so it tracks the finger instead of lagging behind it.
+    (function() {
+      const scrim = document.getElementById('scroll-scrim');
+      const reveal = document.getElementById('reveal');
+      const hud = document.querySelector('.map-hud');
+      if (!reveal) return;
+      // No map on this page (no flights at all) means nothing to reveal
+      // from behind — show the schedule outright.
+      if (!scrim) { reveal.style.opacity = '1'; return; }
+      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        reveal.style.opacity = '1';
+        scrim.style.opacity = '1';
+        return;
+      }
+      // Opt in only now that we know the script is alive.
+      reveal.style.opacity = '0';
+      const RANGE = 190;
+      let queued = false;
+      function paint() {
+        queued = false;
+        const p = Math.min(1, Math.max(0, (window.scrollY || 0) / RANGE));
+        scrim.style.opacity = p;
+        reveal.style.opacity = p;
+        // Untouchable while invisible, or a stray tap lands on a row
+        // nobody can see. Scrolling still works: that is on the page.
+        reveal.style.pointerEvents = p > 0.12 ? 'auto' : 'none';
+        if (hud) {
+          hud.style.opacity = 1 - p;
+          hud.style.pointerEvents = p > 0.5 ? 'none' : '';
+        }
+      }
+      function onScroll() {
+        if (queued) return;
+        queued = true;
+        window.requestAnimationFrame(paint);
+      }
+      window.addEventListener('scroll', onScroll, { passive: true });
+      window.addEventListener('resize', paint);
+      paint();
+
+      // If the map never comes up there is nothing to reveal from behind,
+      // so the effect stops being an effect and becomes a way of hiding the
+      // schedule for no reason. The map block calls this on failure.
+      window._ptRevealOff = function() {
+        reveal.style.opacity = '1';
+        reveal.style.pointerEvents = 'auto';
+        scrim.style.opacity = '0';
+        window.removeEventListener('scroll', onScroll);
+      };
+    })();
+
     (function() {
       const mapEl = document.getElementById('flight-map');
       if (!mapEl) return;
+      // Leaflet is a separate file. If it fails to load — missing from the
+      // deploy, blocked, half-downloaded — L is undefined and EVERY line
+      // below throws. That used to take the scroll reveal down with it,
+      // because it lived inside this same function: one absent file and the
+      // page lost its map AND its schedule. The reveal is now its own block
+      // above, and this returns quietly instead of exploding.
+      if (typeof L === 'undefined') {
+        mapEl.innerHTML = '<div class="map-missing">Map unavailable</div>';
+        console.error('Leaflet failed to load from /static/vendor/leaflet/leaflet.js');
+        if (window._ptRevealOff) window._ptRevealOff();
+        return;
+      }
 
       let liveData = {{ live | tojson if live else 'null' }};
       let currentData = {{ current | tojson if current else 'null' }};
@@ -1656,47 +1729,6 @@
         e.preventDefault();
         toggleLegDetail(head);
       });
-
-      // ---- Scroll reveal. At rest the map is the background of the app,
-      // with only the live flight card over it. Scrolling fades the map back
-      // and the schedule forward. Driven by scroll position rather than a
-      // transition so it tracks the finger instead of lagging behind it.
-      (function() {
-        const scrim = document.getElementById('scroll-scrim');
-        const reveal = document.getElementById('reveal');
-        const hud = document.querySelector('.map-hud');
-        if (!reveal) return;
-        // No map on this page (no flights at all) means nothing to reveal
-        // from behind — show the schedule outright.
-        if (!scrim) { reveal.style.opacity = '1'; return; }
-        if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-          reveal.style.opacity = '1';
-          scrim.style.opacity = '1';
-          return;
-        }
-        const RANGE = 190;
-        let queued = false;
-        function paint() {
-          queued = false;
-          const p = Math.min(1, Math.max(0, (window.scrollY || 0) / RANGE));
-          scrim.style.opacity = p;
-          reveal.style.opacity = p;
-          // Untouchable while invisible, or a stray tap lands on a row
-          // nobody can see. Scrolling still works: that is on the page.
-          reveal.style.pointerEvents = p > 0.12 ? 'auto' : 'none';
-          if (hud) {
-            hud.style.opacity = 1 - p;
-            hud.style.pointerEvents = p > 0.5 ? 'none' : '';
-          }
-        }
-        window.addEventListener('scroll', function() {
-          if (queued) return;
-          queued = true;
-          window.requestAnimationFrame(paint);
-        }, { passive: true });
-        window.addEventListener('resize', paint);
-        paint();
-      })();
 
       // ---- Relative times, computed here rather than baked into the HTML.
       // "23 min ago" used to be rendered once by the server and then sit

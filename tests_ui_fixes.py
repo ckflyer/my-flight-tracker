@@ -562,7 +562,7 @@ def test_bottom_tab_bar():
         css = fh.read()
     check("the bar clears the home indicator", "env(safe-area-inset-bottom)" in css)
     check("pages reserve room so it covers nothing",
-          "padding-bottom: calc(78px" in css)
+          "padding-bottom: calc(72px" in css)
     check("the pill is offset to the left, not full width",
           "border-radius: 999px" in css and "display: inline-flex" in css)
 
@@ -604,13 +604,30 @@ def test_scroll_reveal():
     check("the schedule starts hidden behind the map", 'id="reveal"' in html)
     rev = html[html.find(".reveal {"):]
     rev = rev[:rev.find("}")]
-    check("...at zero opacity", "opacity: 0" in rev)
+    # NOT hidden in CSS. v6.1 shipped .reveal { opacity: 0 } and relied on
+    # the script to bring it back, so when Leaflet 404'd and the script died
+    # the schedule vanished along with the map. The script opts INTO the
+    # effect once it is known to be running.
+    check("the schedule is not hidden by CSS alone", "opacity: 0" not in rev)
+    check("...the script hides it only once alive",
+          "reveal.style.opacity = '0';" in html)
     # A one-leg day would otherwise leave the page too short to scroll, so
     # the list could never be revealed at all.
     check("...with the page guaranteed scrollable", "min-height" in rev)
     check("scroll drives it, not a timed animation", "requestAnimationFrame(paint)" in html)
     check("invisible rows cannot be tapped", "pointerEvents" in html)
     check("reduced motion skips the effect", "prefers-reduced-motion" in html)
+
+    # The failure that produced v6.2: the reveal lived INSIDE the map's
+    # IIFE, so a missing Leaflet took the map and the schedule down together.
+    scroll_at = html.find("// ---- Scroll reveal")
+    map_at = html.find("const mapEl = document.getElementById('flight-map')")
+    check("the reveal does not live inside the map block",
+          scroll_at != -1 and map_at != -1 and scroll_at < map_at)
+    check("a missing Leaflet is caught, not thrown",
+          "typeof L === 'undefined'" in html)
+    check("...and says so instead of showing a blank", "Map unavailable" in html)
+    check("...and hands the schedule back", "_ptRevealOff" in html)
 
 
 def test_show_on_map_action():
