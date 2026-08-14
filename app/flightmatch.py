@@ -69,7 +69,19 @@ ACQUIRE_RADIUS_NM = float(os.environ.get("ACQUIRE_RADIUS_NM", "30"))
 # stays safe against the turn problem for timing reasons — the return leg
 # can't depart until this one has landed and turned around.
 ACQUIRE_AFTER_DEP_MINUTES = float(os.environ.get("ACQUIRE_AFTER_DEP_MINUTES", "45"))
-ACQUIRE_BEFORE_DEP_MINUTES = float(os.environ.get("ACQUIRE_BEFORE_DEP_MINUTES", "20"))
+# This must never be NARROWER than the poller's PREVIEW_WINDOW, which is
+# derived from it for exactly that reason. When the poller swept from T-35
+# but acquisition only opened at T-20, there were fifteen minutes in which
+# every sweep looked the flight up and then threw the answer away, unless
+# the aircraft happened to be within ACQUIRE_RADIUS_NM of the origin — and
+# it usually is not, because it is still inbound from wherever it is coming
+# from. A flight added shortly before departure therefore showed no ADS-B
+# at all until T-20, which looks exactly like tracking being broken.
+#
+# Widening this is safe against the same-callsign turn problem: a leg that
+# is genuinely still in progress already wins the aircraft via
+# active_sibling() above, whatever this window says.
+ACQUIRE_BEFORE_DEP_MINUTES = float(os.environ.get("ACQUIRE_BEFORE_DEP_MINUTES", "35"))
 
 # How far off the direct origin-to-destination line an aircraft may sit and
 # still be accepted as flying that leg, in nautical miles of extra distance

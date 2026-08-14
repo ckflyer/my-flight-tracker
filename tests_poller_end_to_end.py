@@ -145,6 +145,43 @@ check("the return flight cannot reopen it", bool(row["closed"]))
 check("...and cannot move its position",
       row["last_lat"] == before["last_lat"], "the turn overwrote the leg")
 
+print("\n-- the polling window and the acquisition window must not disagree --")
+# The poller swept from T-35 but acquisition only opened at T-20, so for
+# fifteen minutes every sweep looked a flight up and threw the answer away
+# unless the aircraft was already parked at the origin. A flight added
+# shortly before departure showed no ADS-B at all until T-20.
+from app.poller import PREVIEW_WINDOW as _PW
+from app.flightmatch import ACQUIRE_BEFORE_DEP_MINUTES as _ABD
+_swept = _PW.total_seconds() / 60.0
+check("acquisition opens no later than the first sweep", _ABD >= _swept,
+      f"sweeps from T-{_swept} but only acquires from T-{_ABD}")
+
+print("\n-- a flight already airborne can still be picked up --")
+# Neither original test could accept a leg added mid-flight: the aircraft is
+# hundreds of miles from the origin and the departure window shut long ago.
+from datetime import date as _date, time as _time
+from app.models import FlightLeg as _FL
+from app.airports import enrich_leg as _enrich
+from app.flightmatch import evaluate as _ev
+
+def _enroute_leg():
+    _l = _FL(id="ENROUTE1", date=_date(2026, 8, 14), flight_number="3500",
+             callsign="ENY3500", origin="DFW", destination="LAX",
+             dep_time_local=_time(7, 0), arr_time_local=_time(8, 30))
+    _enrich(_l)
+    return _l
+
+_now = _enroute_leg().dep_datetime_utc() + timedelta(minutes=90)
+check("an aircraft on the route is adopted",
+      _ev(_enroute_leg(), {"icao24": "abc123", "lat": 33.4, "lon": -105.9}, _now).accepted)
+check("...and one near the destination",
+      _ev(_enroute_leg(), {"icao24": "abc123", "lat": 34.0, "lon": -118.5}, _now).accepted)
+for _label, _lat, _lon in (("over Chicago", 41.9, -87.6),
+                           ("over Miami", 25.8, -80.2),
+                           ("behind the origin over Atlanta", 33.6, -84.4)):
+    check(f"an unrelated aircraft {_label} is still refused",
+          not _ev(_enroute_leg(), {"icao24": "abc123", "lat": _lat, "lon": _lon}, _now).accepted)
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     for f in FAIL:

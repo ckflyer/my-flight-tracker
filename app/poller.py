@@ -41,8 +41,9 @@ from .closure import maybe_close
 from .db import get_connection
 from .enrichment import (credentials, payer_for, refresh as refresh_enrichment,
                          refresh_usage)
-from .flightmatch import (evaluate, has_flown, observe, observed_gate_in,
-                          signal_gap_seconds, stopped_seconds, wheels_down_at)
+from .flightmatch import (ACQUIRE_BEFORE_DEP_MINUTES, evaluate, has_flown,
+                          observe, observed_gate_in, signal_gap_seconds,
+                          stopped_seconds, wheels_down_at)
 from .flights import get_flight, owners_of, purge_old, write
 from .livesource import live_state
 from .schedule import get_current_info
@@ -59,7 +60,11 @@ INTERVAL_S = int(os.environ.get("TRACK_POLLER_INTERVAL_S", "20"))
 # the poller rather than in get_current_info, because "current" also
 # drives flight selection, the map and the card, and moving that boundary
 # would change all of them.
-PREVIEW_WINDOW = timedelta(minutes=35)
+# DERIVED, not repeated. These two were independent numbers (35 here, 20
+# there) and the mismatch created a dead zone where flights were polled but
+# could never be acquired. Tying them together means that gap cannot come
+# back if either is retuned.
+PREVIEW_WINDOW = timedelta(minutes=ACQUIRE_BEFORE_DEP_MINUTES)
 
 # Escape hatch: set TRACK_POLLER_ENABLED=0 to run read-only.
 ENABLED = os.environ.get("TRACK_POLLER_ENABLED", "1") not in ("0", "false", "False")

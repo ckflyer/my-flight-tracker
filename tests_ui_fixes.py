@@ -675,6 +675,35 @@ def test_settings_budget_saves():
     check("...and would have failed a 0.25 step", cents % 25 != 0, str(default))
 
 
+def test_card_grows_upward_from_a_fixed_bottom_edge():
+    """Opening the details must not scroll the page. The card's bottom edge
+    stays parked above the tab pills and the card grows upward, so the
+    Show/Hide row never moves under the reader's thumb."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    check("opening no longer scrolls the page to the card",
+          "_ptScrollToCard" not in html)
+    check("...and closing no longer scrolls it back",
+          "_ptScrolledOpen" not in html)
+    check("the spacer animates on the same curve as the panel",
+          ".hero-space.animating { transition: height 260ms cubic-bezier(0.4, 0, 0.2, 1); }" in html
+          and ".expand-details.animating { transition: height 260ms cubic-bezier(0.4, 0, 0.2, 1); }" in html)
+    check("layout accepts the card's pending height",
+          "function layout(growTo, animate)" in html)
+    check("...and the panel hands it base+target rather than re-measuring",
+          "window._ptLayoutHero(cardBase + target, true)" in html)
+
+    # The tab bar is BELOW this script in the document, so querying for it at
+    # parse time returns null and every measurement silently falls back to a
+    # hardcoded guess. It has to be looked up on demand.
+    check("the tab bar is looked up lazily, not at parse time",
+          "if (!tabbar) tabbar = document.querySelector('.tabbar');" in html)
+    check("...because the nav really does come after the script",
+          html.index("<script>") < html.index('<nav class="tabbar"'))
+
+
 def test_detail_panels_slide_rather_than_snap():
     """Both expanding panels animate their height. The spacing has to live
     on an inner wrapper: with padding and a border on the outer element, a
@@ -873,6 +902,7 @@ def main():
     test_bottom_tab_bar()
     test_full_bleed_map()
     test_two_letter_zones()
+    test_card_grows_upward_from_a_fixed_bottom_edge()
     test_detail_panels_slide_rather_than_snap()
     test_schedule_works_without_the_map()
     test_session_key_survives_redeploy()

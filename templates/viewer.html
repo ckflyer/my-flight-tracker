@@ -412,6 +412,15 @@
        height with a measured pixel value on load and on resize; the calc is
        the pre-script fallback. */
     .hero-space { height: calc(var(--card-top) - 46px - 1rem); }
+    /* Matched to .expand-details.animating exactly — same duration, same
+       curve. The spacer shrinks by however much the panel grows, so the two
+       cancel and the card's bottom edge stays welded just above the tab
+       pills while the card opens upward into the map. Any mismatch here and
+       the Show/Hide row would drift during the slide. */
+    .hero-space.animating { transition: height 260ms cubic-bezier(0.4, 0, 0.2, 1); }
+    @media (prefers-reduced-motion: reduce) {
+      .hero-space.animating { transition: none; }
+    }
 
     /* THE MAP AND THE HEADS-UP LAYER, and why both carry a z-index.
 
@@ -994,8 +1003,19 @@
           var target = details.getBoundingClientRect().height;
           details.style.height = '0px';
           void details.offsetHeight;          // force the 0 to take effect
+          // Measured with the panel at zero, so this is the card's height
+          // WITHOUT it. Deriving the target as base+panel rather than
+          // reading the card again avoids depending on whether the browser
+          // has started the transition yet — a race that happens to work in
+          // a real browser and silently double-counts anywhere it doesn't.
+          var cardBase = card.getBoundingClientRect().height -
+                         details.getBoundingClientRect().height;
           details.classList.add('animating');
           details.style.height = target + 'px';
+          // Shrink the spacer above the card by exactly what the panel is
+          // about to add, on the same curve, so the card's bottom edge does
+          // not move a pixel while its top edge slides up into the map.
+          if (window._ptLayoutHero) window._ptLayoutHero(cardBase + target, true);
           // Back to auto once it arrives, so the panel can still grow when
           // live data lands in it while it is open. Pinned to a stale pixel
           // height, later content would be clipped.
@@ -1005,10 +1025,16 @@
             slideTimer = null;
           }, 300);
         } else {
-          details.style.height = details.getBoundingClientRect().height + 'px';
+          var shrinkBy = details.getBoundingClientRect().height;
+          var cardBase = card.getBoundingClientRect().height - shrinkBy;
+          details.style.height = shrinkBy + 'px';
           void details.offsetHeight;
           details.classList.add('animating');
           details.style.height = '0px';
+          // Same trick in reverse: the card is about to lose the panel's
+          // height, so the spacer grows back by the same amount, on the same
+          // curve, and the bottom edge again holds still.
+          if (window._ptLayoutHero) window._ptLayoutHero(Math.max(0, cardBase), true);
           slideTimer = setTimeout(function() {
             details.classList.remove('open', 'animating');
             details.style.height = '';
@@ -1022,29 +1048,23 @@
         card.classList.toggle('expanded', open);
         if (hintLabel) hintLabel.textContent = open ? 'Hide Details' : 'Flight Details';
         hint.setAttribute('aria-expanded', open ? 'true' : 'false');
-        if (open) {
-          // Freeze the fade BEFORE scrolling, so the map never flickers away
-          // for a frame as the page moves down to the card.
-          if (window._ptPaintReveal) window._ptPaintReveal();
-          if (window._ptScrollToCard) window._ptScrollToCard();
-        } else {
-          // Order matters on the way out. The fade is driven by scroll
-          // position, so unfreezing it while the page is still scrolled down
-          // would show a full-strength schedule for a frame before the
-          // scroll-back caught up. Return to the top FIRST, then unfreeze,
-          // by which point the resting position gives the same map-only view
-          // the card is sliding back onto.
-          //
-          // Instant rather than smooth for the same reason: a smooth glide
-          // back would spend a few hundred milliseconds at scroll positions
-          // that the now-unfrozen fade would happily render as "schedule".
-          if (window._ptScrolledOpen) {
-            window._ptScrolledOpen = false;
-            try { window.scrollTo({ top: 0, behavior: 'auto' }); }
-            catch (e) { window.scrollTo(0, 0); }
-          }
-          if (window._ptLayoutHero) window._ptLayoutHero();
-          if (window._ptPaintReveal) window._ptPaintReveal();
+        // NOTHING SCROLLS HERE ANY MORE. The card grows upward from a fixed
+        // bottom edge, so the page does not need to move and neither does
+        // the reader's eye. slidePanel has already adjusted the spacer.
+        //
+        // The fade still gets frozen while the panel is open: the card is
+        // taller than the resting layout allows for, so on a short screen
+        // there may be a little scrolling to reach the bottom of the detail,
+        // and that must not be read as "show me the schedule".
+        if (window._ptPaintReveal) window._ptPaintReveal();
+        // Settle the resting position once the slide has finished, which
+        // also mops up any rounding drift between the two animations.
+        if (!open) {
+          window.setTimeout(function() {
+            if (!card.classList.contains('expanded') && window._ptLayoutHero) {
+              window._ptLayoutHero();
+            }
+          }, 320);
         }
       }
 
@@ -1179,14 +1199,19 @@
       var space = document.querySelector('.hero-space');
       if (!card || !space) return;
 
-      var tabbar = document.querySelector('.tabbar');
+      // Looked up LAZILY, not once at start-up. This script block sits above
+      // the <nav> in the document, so querying for it here at parse time
+      // always returned null and tabTop() silently fell back to the rough
+      // guess below — the measuring this function exists to do never
+      // actually happened. Cached on first successful lookup.
+      var tabbar = null;
       var GAP = 14;   // breathing room between card and pills
 
-      // Where the top of the tab pills sits. Measured rather than assumed:
-      // the pills are a fixed element, so this is already in screen
-      // coordinates and does not move when the page scrolls. The fallback is
-      // only for a page with no tab bar at all.
+      // Where the top of the tab pills sits. The pills are a fixed element,
+      // so this is already in screen coordinates and does not move when the
+      // page scrolls. The fallback is only for a page with no tab bar.
       function tabTop() {
+        if (!tabbar) tabbar = document.querySelector('.tabbar');
         if (!tabbar) return window.innerHeight - 92;
         var r = tabbar.getBoundingClientRect();
         return r.height ? r.top : window.innerHeight - 92;
@@ -1194,45 +1219,77 @@
 
       var lastTop = null;
 
-      function layout() {
+      // BOTTOM-ANCHORED, ALWAYS. The card's lower edge stays parked just
+      // above the tab pills whether the details panel is shut or open — so
+      // opening it grows the card UPWARD into the map, and the Show/Hide
+      // row at the bottom of the card does not move at all.
+      //
+      // Two earlier attempts got this wrong. The first re-parked the card
+      // near the top of the screen when it opened, which teleported it. The
+      // second left the card alone and scrolled the PAGE to it, which is
+      // what you are seeing now: the card appears to fly to the top of the
+      // window. Neither moved the thing that should move — the spacer above
+      // the card.
+      //
+      // `growTo` is the height the card is ABOUT to become, passed in by the
+      // panel animation. It has to be supplied rather than measured, because
+      // at the moment the slide starts the panel is still at its old height;
+      // measuring then would compute the spacer for the wrong card size and
+      // the bottom edge would lurch.
+      function layout(growTo, animate) {
         var vh = window.innerHeight;
-        // ALWAYS measured collapsed. An expanded card is taller than the
-        // screen, and re-parking it while open used to teleport it to the
-        // top of the page the instant you tapped "Flight details" — the
-        // content did appear, but it appeared somewhere your eye wasn't, so
-        // it read as "nothing happened", and the natural second tap closed
-        // it again. The card now stays put and the page scrolls to it
-        // instead. See scrollCardIntoView below.
-        if (card.classList.contains('expanded')) return;
-
-        var cardH = card.getBoundingClientRect().height;
+        var cardH = (typeof growTo === 'number')
+          ? growTo
+          : card.getBoundingClientRect().height;
         var desiredTop = tabTop() - GAP - cardH;
-        // Never let it climb over the title bar, and always leave a usable
-        // strip of map above it on very short screens (a phone in
-        // landscape, a half-height desktop window).
-        desiredTop = Math.max(Math.round(vh * 0.18),
-                              Math.min(desiredTop, vh - 120));
+
+        if (card.classList.contains('expanded')) {
+          // Open, the only limit is the top of the screen. A panel taller
+          // than the space available pins the card there and runs off the
+          // bottom, which is what scrolling is for.
+          desiredTop = Math.max(0, desiredTop);
+        } else {
+          // Shut, also keep a usable strip of map above it on short screens
+          // (a phone in landscape, a half-height desktop window).
+          desiredTop = Math.max(Math.round(vh * 0.18),
+                                Math.min(desiredTop, vh - 120));
+        }
 
         // Where it actually sits right now, in page coordinates. The
         // difference is exactly how much the spacer has to grow or shrink;
         // one pass is enough because the relationship is a straight line.
         var currentTop = card.getBoundingClientRect().top + (window.scrollY || 0);
         var currentSpace = space.getBoundingClientRect().height;
+        // The spacer sets the card's TOP edge, and the top edge does not
+        // depend on how tall the card is — so this is a straight difference.
+        // (An earlier version subtracted the card's pending growth here too,
+        // which double-counted it and left the bottom edge 13px adrift.)
         var next = Math.max(0, Math.round(currentSpace + (desiredTop - currentTop)));
+
+        // The spacer shrinks on exactly the same curve and duration as the
+        // panel expands, so the two cancel and the card's bottom edge holds
+        // still while its top edge slides up.
+        if (animate) {
+          space.classList.add('animating');
+          window.setTimeout(function() { space.classList.remove('animating'); }, 300);
+        } else {
+          space.classList.remove('animating');
+        }
         space.style.height = next + 'px';
 
         // Publish where the card ACTUALLY ended up, not where we asked it to
         // go. On a short screen the spacer can bottom out at zero and the
         // card comes to rest lower than requested; the live-stats readout and
         // the map framing must follow the real card, not the wish.
-        var actualTop = Math.round(card.getBoundingClientRect().top + (window.scrollY || 0));
+        var actualTop = Math.max(0, Math.round(desiredTop));
         document.documentElement.style.setProperty('--card-top', actualTop + 'px');
         window._ptCardTop = actualTop;
 
-        // Re-frame the route only when the card has genuinely moved. Firing
-        // this on every pass would quietly undo a manual pan or zoom each
-        // time anything nudged the layout.
-        if (lastTop === null || Math.abs(actualTop - lastTop) > 2) {
+        // Re-frame the route only when the card has genuinely moved, and
+        // never while the details panel is open — the map is behind a full
+        // card then and re-fitting would only fight the user's own panning.
+        if (!card.classList.contains('expanded') &&
+            (lastTop === null || Math.abs(actualTop - lastTop) > 2)) {
           lastTop = actualTop;
           if (window._ptRefit) window._ptRefit();
         }
@@ -1244,16 +1301,6 @@
       // card up to the page. Same result — details on screen — but the card
       // travels under your eye instead of jumping out from under it, and
       // nothing about the resting layout has to change.
-      window._ptScrollToCard = function() {
-        var top = card.getBoundingClientRect().top + (window.scrollY || 0);
-        var target = Math.max(0, Math.round(top - 12));
-        window._ptScrolledOpen = true;
-        try {
-          window.scrollTo({ top: target, behavior: 'smooth' });
-        } catch (e) {
-          window.scrollTo(0, target);   // older Safari has no options object
-        }
-      };
 
       layout();
       // Fonts and icons can land after first paint and change the card's
