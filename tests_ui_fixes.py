@@ -675,6 +675,43 @@ def test_settings_budget_saves():
     check("...and would have failed a 0.25 step", cents % 25 != 0, str(default))
 
 
+def test_detail_panels_slide_rather_than_snap():
+    """Both expanding panels animate their height. The spacing has to live
+    on an inner wrapper: with padding and a border on the outer element, a
+    height of 0 still renders ~29px tall, so the panel would jump open by
+    that much and only then slide."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    check("the card's panel has a height transition",
+          ".expand-details.animating { transition: height" in html)
+    check("...and clips its contents while it moves",
+          ".expand-details { display: none; overflow: hidden; }" in html)
+    check("...with the spacing moved onto an inner wrapper",
+          ".ed-inner {" in html and 'class="ed-inner"' in html)
+
+    check("the flight-list rows animate too",
+          ".row-detail.animating { transition: height" in html)
+    check("...and clip while moving",
+          ".row-detail { overflow: hidden; }" in html)
+    check("...with their spacing on .row-detail-body",
+          ".row-detail-body {" in html)
+
+    # A slide really is motion, so this one belongs behind the setting --
+    # unlike the old rule that used it to paint over the entire map.
+    check("reduced motion turns the slides off",
+          html.count("prefers-reduced-motion") >= 2)
+    check("...but never re-hides the map",
+          ".scroll-scrim { opacity: 1 !important; }" not in html)
+
+    # Height is released back to auto so late-arriving detail is not clipped.
+    check("the card's panel is released back to auto",
+          "details.style.height = '';" in html)
+    check("the row panels are released back to auto",
+          "panel.style.height = '';" in html)
+
+
 def test_schedule_works_without_the_map():
     """renderLegDetail/toggleLegDetail and their click handlers used to sit
     inside the map block, BELOW its `typeof L === 'undefined'` bail-out. A
@@ -836,6 +873,7 @@ def main():
     test_bottom_tab_bar()
     test_full_bleed_map()
     test_two_letter_zones()
+    test_detail_panels_slide_rather_than_snap()
     test_schedule_works_without_the_map()
     test_session_key_survives_redeploy()
     test_scheduled_time_line_is_marked_as_an_echo()

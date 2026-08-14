@@ -18,6 +18,25 @@ cd "$(dirname "$0")"
 echo "==> fetching latest"
 git fetch origin
 
+# `reset --hard` below rewrites every TRACKED file. Untracked ones (your
+# database, settings, session key) are left alone — that is the intent. But
+# .gitignore does not untrack a file that was already committed once, so if
+# any of these were added to the repo before being ignored, they are being
+# silently overwritten on every single update. That looks like settings
+# reverting on their own, or everyone being logged out after a deploy.
+TRACKED_DATA=$(git ls-files data/ | grep -v '^data/\.gitkeep$' || true)
+if [ -n "$TRACKED_DATA" ]; then
+  echo ""
+  echo "  WARNING: these files under data/ are tracked by git and are about"
+  echo "  to be overwritten with whatever is committed in the repo:"
+  echo "$TRACKED_DATA" | sed 's/^/      /'
+  echo ""
+  echo "  To stop that, run once (from this directory):"
+  echo "$TRACKED_DATA" | sed 's/^/      git rm --cached /'
+  echo "      git commit -m 'stop tracking runtime data' && git push"
+  echo ""
+fi
+
 echo "==> resetting to origin/main"
 git reset --hard origin/main
 

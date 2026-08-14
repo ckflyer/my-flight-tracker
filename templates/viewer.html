@@ -276,9 +276,18 @@
       background: var(--accent); margin-left: 0.4rem; vertical-align: middle;
     }
 
-    .row-detail {
+    /* Same slide as the big card's detail panel, same reasoning: the outer
+       element holds nothing but overflow and an animated height, so a height
+       of 0 really is invisible. The spacing and the dashed rule moved onto
+       .row-detail-body, which is already the wrapper around the content. */
+    .row-detail { overflow: hidden; }
+    .row-detail-body {
       margin-top: 0.6rem; padding-top: 0.6rem;
       border-top: 1px dashed var(--border);
+    }
+    .row-detail.animating { transition: height 220ms cubic-bezier(0.4, 0, 0.2, 1); }
+    @media (prefers-reduced-motion: reduce) {
+      .row-detail.animating { transition: none; }
     }
     .row-detail[hidden] { display: none; }
     .rd-row {
@@ -496,8 +505,26 @@
       box-shadow: 0 4px 20px rgba(0,0,0,0.12);
       border: 1px solid var(--border);
     }
-    .expand-details { display: none; margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid var(--border); }
+    /* SLIDE-OPEN PANEL.
+       All the spacing (gap, rule, padding) lives on the inner wrapper, and
+       the outer element carries nothing but overflow:hidden and a height the
+       script animates. If the padding and border sat on the outer element,
+       a height of 0 would still render ~29px tall and the panel would snap
+       open by that much before sliding — which is the jump this replaces. */
+    .expand-details { display: none; overflow: hidden; }
     .expand-details.open { display: block; }
+    .expand-details.animating { transition: height 260ms cubic-bezier(0.4, 0, 0.2, 1); }
+    .ed-inner {
+      margin-top: 0.9rem;
+      padding-top: 0.9rem;
+      border-top: 1px solid var(--border);
+    }
+    /* A slide IS motion, so this one genuinely belongs behind the setting —
+       unlike the old rule that used it to paint over the whole map. Panel
+       still opens, just instantly. */
+    @media (prefers-reduced-motion: reduce) {
+      .expand-details.animating { transition: none; }
+    }
     .collapsed-card .flight-num { font-size: 1.3rem; }
     .collapsed-card .city-route {
       font-size: 1.25rem;
@@ -716,101 +743,104 @@
     </div>
 
     <div class="expand-details" id="expand-details">
-      <div id="live-section" style="{{ '' if is_selected_live else 'display:none' }}">
-      <div class="live-box {{ '' if live else 'muted-live' }}" id="live-box-el">
-        <div id="live-box-inner">
-          {% if live %}
-          <div class="label">Live ADS-B</div>
-          <div class="live-grid">
-            {% if live.altitude_ft is not none %}
-            <div><span class="live-val">{{ live.altitude_ft }}</span> <span class="live-unit">ft</span></div>
+      <div class="ed-inner">
+        <div id="live-section" style="{{ '' if is_selected_live else 'display:none' }}">
+        <div class="live-box {{ '' if live else 'muted-live' }}" id="live-box-el">
+          <div id="live-box-inner">
+            {% if live %}
+            <div class="label">Live ADS-B</div>
+            <div class="live-grid">
+              {% if live.altitude_ft is not none %}
+              <div><span class="live-val">{{ live.altitude_ft }}</span> <span class="live-unit">ft</span></div>
+              {% endif %}
+              {% if live.speed_kts is not none %}
+              <div><span class="live-val">{{ live.speed_kts }}</span> <span class="live-unit">kts</span></div>
+              {% endif %}
+              {% if live.track is not none %}
+              <div><span class="live-val">{{ live.track|int }}°</span> <span class="live-unit">trk</span></div>
+              {% endif %}
+              {% if live.on_ground %}
+              <div><span class="live-val">On ground</span></div>
+              {% endif %}
+            </div>
+            {% if live.icao24 %}
+            <div class="live-meta">ICAO {{ live.icao24 }}{% if live.callsign %} · {{ live.callsign }}{% endif %}</div>
             {% endif %}
-            {% if live.speed_kts is not none %}
-            <div><span class="live-val">{{ live.speed_kts }}</span> <span class="live-unit">kts</span></div>
+            {% if current.aircraft and (current.aircraft.registration or current.aircraft.display_type) %}
+            <div class="aircraft-line">
+              {{ current.aircraft.registration or '' }}{% if current.aircraft.registration and current.aircraft.display_type %} · {% endif %}{{ current.aircraft.display_type or '' }}
+            </div>
             {% endif %}
-            {% if live.track is not none %}
-            <div><span class="live-val">{{ live.track|int }}°</span> <span class="live-unit">trk</span></div>
-            {% endif %}
-            {% if live.on_ground %}
-            <div><span class="live-val">On ground</span></div>
+            {% else %}
+            No live ADS-B position right now
             {% endif %}
           </div>
-          {% if live.icao24 %}
-          <div class="live-meta">ICAO {{ live.icao24 }}{% if live.callsign %} · {{ live.callsign }}{% endif %}</div>
-          {% endif %}
-          {% if current.aircraft and (current.aircraft.registration or current.aircraft.display_type) %}
-          <div class="aircraft-line">
-            {{ current.aircraft.registration or '' }}{% if current.aircraft.registration and current.aircraft.display_type %} · {% endif %}{{ current.aircraft.display_type or '' }}
+        </div>
+        <div class="detail-block" id="flight-detail" style="{{ '' if current.enriched else 'display:none' }}">
+          <h3>Flight detail</h3>
+          {# Two rows, not three. Each carries its own time AND how far off it
+             ran, so nothing has to be cross-referenced against a separate
+             "Scheduled" line further down. #}
+          <div class="detail-row" id="row-dep-delay" style="{{ '' if current.dep_line else 'display:none' }}">
+            <span class="k">Departure</span>
+            <span class="v {{ current.dep_line.state if current.dep_line else '' }}" id="v-dep-delay">
+              {%- if current.dep_line %}<span class="tl-time">{{ current.dep_line.time }}</span>
+              {%- if current.dep_line.note or current.dep_line.was %}<span class="tl-note">{{ current.dep_line.note or '' }}{% if current.dep_line.note and current.dep_line.was %} &middot; {% endif %}{% if current.dep_line.was %}was {{ current.dep_line.was }}{% endif %}</span>{% endif %}
+              {%- endif %}
+            </span>
           </div>
+          <div class="detail-row" id="row-arr-delay" style="{{ '' if current.arr_line else 'display:none' }}">
+            <span class="k">Arrival</span>
+            <span class="v {{ current.arr_line.state if current.arr_line else '' }}" id="v-arr-delay">
+              {%- if current.arr_line %}<span class="tl-time">{{ current.arr_line.time }}</span>
+              {%- if current.arr_line.note or current.arr_line.was %}<span class="tl-note">{{ current.arr_line.note or '' }}{% if current.arr_line.note and current.arr_line.was %} &middot; {% endif %}{% if current.arr_line.was %}was {{ current.arr_line.was }}{% endif %}</span>{% endif %}
+              {%- endif %}
+            </span>
+          </div>
+          <div class="detail-row" id="row-gate-dep" style="{{ '' if (current.gates and current.gates.origin_gate) else 'display:none' }}">
+            <span class="k">{{ current.origin }} gate</span>
+            <span class="v" id="v-gate-dep">{{ current.gates.origin_gate if current.gates else '' }}{% if current.gates and current.gates.origin_terminal %} &middot; Terminal {{ current.gates.origin_terminal }}{% endif %}</span>
+          </div>
+          <div class="detail-row" id="row-gate-arr" style="{{ '' if (current.gates and current.gates.dest_gate) else 'display:none' }}">
+            <span class="k">{{ current.destination }} gate</span>
+            <span class="v" id="v-gate-arr">{{ current.gates.dest_gate if current.gates else '' }}{% if current.gates and current.gates.dest_terminal %} &middot; Terminal {{ current.gates.dest_terminal }}{% endif %}</span>
+          </div>
+          <div class="detail-row" id="row-baggage" style="{{ '' if (current.gates and current.gates.baggage) else 'display:none' }}">
+            <span class="k">Baggage</span>
+            <span class="v" id="v-baggage">{{ current.gates.baggage if current.gates else '' }}</span>
+          </div>
+          <div class="detail-row" id="row-closed" style="{{ '' if current.closed else 'display:none' }}">
+            <span class="k">Closed out</span>
+            <span class="v" id="v-closed">{{ current.closed_by|replace('_',' ') if current.closed_by else '' }}</span>
+          </div>
+          <div class="detail-row" id="row-arrsrc" style="{{ '' if current.arrival_source else 'display:none' }}">
+            <span class="k">Arrival time from</span>
+            <span class="v" id="v-arrsrc">{{ current.arrival_source if current.arrival_source else '' }}</span>
+          </div>
+          <div class="detail-row" id="row-updated" style="{{ '' if current.enriched else 'display:none' }}">
+            <span class="k">Airline data</span>
+            <span class="v" id="v-updated" data-ago="{{ current.enriched_at_iso or '' }}">{{ current.enriched_at or '' }}</span>
+          </div>
+          <div class="detail-row" id="row-diverted" style="{{ '' if current.diversion else 'display:none' }}">
+            <span class="k">Diverted to</span>
+            <span class="v late" id="v-diverted">{{ current.diversion.diverted_to if current.diversion else '' }}</span>
+          </div>
+        </div>
+        </div>
+        <div class="buttons">
+          {% if settings.show_flightaware %}
+          <a class="btn" data-fa-link href="{{ current.links.flightaware }}" target="_blank" rel="noopener">FlightAware</a>
           {% endif %}
-          {% else %}
-          No live ADS-B position right now
+          {% if settings.show_fr24 %}
+          <a class="btn {% if settings.show_flightaware %}secondary{% endif %}" data-fr24-link href="{{ current.links.fr24 }}" target="_blank" rel="noopener">FlightRadar24</a>
           {% endif %}
         </div>
+    
       </div>
-      <div class="detail-block" id="flight-detail" style="{{ '' if current.enriched else 'display:none' }}">
-        <h3>Flight detail</h3>
-        {# Two rows, not three. Each carries its own time AND how far off it
-           ran, so nothing has to be cross-referenced against a separate
-           "Scheduled" line further down. #}
-        <div class="detail-row" id="row-dep-delay" style="{{ '' if current.dep_line else 'display:none' }}">
-          <span class="k">Departure</span>
-          <span class="v {{ current.dep_line.state if current.dep_line else '' }}" id="v-dep-delay">
-            {%- if current.dep_line %}<span class="tl-time">{{ current.dep_line.time }}</span>
-            {%- if current.dep_line.note or current.dep_line.was %}<span class="tl-note">{{ current.dep_line.note or '' }}{% if current.dep_line.note and current.dep_line.was %} &middot; {% endif %}{% if current.dep_line.was %}was {{ current.dep_line.was }}{% endif %}</span>{% endif %}
-            {%- endif %}
-          </span>
-        </div>
-        <div class="detail-row" id="row-arr-delay" style="{{ '' if current.arr_line else 'display:none' }}">
-          <span class="k">Arrival</span>
-          <span class="v {{ current.arr_line.state if current.arr_line else '' }}" id="v-arr-delay">
-            {%- if current.arr_line %}<span class="tl-time">{{ current.arr_line.time }}</span>
-            {%- if current.arr_line.note or current.arr_line.was %}<span class="tl-note">{{ current.arr_line.note or '' }}{% if current.arr_line.note and current.arr_line.was %} &middot; {% endif %}{% if current.arr_line.was %}was {{ current.arr_line.was }}{% endif %}</span>{% endif %}
-            {%- endif %}
-          </span>
-        </div>
-        <div class="detail-row" id="row-gate-dep" style="{{ '' if (current.gates and current.gates.origin_gate) else 'display:none' }}">
-          <span class="k">{{ current.origin }} gate</span>
-          <span class="v" id="v-gate-dep">{{ current.gates.origin_gate if current.gates else '' }}{% if current.gates and current.gates.origin_terminal %} &middot; Terminal {{ current.gates.origin_terminal }}{% endif %}</span>
-        </div>
-        <div class="detail-row" id="row-gate-arr" style="{{ '' if (current.gates and current.gates.dest_gate) else 'display:none' }}">
-          <span class="k">{{ current.destination }} gate</span>
-          <span class="v" id="v-gate-arr">{{ current.gates.dest_gate if current.gates else '' }}{% if current.gates and current.gates.dest_terminal %} &middot; Terminal {{ current.gates.dest_terminal }}{% endif %}</span>
-        </div>
-        <div class="detail-row" id="row-baggage" style="{{ '' if (current.gates and current.gates.baggage) else 'display:none' }}">
-          <span class="k">Baggage</span>
-          <span class="v" id="v-baggage">{{ current.gates.baggage if current.gates else '' }}</span>
-        </div>
-        <div class="detail-row" id="row-closed" style="{{ '' if current.closed else 'display:none' }}">
-          <span class="k">Closed out</span>
-          <span class="v" id="v-closed">{{ current.closed_by|replace('_',' ') if current.closed_by else '' }}</span>
-        </div>
-        <div class="detail-row" id="row-arrsrc" style="{{ '' if current.arrival_source else 'display:none' }}">
-          <span class="k">Arrival time from</span>
-          <span class="v" id="v-arrsrc">{{ current.arrival_source if current.arrival_source else '' }}</span>
-        </div>
-        <div class="detail-row" id="row-updated" style="{{ '' if current.enriched else 'display:none' }}">
-          <span class="k">Airline data</span>
-          <span class="v" id="v-updated" data-ago="{{ current.enriched_at_iso or '' }}">{{ current.enriched_at or '' }}</span>
-        </div>
-        <div class="detail-row" id="row-diverted" style="{{ '' if current.diversion else 'display:none' }}">
-          <span class="k">Diverted to</span>
-          <span class="v late" id="v-diverted">{{ current.diversion.diverted_to if current.diversion else '' }}</span>
-        </div>
-      </div>
-      </div>
-      <div class="buttons">
-        {% if settings.show_flightaware %}
-        <a class="btn" data-fa-link href="{{ current.links.flightaware }}" target="_blank" rel="noopener">FlightAware</a>
-        {% endif %}
-        {% if settings.show_fr24 %}
-        <a class="btn {% if settings.show_flightaware %}secondary{% endif %}" data-fr24-link href="{{ current.links.fr24 }}" target="_blank" rel="noopener">FlightRadar24</a>
-        {% endif %}
-      </div>
-    </div>
+</div>
     <div class="card-more" id="expand-hint" role="button" tabindex="0"
          aria-expanded="false" aria-controls="expand-details">
-      <span id="expand-hint-label">Flight details</span><span class="caret" aria-hidden="true">&#9662;</span>
+      <span id="expand-hint-label">Flight Details</span><span class="caret" aria-hidden="true">&#9662;</span>
     </div>
   </div>
 
@@ -940,27 +970,81 @@
       // NOTE: this no longer touches #expand-wrap. It used to open the card's
       // detail AND the whole flight list on one switch, so the schedule was
       // invisible on first load. The list is always rendered now.
-      function setExpanded(open) {
-        details.classList.toggle('open', open);
-        card.classList.toggle('expanded', open);
-        if (hintLabel) hintLabel.textContent = open ? 'Hide details' : 'Flight details';
-        hint.setAttribute('aria-expanded', open ? 'true' : 'false');
-        // Opening: bring the now-tall card into view. Closing: re-park it at
-        // the bottom over the map and go back to the top. Both guarded,
-        // because setExpanded(false) runs once at start-up before the layout
-        // script has defined itself.
+      // Slides the panel between 0 and its natural height. The height is
+      // measured rather than guessed: set it to auto, read it, put it back.
+      // A CSS-only version would need a fixed max-height, which either cuts
+      // long panels off or makes short ones pause before they appear.
+      //
+      // `instant` is used for the one call at start-up, which sets the
+      // closed state before anyone is looking and must not animate.
+      var slideTimer = null;
+      function slidePanel(open, instant) {
+        if (slideTimer) { clearTimeout(slideTimer); slideTimer = null; }
+        details.classList.remove('animating');
+
+        if (instant) {
+          details.classList.toggle('open', open);
+          details.style.height = '';
+          return;
+        }
+
         if (open) {
+          details.classList.add('open');
+          details.style.height = 'auto';
+          var target = details.getBoundingClientRect().height;
+          details.style.height = '0px';
+          void details.offsetHeight;          // force the 0 to take effect
+          details.classList.add('animating');
+          details.style.height = target + 'px';
+          // Back to auto once it arrives, so the panel can still grow when
+          // live data lands in it while it is open. Pinned to a stale pixel
+          // height, later content would be clipped.
+          slideTimer = setTimeout(function() {
+            details.style.height = '';
+            details.classList.remove('animating');
+            slideTimer = null;
+          }, 300);
+        } else {
+          details.style.height = details.getBoundingClientRect().height + 'px';
+          void details.offsetHeight;
+          details.classList.add('animating');
+          details.style.height = '0px';
+          slideTimer = setTimeout(function() {
+            details.classList.remove('open', 'animating');
+            details.style.height = '';
+            slideTimer = null;
+          }, 300);
+        }
+      }
+
+      function setExpanded(open, instant) {
+        slidePanel(open, instant);
+        card.classList.toggle('expanded', open);
+        if (hintLabel) hintLabel.textContent = open ? 'Hide Details' : 'Flight Details';
+        hint.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open) {
+          // Freeze the fade BEFORE scrolling, so the map never flickers away
+          // for a frame as the page moves down to the card.
+          if (window._ptPaintReveal) window._ptPaintReveal();
           if (window._ptScrollToCard) window._ptScrollToCard();
         } else {
-          if (window._ptLayoutHero) window._ptLayoutHero();
-          // Closing puts the card back over the map, so go back up to it —
-          // otherwise you are left scrolled into the flight list with the
-          // card you just closed somewhere above you.
+          // Order matters on the way out. The fade is driven by scroll
+          // position, so unfreezing it while the page is still scrolled down
+          // would show a full-strength schedule for a frame before the
+          // scroll-back caught up. Return to the top FIRST, then unfreeze,
+          // by which point the resting position gives the same map-only view
+          // the card is sliding back onto.
+          //
+          // Instant rather than smooth for the same reason: a smooth glide
+          // back would spend a few hundred milliseconds at scroll positions
+          // that the now-unfrozen fade would happily render as "schedule".
           if (window._ptScrolledOpen) {
             window._ptScrolledOpen = false;
-            try { window.scrollTo({ top: 0, behavior: 'smooth' }); }
+            try { window.scrollTo({ top: 0, behavior: 'auto' }); }
             catch (e) { window.scrollTo(0, 0); }
           }
+          if (window._ptLayoutHero) window._ptLayoutHero();
+          if (window._ptPaintReveal) window._ptPaintReveal();
         }
       }
 
@@ -986,7 +1070,7 @@
         header.style.cursor = 'pointer';
       }
 
-      setExpanded(false);
+      setExpanded(false, true);   // instant: sets the closed state before first paint
     })();
 
     // Called by the inline onclick on #past-toggle, so it has to be a real
@@ -1303,17 +1387,57 @@
         window.dispatchEvent(new Event('pt:detail-rendered'));
       }
 
+      // Slide a row's panel open or shut. Mirrors the big card's panel.
+      // The height is released back to auto once it settles, because the
+      // content arrives from the network AFTER the slide starts — the
+      // skeleton is what gets measured, and a panel pinned to the
+      // skeleton's height would clip the real detail when it lands.
+      function slideRow(panel, open) {
+        var t = panel._ptTimer;
+        if (t) { clearTimeout(t); panel._ptTimer = null; }
+        panel.classList.remove('animating');
+        if (open) {
+          panel.removeAttribute('hidden');
+          panel.style.height = 'auto';
+          var target = panel.getBoundingClientRect().height;
+          panel.style.height = '0px';
+          void panel.offsetHeight;
+          panel.classList.add('animating');
+          panel.style.height = target + 'px';
+          panel._ptTimer = setTimeout(function() {
+            panel.style.height = '';
+            panel.classList.remove('animating');
+            panel._ptTimer = null;
+          }, 260);
+        } else {
+          panel.style.height = panel.getBoundingClientRect().height + 'px';
+          void panel.offsetHeight;
+          panel.classList.add('animating');
+          panel.style.height = '0px';
+          panel._ptTimer = setTimeout(function() {
+            panel.setAttribute('hidden', '');
+            panel.classList.remove('animating');
+            panel.style.height = '';
+            panel._ptTimer = null;
+          }, 260);
+        }
+      }
+
       function toggleLegDetail(head) {
         var legId = head.getAttribute('data-detail-for');
         var panel = document.getElementById('rd-' + legId);
         if (!panel) return;
-        var opening = panel.hasAttribute('hidden');
+        // Mid-close counts as closed, so a second tap re-opens rather than
+        // being swallowed by the animation still running.
+        var opening = panel.hasAttribute('hidden') ||
+                      (panel.classList.contains('animating') &&
+                       panel.style.height === '0px');
         if (!opening) {
-          panel.setAttribute('hidden', '');
+          slideRow(panel, false);
           head.setAttribute('aria-expanded', 'false');
           return;
         }
-        panel.removeAttribute('hidden');
+        slideRow(panel, true);
         head.setAttribute('aria-expanded', 'true');
         if (panel.getAttribute('data-loaded') === '1') return;
         panel.setAttribute('data-loaded', '1');
@@ -1370,9 +1494,31 @@
       // Opt in only now that we know the script is alive.
       reveal.style.opacity = '0';
       const RANGE = 190;
+      const cardEl = document.getElementById('collapsed-card');
       let queued = false;
+      let disabled = false;
       function paint() {
         queued = false;
+        // Turned off for good when the map failed to load. Without this,
+        // opening and closing the details panel called paint() directly and
+        // re-hid a schedule that has nothing to hide behind.
+        if (disabled) return;
+        // WITH THE DETAILS PANEL OPEN, SCROLLING IS NOT "SCROLLING AWAY".
+        // Reading a tall card means the page moves, but the intent is still
+        // "look at this flight" — not "show me the schedule". Driving the
+        // fade off raw scroll position meant opening the panel dissolved the
+        // map and pulled the next few flights into view underneath it,
+        // neither of which anyone asked for.
+        //
+        // So while it is open the effect is simply frozen at rest: map fully
+        // visible, schedule fully hidden, however far down the card you are.
+        if (cardEl && cardEl.classList.contains('expanded')) {
+          scrim.style.opacity = '0';
+          reveal.style.opacity = '0';
+          reveal.style.pointerEvents = 'none';
+          if (hud) { hud.style.opacity = '1'; hud.style.pointerEvents = ''; }
+          return;
+        }
         const p = Math.min(1, Math.max(0, (window.scrollY || 0) / RANGE));
         scrim.style.opacity = p;
         reveal.style.opacity = p;
@@ -1393,10 +1539,16 @@
       window.addEventListener('resize', paint);
       paint();
 
+      // Called the moment the details panel opens or closes, so the freeze
+      // above takes effect on the same frame rather than waiting for the
+      // next scroll event.
+      window._ptPaintReveal = paint;
+
       // If the map never comes up there is nothing to reveal from behind,
       // so the effect stops being an effect and becomes a way of hiding the
       // schedule for no reason. The map block calls this on failure.
       window._ptRevealOff = function() {
+        disabled = true;
         reveal.style.opacity = '1';
         reveal.style.pointerEvents = 'auto';
         scrim.style.opacity = '0';

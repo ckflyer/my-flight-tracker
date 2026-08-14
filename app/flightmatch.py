@@ -71,6 +71,16 @@ ACQUIRE_RADIUS_NM = float(os.environ.get("ACQUIRE_RADIUS_NM", "30"))
 ACQUIRE_AFTER_DEP_MINUTES = float(os.environ.get("ACQUIRE_AFTER_DEP_MINUTES", "45"))
 ACQUIRE_BEFORE_DEP_MINUTES = float(os.environ.get("ACQUIRE_BEFORE_DEP_MINUTES", "20"))
 
+# How far off the direct origin-to-destination line an aircraft may sit and
+# still be accepted as flying that leg, in nautical miles of extra distance
+# travelled. Generous enough for real routings, holds and weather
+# deviations; far too tight for an aeroplane on an unrelated route that
+# happens to share the callsign.
+EN_ROUTE_SLACK_NM = float(os.environ.get("EN_ROUTE_SLACK_NM", "120"))
+# How long past scheduled arrival an already-airborne leg may still be
+# picked up, matching the schedule module's own grace for a current leg.
+EN_ROUTE_GRACE = timedelta(hours=3)
+
 GROUND_STOP_KTS = 5.0
 # Touchdown confirmation. A single frame reporting alt_baro="ground" on
 # approach would otherwise fire wheels-down early, so it has to hold this
@@ -358,6 +368,33 @@ def evaluate(leg: FlightLeg, state: Optional[Dict[str, Any]],
         if hex_id:
             acquire_aircraft(leg, hex_id, now)
         return Verdict(True)
+
+    # ALREADY UNDER WAY. The two tests above both assume you are watching
+    # from before pushback: near the origin, or inside the departure window.
+    # Neither holds for a leg added to the schedule after it left — the
+    # aeroplane is hundreds of miles from the origin and the window shut
+    # long ago, so the leg could never acquire and simply never tracked.
+    #
+    # An aircraft on the right callsign, sitting on the line between this
+    # leg's origin and destination, and closer to the destination than it
+    # started, is that flight. Being on a corridor between two specific
+    # airports is a far stronger signal than proximity to either one.
+    di = leg.dest_info
+    if di is not None and di.lat is not None:
+        d_dest = haversine_nm(lat, lon, di.lat, di.lon)
+        route_nm = haversine_nm(oi.lat, oi.lon, di.lat, di.lon)
+        # Sum-of-legs vs direct distance: on a straight line the two match,
+        # and the slack allows for real routings, holds and weather
+        # deviations without admitting an aircraft somewhere else entirely.
+        detour = (d_origin + d_dest) - route_nm
+        arr_utc = leg.arr_datetime_utc()
+        in_window = bool(dep_utc and arr_utc
+                         and dep_utc - timedelta(minutes=ACQUIRE_BEFORE_DEP_MINUTES)
+                         <= now <= arr_utc + EN_ROUTE_GRACE)
+        if in_window and route_nm > 0 and detour <= EN_ROUTE_SLACK_NM and d_dest < route_nm:
+            if hex_id:
+                acquire_aircraft(leg, hex_id, now)
+            return Verdict(True)
 
     return Verdict(False, f"{d_origin:.0f}nm from {leg.origin}, and past the departure "
                           f"window — waiting for an aircraft at the origin rather than "
