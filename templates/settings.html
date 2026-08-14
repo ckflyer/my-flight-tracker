@@ -282,6 +282,21 @@
 
   {% if is_pilot and is_admin %}
   <div class="card">
+    <h2>Admin · Live tracking</h2>
+    <p style="color:var(--muted); font-size:0.85rem; margin:0 0 0.75rem;">
+      Check whether ADS-B is actually reaching the app, and manage which
+      feeds it uses. Worth opening first whenever a flight shows no live
+      position — it names the failing step instead of leaving you guessing.
+    </p>
+    <a href="/admin/diagnostics"
+       style="display:inline-block; padding:0.5rem 0.9rem; border-radius:8px;
+              border:1px solid var(--border); color:var(--accent);
+              text-decoration:none; font-size:0.875rem; font-weight:600;">
+      Open diagnostics &rarr;
+    </a>
+  </div>
+
+  <div class="card">
     <h2>Admin · Registered pilots</h2>
     <div class="table-scroll">
     <table style="width:100%; border-collapse:collapse; font-size:0.85rem;">

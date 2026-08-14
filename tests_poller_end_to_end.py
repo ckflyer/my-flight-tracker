@@ -182,6 +182,71 @@ for _label, _lat, _lon in (("over Chicago", 41.9, -87.6),
     check(f"an unrelated aircraft {_label} is still refused",
           not _ev(_enroute_leg(), {"icao24": "abc123", "lat": _lat, "lon": _lon}, _now).accepted)
 
+print("\n-- a dead ADS-B feed must not look like empty sky --")
+# airplanes.live closed its public API and began answering HTTP 403. The old
+# client treated any non-200 as "no aircraft", so every flight silently had
+# no tracking while the rest of the app looked perfectly healthy.
+import json as _json, threading as _th
+from http.server import BaseHTTPRequestHandler as _BH, HTTPServer as _HS
+import app.airplaneslive as _al
+import app.livesource as _ls
+
+_AC = {"hex": "a1b2c3", "flight": "ENY3898 ", "lat": 32.9, "lon": -97.0,
+       "alt_baro": 15000, "gs": 320, "track": 90, "r": "N204NN",
+       "t": "E75L", "seen_pos": 2.0}
+
+def _srv(mode):
+    class H(_BH):
+        def log_message(self, *a): pass
+        def do_GET(self):
+            if mode == "403":
+                self.send_response(403); self.end_headers()
+                self.wfile.write(b'{"error":"contact us"}')
+            else:
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json"); self.end_headers()
+                self.wfile.write(_json.dumps({"ac": [_AC]}).encode())
+    sv = _HS(("127.0.0.1", 0), H)
+    _th.Thread(target=sv.serve_forever, daemon=True).start()
+    return "http://127.0.0.1:%d" % sv.server_port
+
+_dead, _good = _srv("403"), _srv("good")
+_saved = _al.load_endpoints()
+try:
+    _al.save_endpoints([{"url": _dead, "enabled": True, "api_key": ""}])
+    _ls.reset_cache()
+    check("a 403-only feed yields nothing", _al.fetch_state("ENY3898") is None)
+
+    _al.save_endpoints([{"url": _dead, "enabled": True, "api_key": ""},
+                        {"url": _good, "enabled": True, "api_key": "KEY42"}])
+    _ls.reset_cache()
+    st = _al.fetch_state("ENY3898")
+    check("...but a healthy feed behind it is used instead", st is not None)
+    check("...and returns the aircraft",
+          st and st.get("registration") == "N204NN", str(st))
+    check("...and the working feed is remembered", _al._preferred == _good)
+
+    # Unticking a feed must actually stop it being contacted, not merely
+    # grey it out on the page.
+    _al.save_endpoints([{"url": _dead, "enabled": True, "api_key": ""},
+                        {"url": _good, "enabled": False, "api_key": ""}])
+    _ls.reset_cache()
+    check("a disabled feed is skipped entirely",
+          _al.fetch_state("ENY3898") is None)
+
+    # Deleting is done by clearing the URL, so an empty row must vanish
+    # rather than be stored as a blank endpoint.
+    _al.save_endpoints([{"url": _good, "enabled": True, "api_key": ""},
+                        {"url": "", "enabled": True, "api_key": ""}])
+    check("a cleared row is dropped rather than saved blank",
+          [e["url"] for e in _al.load_endpoints()] == [_good])
+
+    check("probe reports a dead feed for the diagnostics page",
+          _al.probe(_dead)[0] == 403)
+    check("...and a healthy one", _al.probe(_good)[:2] == (200, 1))
+finally:
+    _al.save_endpoints(_saved); _al._preferred = None; _ls.reset_cache()
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:
     for f in FAIL:

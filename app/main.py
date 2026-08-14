@@ -1066,6 +1066,36 @@ async def calendar_page(request: Request):
 # Admin (schedule) — pilot only
 # ---------------------------------------------------------------------------
 
+@app.post("/admin/diagnostics/endpoints")
+async def admin_diagnostics_save(request: Request):
+    """Save the ADS-B feed list edited on the diagnostics page.
+
+    Rows arrive as url_N / key_N / enabled_N. A row whose URL has been
+    cleared is dropped, which is how deleting works — no separate button and
+    no row indices to keep in sync.
+    """
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    from . import airplaneslive as _al
+
+    form = await request.form()
+    rows = []
+    for i in range(64):
+        if ("url_%d" % i) not in form:
+            continue
+        url = (form.get("url_%d" % i) or "").strip()
+        if not url:
+            continue                      # cleared = deleted
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+        rows.append({"url": url,
+                     "api_key": (form.get("key_%d" % i) or "").strip(),
+                     "enabled": form.get("enabled_%d" % i) is not None})
+    _al.save_endpoints(rows)
+    return RedirectResponse(url="/admin/diagnostics", status_code=303)
+
+
 @app.get("/admin/diagnostics", response_class=HTMLResponse)
 async def admin_diagnostics(request: Request):
     """Why is there no ADS-B? Answers it on one page instead of in the logs.
@@ -1110,31 +1140,79 @@ async def admin_diagnostics(request: Request):
     # A direct, uncached probe of the provider. This is the single most
     # useful line on the page: if the endpoint has moved or is unreachable,
     # everything downstream is None and nothing else here will make sense.
-    out.append("<h2>ADS-B provider reachable?</h2><table>")
-    row("base URL", _al.BASE_URL)
-    probe_cs = "AAL100"
-    t0 = _time.time()
-    try:
-        import requests as _rq
-        r = _rq.get("%s/callsign/%s" % (_al.BASE_URL, probe_cs), timeout=12)
-        row("probe", "GET %s/callsign/%s" % (_al.BASE_URL, probe_cs))
-        row("HTTP status", r.status_code, r.status_code == 200)
-        row("took", "%.2fs" % (_time.time() - t0))
-        body = r.text[:400]
-        row("response starts", body if body.strip() else "(empty)")
-        try:
-            j = r.json()
-            n = len(j.get("ac") or j.get("aircraft") or [])
-            row("aircraft in response", n)
-            row("recognised shape",
-                isinstance(j, dict) and ("ac" in j or "aircraft" in j),
-                isinstance(j, dict) and ("ac" in j or "aircraft" in j))
-        except Exception as e:
-            row("JSON parse", "FAILED: %s" % e, False)
-    except Exception as e:
-        row("probe", "FAILED: %s" % e, False)
-        row("meaning", "the container cannot reach this host at all", False)
+    # Every configured feed is probed, not just the first, and each row is
+    # editable. When a feed shuts its doors — as airplanes.live did — the
+    # fix is toggling to another line here rather than a redeploy.
+    locked = _al.endpoints_are_locked()
+    eps = _al.load_endpoints()
+    out.append("<h2>ADS-B feeds</h2>")
+    if locked:
+        out.append("<p style='color:#c5221f'>Pinned by <code>ADSB_ENDPOINTS</code> "
+                   "or <code>AIRPLANES_LIVE_BASE</code> in docker-compose.yml, so "
+                   "edits here are ignored. Remove those lines to manage feeds "
+                   "from this page.</p>")
+    out.append("<form method='post' action='/admin/diagnostics/endpoints'>")
+    out.append("<table style='width:100%;border-collapse:collapse'>"
+               "<tr style='text-align:left;color:#5f6368;font-size:12px'>"
+               "<th style='padding:4px 8px 4px 0'>On</th>"
+               "<th style='padding:4px 8px 4px 0'>Feed URL</th>"
+               "<th style='padding:4px 8px 4px 0'>API key (blank if none)</th>"
+               "<th style='padding:4px 0'>Status</th></tr>")
+    working = 0
+    for i, e in enumerate(eps):
+        status, count, msg = _al.probe(e["url"], api_key=e.get("api_key") or "")
+        ok = (status == 200 and count is not None)
+        if ok and e.get("enabled", True):
+            working += 1
+        label = ("HTTP %s" % status) if status else "no response"
+        detail = "%s — %s" % (label, ("%d aircraft" % count)
+                              if count is not None else msg)
+        checked = " checked" if e.get("enabled", True) else ""
+        out.append(
+            "<tr style='border-top:1px solid #e8eaed'>"
+            "<td style='padding:8px 8px 8px 0'>"
+            "<input type='checkbox' name='enabled_%d'%s></td>"
+            "<td style='padding:8px 8px 8px 0'>"
+            "<input name='url_%d' value='%s' style='width:100%%;min-width:210px;"
+            "padding:5px;font:12px monospace'></td>"
+            "<td style='padding:8px 8px 8px 0'>"
+            "<input name='key_%d' value='%s' placeholder='none' "
+            "style='width:100%%;min-width:110px;padding:5px;font:12px monospace'>"
+            "</td>"
+            "<td style='padding:8px 0;font-size:12px;%s'>%s</td></tr>"
+            % (i, checked, i, _html.escape(e["url"]), i,
+               _html.escape(e.get("api_key") or ""),
+               "color:#137333" if ok else "color:#c5221f;font-weight:600",
+               _html.escape(detail))
+        )
+    # One always-blank row, so adding a feed needs no separate button.
+    n = len(eps)
+    out.append(
+        "<tr style='border-top:1px solid #e8eaed'>"
+        "<td style='padding:8px 8px 8px 0'><input type='checkbox' "
+        "name='enabled_%d' checked></td>"
+        "<td style='padding:8px 8px 8px 0'><input name='url_%d' value='' "
+        "placeholder='https://… add a feed' style='width:100%%;min-width:210px;"
+        "padding:5px;font:12px monospace'></td>"
+        "<td style='padding:8px 8px 8px 0'><input name='key_%d' value='' "
+        "placeholder='none' style='width:100%%;min-width:110px;padding:5px;"
+        "font:12px monospace'></td>"
+        "<td style='padding:8px 0;font-size:12px;color:#5f6368'>new</td></tr>"
+        % (n, n, n))
     out.append("</table>")
+    out.append("<p style='margin-top:12px'>"
+               "<button type='submit' style='padding:8px 16px;font-size:14px'>"
+               "Save feeds &amp; re-test</button> "
+               "<span style='color:#5f6368;font-size:12px'>"
+               "Clear a URL to delete that row. Untick to keep it but skip it."
+               "</span></p></form>")
+    out.append("<table>")
+    row("feeds working", "%d enabled and answering" % working, working > 0)
+    out.append("</table>")
+    if not working:
+        out.append("<p style='color:#c5221f'><b>No enabled feed is answering.</b> "
+                   "Every lookup returns nothing and no flight will show live "
+                   "tracking, however healthy the rest of the app looks.</p>")
 
     out.append("<h2>Your active flights</h2>")
     active = _poller.active_flights()

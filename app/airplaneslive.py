@@ -19,14 +19,120 @@ apply no matter which provider is plugged in.
 """
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Dict, Optional
 
 import requests
 
-# Overridable so tests can point at a local fixture server. Not a user
-# setting — there's no reason for the pilot to change this.
-BASE_URL = os.environ.get("AIRPLANES_LIVE_BASE", "https://api.airplanes.live/v2")
+from .db import get_connection
+
+# WHY THERE IS A LIST HERE RATHER THAN ONE URL.
+#
+# airplanes.live closed its public API. The endpoint still answers, but with
+# HTTP 403 and a message asking you to email them for access — so every
+# lookup silently returned None and no aircraft was ever tracked, while the
+# schedule and AeroAPI carried on working normally. Nothing in this app was
+# broken; the door was shut from the other side.
+#
+# Several other feeds expose the SAME response shape, because they all run
+# the same underlying tar1090/re-api software. That means one parser serves
+# all of them and switching is a matter of which host answers, not new code.
+# Enabled feeds are tried in order and the first that works is remembered.
+#
+# The list lives in the database so it can be edited from the diagnostics
+# page without a redeploy — the whole point being that when a feed shuts
+# down, the fix is choosing a different line, not shipping code.
+DEFAULT_ENDPOINTS = [
+    {"url": "https://api.adsb.lol/v2", "enabled": True, "api_key": ""},
+    {"url": "https://opendata.adsb.fi/api/v2", "enabled": True, "api_key": ""},
+    {"url": "https://api.airplanes.live/v2", "enabled": False, "api_key": ""},
+]
+
+_META_KEY = "adsb_endpoints"
+
+
+def _env_pin():
+    """Environment always wins, so a deployment can be forced from compose."""
+    pinned = os.environ.get("AIRPLANES_LIVE_BASE", "").strip()
+    if pinned:
+        return [{"url": pinned.rstrip("/"), "enabled": True,
+                 "api_key": os.environ.get("ADSB_API_KEY", "").strip(),
+                 "locked": True}]
+    raw = os.environ.get("ADSB_ENDPOINTS", "").strip()
+    if raw:
+        key = os.environ.get("ADSB_API_KEY", "").strip()
+        return [{"url": u.strip().rstrip("/"), "enabled": True,
+                 "api_key": key, "locked": True}
+                for u in raw.split(",") if u.strip()]
+    return None
+
+
+def load_endpoints():
+    """Configured feeds, newest state from the database.
+
+    Read on every sweep rather than cached at import, so an edit on the
+    diagnostics page takes effect on the next poll instead of the next
+    restart.
+    """
+    pinned = _env_pin()
+    if pinned:
+        return pinned
+    try:
+        conn = get_connection()
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS app_meta ("
+                         "key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            r = conn.execute("SELECT value FROM app_meta WHERE key = ?",
+                             (_META_KEY,)).fetchone()
+        finally:
+            conn.close()
+        if r and r["value"]:
+            data = json.loads(r["value"])
+            out = []
+            for e in data:
+                if isinstance(e, dict) and e.get("url"):
+                    out.append({"url": str(e["url"]).rstrip("/"),
+                                "enabled": bool(e.get("enabled", True)),
+                                "api_key": str(e.get("api_key") or "")})
+            if out:
+                return out
+    except Exception as e:
+        print(f"[adsb] could not read endpoint list: {e}")
+    return [dict(e) for e in DEFAULT_ENDPOINTS]
+
+
+def save_endpoints(endpoints) -> None:
+    clean = []
+    for e in endpoints:
+        url = (e.get("url") or "").strip().rstrip("/")
+        if not url:
+            continue
+        clean.append({"url": url,
+                      "enabled": bool(e.get("enabled", True)),
+                      "api_key": (e.get("api_key") or "").strip()})
+    conn = get_connection()
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS app_meta ("
+                     "key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        conn.execute("INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)",
+                     (_META_KEY, json.dumps(clean)))
+        conn.commit()
+    finally:
+        conn.close()
+    global _preferred
+    _preferred = None      # re-discover against the new list
+
+
+def endpoints_are_locked() -> bool:
+    """True when compose is dictating the list, so the UI can say so
+    instead of silently ignoring edits."""
+    return _env_pin() is not None
+
+
+# Which endpoint last answered. Tried first next time so a working feed is
+# not re-discovered on every single sweep.
+_preferred: Optional[str] = None
 
 REQUEST_TIMEOUT = 12
 
@@ -138,39 +244,108 @@ def normalize(ac: Dict[str, Any]) -> Dict[str, Any]:
         "aircraft_type": describe_type(type_code),
         "squawk": (ac.get("squawk") or "").strip() or None,
         "position_age_s": position_age,
-        "source": "airplanes.live",
+        "source": _preferred or "adsb",
     }
 
 
-def fetch_state(callsign: str) -> Optional[Dict[str, Any]]:
-    """Live state for one callsign, or None if it isn't currently tracked.
-
-    Returns None on any failure (offline, timeout, rate limited, malformed
-    response). Callers treat "no data" and "lookup failed" identically —
-    both mean the page falls back to schedule-based status — so there's
-    nothing useful to distinguish here.
-    """
-    cs = (callsign or "").strip().upper()
-    if not cs:
-        return None
+def probe(base: str, callsign: str = "AAL100", api_key: str = ""):
+    """One raw request, for the diagnostics page. Returns
+    (status_code|None, aircraft_count|None, short_message)."""
     try:
-        r = requests.get(f"{BASE_URL}/callsign/{cs}", timeout=REQUEST_TIMEOUT)
-        if r.status_code == 429:
-            print("[airplaneslive] rate limited")
-            return None
-        r.raise_for_status()
+        r = _get(base, callsign, api_key)
+    except Exception as e:
+        return None, None, f"unreachable: {e}"
+    if r.status_code != 200:
+        body = (r.text or "").strip().replace("\n", " ")
+        return r.status_code, None, body[:180] or "(empty response)"
+    try:
         data = r.json()
     except Exception as e:
-        print(f"[airplaneslive] fetch error: {e}")
-        return None
+        return r.status_code, None, f"not JSON: {e}"
+    if not isinstance(data, dict):
+        return r.status_code, None, "unexpected shape (not an object)"
+    ac = data.get("ac") or data.get("aircraft")
+    if ac is None:
+        return r.status_code, None, "no 'ac' list — different API format"
+    return r.status_code, len(ac), "ok"
 
+
+def _get(base: str, cs: str, api_key: str = ""):
+    headers = {"Accept": "application/json"}
+    if api_key:
+        # Sent both ways: providers in this family variously want a bearer
+        # token or their own header, and an unrecognised header is ignored.
+        headers["Authorization"] = f"Bearer {api_key}"
+        headers["api-auth"] = api_key
+    return requests.get(f"{base}/callsign/{cs}", timeout=REQUEST_TIMEOUT,
+                        headers=headers)
+
+
+def _parse(data) -> Optional[Dict[str, Any]]:
     if not isinstance(data, dict):
         return None
     ac = _first_with_position(data.get("ac") or data.get("aircraft") or [])
     if not ac:
         return None
-    try:
-        return normalize(ac)
-    except Exception as e:
-        print(f"[airplaneslive] parse error: {e}")
+    return normalize(ac)
+
+
+def fetch_state(callsign: str) -> Optional[Dict[str, Any]]:
+    """Live state for one callsign, or None if it isn't currently tracked.
+
+    Tries each configured feed until one answers usefully. A feed that
+    returns 403/404/error is skipped rather than treated as "no aircraft",
+    which is the distinction that made the airplanes.live shutdown look
+    like every flight simply having no ADS-B coverage.
+
+    Still returns None on total failure — callers treat "no data" and
+    "lookup failed" identically, since both mean falling back to the
+    schedule.
+    """
+    global _preferred
+    cs = (callsign or "").strip().upper()
+    if not cs:
         return None
+
+    order = [e for e in load_endpoints() if e.get("enabled", True)]
+    if _preferred:
+        order.sort(key=lambda e: e["url"] != _preferred)
+
+    last_error = None
+    for entry in order:
+        base = entry["url"]
+        try:
+            r = _get(base, cs, entry.get("api_key") or "")
+        except Exception as e:
+            last_error = f"{base}: {e}"
+            continue
+        if r.status_code == 429:
+            last_error = f"{base}: rate limited"
+            continue
+        if r.status_code != 200:
+            last_error = f"{base}: HTTP {r.status_code}"
+            continue
+        try:
+            data = r.json()
+        except Exception as e:
+            last_error = f"{base}: bad JSON ({e})"
+            continue
+        if not isinstance(data, dict) or (
+                data.get("ac") is None and data.get("aircraft") is None):
+            last_error = f"{base}: unrecognised response format"
+            continue
+
+        # This feed is healthy. Remember it even when this particular
+        # callsign has nothing flying — an empty list is a real answer.
+        if _preferred != base:
+            print(f"[adsb] using {base}")
+            _preferred = base
+        try:
+            return _parse(data)
+        except Exception as e:
+            print(f"[adsb] parse error from {base}: {e}")
+            return None
+
+    if last_error:
+        print(f"[adsb] no usable feed — last error: {last_error}")
+    return None

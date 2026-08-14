@@ -11,8 +11,20 @@ services:
       # dataset.
       - ./data:/app/data
     environment:
-      # Live tracking needs no credentials — Airplanes.live requires no API
-      # key or account.
+      # OPTIONAL. Which ADS-B feeds to use, in order. The app tries each
+      # until one answers and then sticks with it. Leave commented out to
+      # use the built-in list.
+      #
+      # airplanes.live closed its public API — it now answers HTTP 403 with
+      # a note asking you to email contact@airplanes.live for access. If you
+      # request and receive access, put it back at the front of this list.
+      # - ADSB_ENDPOINTS=https://api.adsb.lol/v2,https://opendata.adsb.fi/api/v2
+      #
+      # OPTIONAL. Only if a feed issues you credentials. Sent as a bearer
+      # token; leave unset for the open feeds, which need nothing.
+      # - ADSB_API_KEY=
+      #
+      # Check which feeds are answering at /admin/diagnostics.
       - TZ=${TZ:-America/Chicago}
       # OPTIONAL. Pins the session-signing key so logins survive absolutely
       # anything, including the database being rebuilt from scratch. Leave
