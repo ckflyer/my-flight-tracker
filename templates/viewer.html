@@ -286,9 +286,6 @@
       border-top: 1px dashed var(--border);
     }
     .row-detail.animating { transition: height 220ms cubic-bezier(0.4, 0, 0.2, 1); }
-    @media (prefers-reduced-motion: reduce) {
-      .row-detail.animating { transition: none; }
-    }
     .row-detail[hidden] { display: none; }
     .rd-row {
       display: flex; justify-content: space-between; gap: 0.75rem;
@@ -418,9 +415,6 @@
        pills while the card opens upward into the map. Any mismatch here and
        the Show/Hide row would drift during the slide. */
     .hero-space.animating { transition: height 260ms cubic-bezier(0.4, 0, 0.2, 1); }
-    @media (prefers-reduced-motion: reduce) {
-      .hero-space.animating { transition: none; }
-    }
 
     /* THE MAP AND THE HEADS-UP LAYER, and why both carry a z-index.
 
@@ -531,9 +525,6 @@
     /* A slide IS motion, so this one genuinely belongs behind the setting —
        unlike the old rule that used it to paint over the whole map. Panel
        still opens, just instantly. */
-    @media (prefers-reduced-motion: reduce) {
-      .expand-details.animating { transition: none; }
-    }
     .collapsed-card .flight-num { font-size: 1.3rem; }
     .collapsed-card .city-route {
       font-size: 1.25rem;
@@ -1044,8 +1035,15 @@
       }
 
       function setExpanded(open, instant) {
-        slidePanel(open, instant);
+        // CLASS FIRST, THEN SLIDE. slidePanel calls back into layout(), and
+        // layout() branches on this class — which clamp to use, and whether
+        // to re-frame the map. With the toggle after the slide, opening ran
+        // the whole layout as if the card were still shut: it re-fitted the
+        // route into the thin strip of map left above an open card (the map
+        // "zooming into nothing"), and closing skipped the re-fit that would
+        // have put it back.
         card.classList.toggle('expanded', open);
+        slidePanel(open, instant);
         if (hintLabel) hintLabel.textContent = open ? 'Hide Details' : 'Flight Details';
         hint.setAttribute('aria-expanded', open ? 'true' : 'false');
         // NOTHING SCROLLS HERE ANY MORE. The card grows upward from a fixed
@@ -1541,7 +1539,6 @@
       // Opt in only now that we know the script is alive.
       reveal.style.opacity = '0';
       const RANGE = 190;
-      const cardEl = document.getElementById('collapsed-card');
       let queued = false;
       let disabled = false;
       function paint() {
@@ -1550,22 +1547,17 @@
         // opening and closing the details panel called paint() directly and
         // re-hid a schedule that has nothing to hide behind.
         if (disabled) return;
-        // WITH THE DETAILS PANEL OPEN, SCROLLING IS NOT "SCROLLING AWAY".
-        // Reading a tall card means the page moves, but the intent is still
-        // "look at this flight" — not "show me the schedule". Driving the
-        // fade off raw scroll position meant opening the panel dissolved the
-        // map and pulled the next few flights into view underneath it,
-        // neither of which anyone asked for.
+        // There WAS a freeze here that pinned the schedule to invisible
+        // whenever the details panel was open. It existed only because
+        // opening the panel used to scroll the page, and that scroll would
+        // otherwise have been read as "show me the schedule".
         //
-        // So while it is open the effect is simply frozen at rest: map fully
-        // visible, schedule fully hidden, however far down the card you are.
-        if (cardEl && cardEl.classList.contains('expanded')) {
-          scrim.style.opacity = '0';
-          reveal.style.opacity = '0';
-          reveal.style.pointerEvents = 'none';
-          if (hud) { hud.style.opacity = '1'; hud.style.pointerEvents = ''; }
-          return;
-        }
+        // Opening no longer moves the page at all — the card grows upward
+        // from a fixed bottom edge — so the freeze protected against
+        // something that can no longer happen, while remaining the one code
+        // path capable of leaving the whole schedule invisible with no way
+        // back. Deleted rather than patched. Scroll position alone decides,
+        // which is the rule everywhere else.
         const p = Math.min(1, Math.max(0, (window.scrollY || 0) / RANGE));
         scrim.style.opacity = p;
         reveal.style.opacity = p;

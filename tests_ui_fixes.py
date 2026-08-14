@@ -675,6 +675,32 @@ def test_settings_budget_saves():
     check("...and would have failed a 0.25 step", cents % 25 != 0, str(default))
 
 
+def test_expanding_does_not_disturb_map_or_schedule():
+    """Opening the details panel must not re-frame the map, and must never
+    make the schedule unreachable."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    # layout() branches on this class, and slidePanel calls layout(). Setting
+    # the class afterwards ran the open as if the card were still shut, which
+    # re-fitted the route into the sliver of map above an open card.
+    body = html[html.index("function setExpanded("):]
+    body = body[:body.index("function toggle(")]
+    check("the expanded class is set before the slide",
+          body.index("classList.toggle('expanded'") < body.index("slidePanel("),
+          "slidePanel runs first, so layout() sees the old state")
+
+    # The freeze pinned the schedule to invisible while the panel was open.
+    # It guarded against a scroll that opening no longer performs, and was the
+    # only path that could hide the schedule with no way back.
+    check("the scroll fade is not frozen while the panel is open",
+          "reveal.style.opacity = '0';\n          reveal.style.pointerEvents = 'none';"
+          not in html)
+    check("...so scroll position alone drives it",
+          "const p = Math.min(1, Math.max(0, (window.scrollY || 0) / RANGE));" in html)
+
+
 def test_card_grows_upward_from_a_fixed_bottom_edge():
     """Opening the details must not scroll the page. The card's bottom edge
     stays parked above the tab pills and the card grows upward, so the
@@ -727,11 +753,20 @@ def test_detail_panels_slide_rather_than_snap():
     check("...with their spacing on .row-detail-body",
           ".row-detail-body {" in html)
 
-    # A slide really is motion, so this one belongs behind the setting --
-    # unlike the old rule that used it to paint over the entire map.
-    check("reduced motion turns the slides off",
-          html.count("prefers-reduced-motion") >= 2)
-    check("...but never re-hides the map",
+    # These were behind prefers-reduced-motion, which meant the slide simply
+    # did not happen on a phone with Reduce Motion switched on -- the panel
+    # snapped open exactly as it had before the animation was written. The
+    # animation was asked for explicitly, so it now always runs.
+    check("the slide is not suppressed by reduced motion",
+          "@media (prefers-reduced-motion: reduce) {\n      .expand-details.animating"
+          not in html)
+    check("...nor is the spacer that moves with it",
+          "@media (prefers-reduced-motion: reduce) {\n      .hero-space.animating"
+          not in html)
+    check("...nor the flight-list rows",
+          "@media (prefers-reduced-motion: reduce) {\n      .row-detail.animating"
+          not in html)
+    check("and the scrim is still never pinned opaque",
           ".scroll-scrim { opacity: 1 !important; }" not in html)
 
     # Height is released back to auto so late-arriving detail is not clipped.
@@ -902,6 +937,7 @@ def main():
     test_bottom_tab_bar()
     test_full_bleed_map()
     test_two_letter_zones()
+    test_expanding_does_not_disturb_map_or_schedule()
     test_card_grows_upward_from_a_fixed_bottom_edge()
     test_detail_panels_slide_rather_than_snap()
     test_schedule_works_without_the_map()
