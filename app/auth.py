@@ -24,16 +24,73 @@ PBKDF2_ITERATIONS = 260_000
 
 
 def get_or_create_secret_key() -> str:
-    """Cookie-signing key for session middleware. Generated once and
-    persisted to disk — must stay stable across restarts or every logged-in
-    session (pilot and viewer alike) gets invalidated on every deploy."""
-    SECRET_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    if SECRET_KEY_FILE.exists():
-        key = SECRET_KEY_FILE.read_text().strip()
-        if key:
-            return key
-    key = secrets.token_hex(32)
-    SECRET_KEY_FILE.write_text(key)
+    """Cookie-signing key for session middleware. If this value changes,
+    every session cookie in existence stops verifying and everyone — pilot
+    and viewers alike — is silently logged out.
+
+    It used to live only in data/secret_key.txt. That file is gitignored,
+    so `git reset --hard` in update.sh leaves it alone in theory; in
+    practice a key sitting in a loose file next to a directory that gets
+    rebuilt, re-mounted and reset on every deploy has too many ways to go
+    missing, and losing it is exactly the "signed out again" symptom.
+
+    So the key now lives in the database, alongside the accounts it
+    authenticates. If the schedule survives an update, the login does too —
+    one thing to persist instead of two. Order of preference:
+
+      1. PT_SECRET_KEY in the environment, if set. Lets the key be pinned
+         in docker-compose.yml and makes it recoverable by hand.
+      2. The app_meta row in the database.
+      3. The old text file, adopted on first run after this change so
+         nobody is logged out by the upgrade itself.
+      4. Failing all of those, a fresh one — first run on a new install.
+    """
+    env_key = os.environ.get("PT_SECRET_KEY", "").strip()
+    if env_key:
+        return env_key
+
+    conn = get_connection()
+    try:
+        # Created here rather than relying on init_db having run first,
+        # because the session middleware is wired up at import time.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS app_meta ("
+            "key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        row = conn.execute(
+            "SELECT value FROM app_meta WHERE key = 'secret_key'"
+        ).fetchone()
+        if row and (row["value"] or "").strip():
+            return row["value"].strip()
+
+        key = ""
+        try:
+            if SECRET_KEY_FILE.exists():
+                key = SECRET_KEY_FILE.read_text().strip()
+        except OSError:
+            key = ""
+        adopted = bool(key)
+        if not key:
+            key = secrets.token_hex(32)
+
+        conn.execute(
+            "INSERT OR REPLACE INTO app_meta (key, value) VALUES ('secret_key', ?)",
+            (key,),
+        )
+        conn.commit()
+        print("[auth] session key " +
+              ("adopted from data/secret_key.txt" if adopted else "generated") +
+              " and stored in the database")
+    finally:
+        conn.close()
+
+    # Still written to the file as a second copy, so the key can be read off
+    # disk if the database is ever rebuilt from scratch.
+    try:
+        SECRET_KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SECRET_KEY_FILE.write_text(key)
+    except OSError:
+        pass
     return key
 
 

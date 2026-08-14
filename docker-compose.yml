@@ -14,3 +14,9 @@ services:
       # Live tracking needs no credentials — Airplanes.live requires no API
       # key or account.
       - TZ=${TZ:-America/Chicago}
+      # OPTIONAL. Pins the session-signing key so logins survive absolutely
+      # anything, including the database being rebuilt from scratch. Leave
+      # it commented out and the key is kept in the database automatically.
+      # To use it, generate one ONCE and never change it:
+      #     python3 -c "import secrets; print(secrets.token_hex(32))"
+      # - PT_SECRET_KEY=paste_the_generated_value_here

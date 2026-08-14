@@ -945,10 +945,23 @@
         card.classList.toggle('expanded', open);
         if (hintLabel) hintLabel.textContent = open ? 'Hide details' : 'Flight details';
         hint.setAttribute('aria-expanded', open ? 'true' : 'false');
-        // The card changes height here, so where it should sit changes too.
-        // Guarded because this runs once at start-up, before that script has
-        // had a chance to define itself.
-        if (window._ptLayoutHero) window._ptLayoutHero();
+        // Opening: bring the now-tall card into view. Closing: re-park it at
+        // the bottom over the map and go back to the top. Both guarded,
+        // because setExpanded(false) runs once at start-up before the layout
+        // script has defined itself.
+        if (open) {
+          if (window._ptScrollToCard) window._ptScrollToCard();
+        } else {
+          if (window._ptLayoutHero) window._ptLayoutHero();
+          // Closing puts the card back over the map, so go back up to it —
+          // otherwise you are left scrolled into the flight list with the
+          // card you just closed somewhere above you.
+          if (window._ptScrolledOpen) {
+            window._ptScrolledOpen = false;
+            try { window.scrollTo({ top: 0, behavior: 'smooth' }); }
+            catch (e) { window.scrollTo(0, 0); }
+          }
+        }
       }
 
       function toggle() { setExpanded(!details.classList.contains('open')); }
@@ -1099,23 +1112,22 @@
 
       function layout() {
         var vh = window.innerHeight;
+        // ALWAYS measured collapsed. An expanded card is taller than the
+        // screen, and re-parking it while open used to teleport it to the
+        // top of the page the instant you tapped "Flight details" — the
+        // content did appear, but it appeared somewhere your eye wasn't, so
+        // it read as "nothing happened", and the natural second tap closed
+        // it again. The card now stays put and the page scrolls to it
+        // instead. See scrollCardIntoView below.
+        if (card.classList.contains('expanded')) return;
+
         var cardH = card.getBoundingClientRect().height;
-        var desiredTop;
-        if (card.classList.contains('expanded')) {
-          // Opened up, the card is far too tall to hang off the bottom, so
-          // it rises to near the top and shows its detail instead. No clamp
-          // here: the clamp below exists to keep a strip of map visible above
-          // a bottom-parked card, and applying it to an expanded card would
-          // shove it back down over its own contents.
-          desiredTop = Math.max(56, Math.round(vh * 0.10));
-        } else {
-          desiredTop = tabTop() - GAP - cardH;
-          // Never let it climb over the title bar, and always leave a usable
-          // strip of map above it on very short screens (a phone in
-          // landscape, a half-height desktop window).
-          desiredTop = Math.max(Math.round(vh * 0.18),
-                                Math.min(desiredTop, vh - 120));
-        }
+        var desiredTop = tabTop() - GAP - cardH;
+        // Never let it climb over the title bar, and always leave a usable
+        // strip of map above it on very short screens (a phone in
+        // landscape, a half-height desktop window).
+        desiredTop = Math.max(Math.round(vh * 0.18),
+                              Math.min(desiredTop, vh - 120));
 
         // Where it actually sits right now, in page coordinates. The
         // difference is exactly how much the spacer has to grow or shrink;
@@ -1143,6 +1155,22 @@
       }
 
       window._ptLayoutHero = layout;
+
+      // Opening the card scrolls the page up to it, rather than moving the
+      // card up to the page. Same result — details on screen — but the card
+      // travels under your eye instead of jumping out from under it, and
+      // nothing about the resting layout has to change.
+      window._ptScrollToCard = function() {
+        var top = card.getBoundingClientRect().top + (window.scrollY || 0);
+        var target = Math.max(0, Math.round(top - 12));
+        window._ptScrolledOpen = true;
+        try {
+          window.scrollTo({ top: target, behavior: 'smooth' });
+        } catch (e) {
+          window.scrollTo(0, target);   // older Safari has no options object
+        }
+      };
+
       layout();
       // Fonts and icons can land after first paint and change the card's
       // height by a few pixels; a second pass costs nothing.
@@ -1167,6 +1195,161 @@
           layout();
         }, 250);
       });
+    })();
+
+    // ---- The flight list's expanding rows.
+    //
+    // THIS USED TO LIVE INSIDE THE MAP BLOCK, below its `typeof L ===
+    // 'undefined'` bail-out. One failed Leaflet download and the whole
+    // schedule went dead: every row still looked tappable and none of them
+    // opened. The same trap was found and fixed once before for the scroll
+    // reveal (see the note by that bail-out); these handlers were simply
+    // missed at the time. Nothing here needs a map, so nothing here should
+    // depend on one loading.
+    (function() {
+      function timeLineHTML(line, escFn) {
+        if (!line) return '';
+        var e = escFn || function(x) { return x; };
+        var html = '<span class="tl-time">' + e(line.time || '') + '</span>';
+        var bits = [];
+        if (line.note) bits.push(e(line.note));
+        if (line.was) bits.push('was ' + e(line.was));
+        if (bits.length) {
+          html += '<span class="tl-note">' + bits.join(' \u00b7 ') + '</span>';
+        }
+        return html;
+      }
+
+      function renderLegDetail(panel, data) {
+        var body = panel.querySelector('.row-detail-body');
+        if (!body) return;
+        var d = (data && data.current) || {};
+        var rows = [];
+
+        function add(label, value, cls) {
+          // The whole point of hiding empties: an unflown leg has no gate,
+          // no baggage belt and no actual times, and a column of blank
+          // fields reads as broken rather than as "not yet".
+          if (value == null || value === '') return;
+          rows.push('<div class="rd-row"><span class="k">' + label +
+                    '</span><span class="v ' + (cls || '') + '">' + value + '</span></div>');
+        }
+        function esc(t) {
+          return String(t).replace(/[&<>"]/g, function(c) {
+            return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c];
+          });
+        }
+
+        // A future leg's dropdown was printing "Departure 07:00 CT / On
+        // time" directly underneath the row that already says 07:00. That
+        // is the scheduled time echoed back with nothing added, and it
+        // occupies the exact spot where "12 min late" will appear once the
+        // airline or ADS-B says so — so the row that matters looks like it
+        // was always there and never earned attention.
+        //
+        // Show these ONLY once they carry something the row above does not:
+        // a real recorded time (source is airline or observed), a flight
+        // that has actually gone (settled), or a predicted time that has
+        // moved off schedule. A bare on-schedule estimate says nothing.
+        function saysSomethingNew(line) {
+          if (!line) return false;
+          if (line.settled) return true;
+          // Whitelist, not blacklist. Checking "not estimated" let
+          // source:"scheduled" straight through — which is the pure echo
+          // this exists to suppress. Only a time the airline pushed or one
+          // observed off ADS-B counts as news on its own.
+          if (line.source === 'airline' || line.source === 'observed') return true;
+          return Number(line.minutes || 0) !== 0;
+        }
+
+        if (saysSomethingNew(d.dep_line)) {
+          add('Departure', timeLineHTML(d.dep_line, esc), d.dep_line.state);
+        }
+        if (saysSomethingNew(d.arr_line)) {
+          add('Arrival', timeLineHTML(d.arr_line, esc), d.arr_line.state);
+        }
+
+        var g = d.gates || {};
+        if (g.origin_gate) {
+          add(esc(d.origin || '') + ' gate', esc(g.origin_gate) +
+              (g.origin_terminal ? ' \u00b7 Terminal ' + esc(g.origin_terminal) : ''));
+        }
+        if (g.dest_gate) {
+          add(esc(d.destination || '') + ' gate', esc(g.dest_gate) +
+              (g.dest_terminal ? ' \u00b7 Terminal ' + esc(g.dest_terminal) : ''));
+        }
+        if (g.baggage) add('Baggage', esc(g.baggage));
+
+        if (d.aircraft && (d.aircraft.registration || d.aircraft.display_type)) {
+          add('Aircraft', esc([d.aircraft.registration, d.aircraft.display_type]
+                              .filter(Boolean).join(' \u00b7 ')));
+        }
+        if (d.diversion && d.diversion.diverted_to) {
+          add('Diverted to', esc(d.diversion.diverted_to), 'late');
+        }
+        if (d.closed_by) add('Closed out', esc(String(d.closed_by).replace(/_/g, ' ')));
+        if (d.arrival_source) add('Arrival time from', esc(d.arrival_source));
+        if (d.enriched_at) {
+          rows.push('<div class="rd-row"><span class="k">Airline data</span>' +
+                    '<span class="v" data-ago="' + esc(d.enriched_at_iso || '') +
+                    '">' + esc(d.enriched_at) + '</span></div>');
+        }
+
+        body.innerHTML = rows.length
+          ? rows.join('')
+          : '<div class="rd-empty">Nothing recorded for this flight yet.</div>';
+        // Newly inserted [data-ago] nodes need their first tick now, not
+        // in up to 30 seconds' time.
+        window.dispatchEvent(new Event('pt:detail-rendered'));
+      }
+
+      function toggleLegDetail(head) {
+        var legId = head.getAttribute('data-detail-for');
+        var panel = document.getElementById('rd-' + legId);
+        if (!panel) return;
+        var opening = panel.hasAttribute('hidden');
+        if (!opening) {
+          panel.setAttribute('hidden', '');
+          head.setAttribute('aria-expanded', 'false');
+          return;
+        }
+        panel.removeAttribute('hidden');
+        head.setAttribute('aria-expanded', 'true');
+        if (panel.getAttribute('data-loaded') === '1') return;
+        panel.setAttribute('data-loaded', '1');
+        fetch('/api/leg/' + encodeURIComponent(legId))
+          .then(function(r) { return r.json(); })
+          .then(function(data) { renderLegDetail(panel, data); })
+          .catch(function() {
+            panel.setAttribute('data-loaded', '0');
+            var body = panel.querySelector('.row-detail-body');
+            if (body) body.innerHTML = '<div class="rd-empty">Couldn\u2019t load this one.</div>';
+          });
+      }
+
+      document.addEventListener('click', function(e) {
+        if (!e.target.closest) return;
+        // Handled by the map block, which pans to the flight instead.
+        if (e.target.closest('[data-show-on-map]')) return;
+        // Let the FlightAware / FR24 links inside an open panel behave as
+        // links rather than collapsing the row out from under the tap.
+        if (e.target.closest('.rd-links')) return;
+        var head = e.target.closest('.leg-head[data-detail-for]');
+        if (!head) return;
+        e.preventDefault();
+        toggleLegDetail(head);
+      });
+
+      document.addEventListener('keydown', function(e) {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        var head = e.target.closest ? e.target.closest('.leg-head[data-detail-for]') : null;
+        if (!head) return;
+        e.preventDefault();
+        toggleLegDetail(head);
+      });
+
+      // The map block also formats these lines onto the big card.
+      window._ptTimeLineHTML = timeLineHTML;
     })();
 
     // ---- Scroll reveal. At rest the map is the background of the app,
@@ -1596,24 +1779,15 @@
       // One "12:39 CDT / 12 min late - was 12:27 CDT" cell. Shared by the
       // card and by every inline row panel, so the two can never drift
       // into formatting the same fact differently.
-      function timeLineHTML(line, escFn) {
-        if (!line) return '';
-        var e = escFn || function(x) { return x; };
-        var html = '<span class="tl-time">' + e(line.time || '') + '</span>';
-        var bits = [];
-        if (line.note) bits.push(e(line.note));
-        if (line.was) bits.push('was ' + e(line.was));
-        if (bits.length) {
-          html += '<span class="tl-note">' + bits.join(' \u00b7 ') + '</span>';
-        }
-        return html;
-      }
+
 
       function applyTimeLine(id, line) {
         var el = document.getElementById(id);
         if (!el) return;
         el.className = 'v ' + ((line && line.state) || '');
-        el.innerHTML = timeLineHTML(line);
+        // Lives in the flight-list block now, shared via window so both can
+        // format a time line the same way.
+        el.innerHTML = window._ptTimeLineHTML ? window._ptTimeLineHTML(line) : '';
       }
 
       function applyEnrichment(data) {
@@ -1825,113 +1999,11 @@
       // /api/leg endpoint the card uses. It is entirely read-only — no
       // AeroAPI query, so opening every past flight in the month costs
       // nothing.
-      function renderLegDetail(panel, data) {
-        var body = panel.querySelector('.row-detail-body');
-        if (!body) return;
-        var d = (data && data.current) || {};
-        var rows = [];
 
-        function add(label, value, cls) {
-          // The whole point of hiding empties: an unflown leg has no gate,
-          // no baggage belt and no actual times, and a column of blank
-          // fields reads as broken rather than as "not yet".
-          if (value == null || value === '') return;
-          rows.push('<div class="rd-row"><span class="k">' + label +
-                    '</span><span class="v ' + (cls || '') + '">' + value + '</span></div>');
-        }
-        function esc(t) {
-          return String(t).replace(/[&<>"]/g, function(c) {
-            return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c];
-          });
-        }
 
-        if (d.dep_line) add('Departure', timeLineHTML(d.dep_line, esc), d.dep_line.state);
-        if (d.arr_line) add('Arrival', timeLineHTML(d.arr_line, esc), d.arr_line.state);
 
-        var g = d.gates || {};
-        if (g.origin_gate) {
-          add(esc(d.origin || '') + ' gate', esc(g.origin_gate) +
-              (g.origin_terminal ? ' \u00b7 Terminal ' + esc(g.origin_terminal) : ''));
-        }
-        if (g.dest_gate) {
-          add(esc(d.destination || '') + ' gate', esc(g.dest_gate) +
-              (g.dest_terminal ? ' \u00b7 Terminal ' + esc(g.dest_terminal) : ''));
-        }
-        if (g.baggage) add('Baggage', esc(g.baggage));
 
-        if (d.aircraft && (d.aircraft.registration || d.aircraft.display_type)) {
-          add('Aircraft', esc([d.aircraft.registration, d.aircraft.display_type]
-                              .filter(Boolean).join(' \u00b7 ')));
-        }
-        if (d.diversion && d.diversion.diverted_to) {
-          add('Diverted to', esc(d.diversion.diverted_to), 'late');
-        }
-        if (d.closed_by) add('Closed out', esc(String(d.closed_by).replace(/_/g, ' ')));
-        if (d.arrival_source) add('Arrival time from', esc(d.arrival_source));
-        if (d.enriched_at) {
-          rows.push('<div class="rd-row"><span class="k">Airline data</span>' +
-                    '<span class="v" data-ago="' + esc(d.enriched_at_iso || '') +
-                    '">' + esc(d.enriched_at) + '</span></div>');
-        }
 
-        body.innerHTML = rows.length
-          ? rows.join('')
-          : '<div class="rd-empty">Nothing recorded for this flight yet.</div>';
-        // Newly inserted [data-ago] nodes need their first tick now, not
-        // in up to 30 seconds' time.
-        window.dispatchEvent(new Event('pt:detail-rendered'));
-      }
-
-      function toggleLegDetail(head) {
-        var legId = head.getAttribute('data-detail-for');
-        var panel = document.getElementById('rd-' + legId);
-        if (!panel) return;
-        var opening = panel.hasAttribute('hidden');
-        if (!opening) {
-          panel.setAttribute('hidden', '');
-          head.setAttribute('aria-expanded', 'false');
-          return;
-        }
-        panel.removeAttribute('hidden');
-        head.setAttribute('aria-expanded', 'true');
-        if (panel.getAttribute('data-loaded') === '1') return;
-        panel.setAttribute('data-loaded', '1');
-        fetch('/api/leg/' + encodeURIComponent(legId))
-          .then(function(r) { return r.json(); })
-          .then(function(data) { renderLegDetail(panel, data); })
-          .catch(function() {
-            panel.setAttribute('data-loaded', '0');
-            var body = panel.querySelector('.row-detail-body');
-            if (body) body.innerHTML = '<div class="rd-empty">Couldn\u2019t load this one.</div>';
-          });
-      }
-
-      document.addEventListener('click', function(e) {
-        const onMap = e.target.closest ? e.target.closest('[data-show-on-map]') : null;
-        if (onMap) {
-          e.preventDefault();
-          e.stopPropagation();
-          selectLeg(onMap.getAttribute('data-show-on-map'));
-          // Send them back up to the map they just asked to look at.
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-          return;
-        }
-        // Let the FlightAware / FR24 links inside an open panel behave as
-        // links rather than collapsing the row out from under the tap.
-        if (e.target.closest && e.target.closest('.rd-links')) return;
-        var head = e.target.closest ? e.target.closest('.leg-head[data-detail-for]') : null;
-        if (!head) return;
-        e.preventDefault();
-        toggleLegDetail(head);
-      });
-
-      document.addEventListener('keydown', function(e) {
-        if (e.key !== 'Enter' && e.key !== ' ') return;
-        var head = e.target.closest ? e.target.closest('.leg-head[data-detail-for]') : null;
-        if (!head) return;
-        e.preventDefault();
-        toggleLegDetail(head);
-      });
 
       // ---- Relative times, computed here rather than baked into the HTML.
       // "23 min ago" used to be rendered once by the server and then sit
@@ -1976,3 +2048,12 @@
   </nav>
 </body>
 </html>
+      document.addEventListener('click', function(e) {
+        const onMap = e.target.closest ? e.target.closest('[data-show-on-map]') : null;
+        if (!onMap) return;
+        e.preventDefault();
+        e.stopPropagation();
+        selectLeg(onMap.getAttribute('data-show-on-map'));
+        // Send them back up to the map they just asked to look at.
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });

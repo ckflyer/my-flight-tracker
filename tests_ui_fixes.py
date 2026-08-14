@@ -306,8 +306,8 @@ def test_time_lines():
                      "America/Chicago", "24", "Departing", "Departed")
     line = _time_line(late, base, "America/Chicago", "24")
     check("a late departure shows the revised time",
-          line["time"] == "12:46 CDT", str(line))
-    check("...the scheduled one it moved from", line["was"] == "12:34 CDT", str(line))
+          line["time"] == "12:46 CT", str(line))
+    check("...the scheduled one it moved from", line["was"] == "12:34 CT", str(line))
     check("...and by how much", line["note"] == "12 min late", str(line))
     check("...tagged so it can be tinted", line["state"] == "late", str(line))
 
@@ -326,7 +326,7 @@ def test_time_lines():
     # The case the old "Scheduled" row used to cover.
     unflown = _time_line(None, base, "America/Chicago", "24")
     check("an unflown leg still shows its scheduled time",
-          unflown and unflown["time"] == "12:34 CDT", str(unflown))
+          unflown and unflown["time"] == "12:34 CT", str(unflown))
     check("...with no variance clutter",
           unflown["note"] is None and unflown["was"] is None, str(unflown))
     check("no baseline at all yields nothing to draw",
@@ -675,8 +675,82 @@ def test_settings_budget_saves():
     check("...and would have failed a 0.25 step", cents % 25 != 0, str(default))
 
 
+def test_schedule_works_without_the_map():
+    """renderLegDetail/toggleLegDetail and their click handlers used to sit
+    inside the map block, BELOW its `typeof L === 'undefined'` bail-out. A
+    failed Leaflet download therefore killed the flight list too: rows still
+    looked tappable, none of them opened. They live in their own block now."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    bail = html.index("typeof L === 'undefined'")
+    for fn in ("function renderLegDetail(", "function toggleLegDetail(",
+               "function timeLineHTML("):
+        check("%s is defined before the Leaflet bail-out" % fn.split('(')[0].split()[-1],
+              html.index(fn) < bail,
+              "found at %d, bail-out at %d" % (html.index(fn), bail))
+    check("the row-detail click handler is outside the map block too",
+          html.index(".leg-head[data-detail-for]") < bail)
+    check("...and the map block still owns show-on-map",
+          html.index("data-show-on-map") > 0 and "selectLeg(" in html)
+    check("the shared time formatter is published for the map block",
+          "window._ptTimeLineHTML" in html)
+
+
+def test_session_key_survives_redeploy():
+    """The sign-out bug. The key lived only in data/secret_key.txt; if that
+    file went missing during a deploy, every cookie stopped verifying and
+    everyone was logged out. It now lives in the database."""
+    import importlib, tempfile as _tf
+    from pathlib import Path as _P
+    import app.auth as _auth
+    d = _tf.mkdtemp()
+    original = _auth.SECRET_KEY_FILE
+    try:
+        _auth.SECRET_KEY_FILE = _P(d) / "secret_key.txt"
+        first = _auth.get_or_create_secret_key()
+        check("a session key is produced", len(first) >= 32)
+        check("...and is stable when asked twice",
+              _auth.get_or_create_secret_key() == first)
+        # Simulate the deploy losing the loose file.
+        _auth.SECRET_KEY_FILE.unlink(missing_ok=True)
+        check("...and survives the key file being wiped by a deploy",
+              _auth.get_or_create_secret_key() == first)
+        # An explicit pin always wins, so it can be recovered by hand.
+        os.environ["PT_SECRET_KEY"] = "p" * 64
+        check("...and an env pin overrides everything",
+              _auth.get_or_create_secret_key() == "p" * 64)
+    finally:
+        os.environ.pop("PT_SECRET_KEY", None)
+        _auth.SECRET_KEY_FILE = original
+
+
+def test_scheduled_time_line_is_marked_as_an_echo():
+    """A future leg's dropdown printed the scheduled time a second time,
+    directly under the row that already showed it. The fields that let the
+    UI tell an echo from real news have to reach the client."""
+    from app.view import _time_line, _variance
+    base = datetime(2026, 7, 1, 17, 34, tzinfo=timezone.utc)
+
+    unflown = _time_line(None, base, "America/Chicago", "24")
+    check("an unflown leg is tagged as merely scheduled",
+          unflown["source"] == "scheduled", str(unflown))
+    check("...with no variance to report", unflown["minutes"] == 0, str(unflown))
+    check("...and is not settled", unflown["settled"] is False, str(unflown))
+
+    flown = _time_line(
+        _variance(base, (base + timedelta(minutes=12)).isoformat(), None, None,
+                  "America/Chicago", "24", "Departing", "Departed"),
+        base, "America/Chicago", "24")
+    check("a real airline time carries its source", flown["source"] == "airline",
+          str(flown))
+    check("...its variance in minutes", flown["minutes"] == 12, str(flown))
+    check("...and counts as settled", flown["settled"] is True, str(flown))
+
+
 def test_two_letter_zones():
-    from app.main import tz_abbr, _TWO_LETTER_ZONE
+    from app.main import tz_abbr
+    from app.view import _TWO_LETTER_ZONE   # moved: one shared copy, see view.py
     from app.models import FlightLeg
     from app.airports import enrich_leg
     from datetime import date as _d, time as _tm
@@ -762,6 +836,9 @@ def main():
     test_bottom_tab_bar()
     test_full_bleed_map()
     test_two_letter_zones()
+    test_schedule_works_without_the_map()
+    test_session_key_survives_redeploy()
+    test_scheduled_time_line_is_marked_as_an_echo()
     test_scroll_reveal()
     test_show_on_map_action()
     test_settings_budget_saves()

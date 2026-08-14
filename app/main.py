@@ -20,6 +20,7 @@ from .settings import load_settings, save_settings, AppSettings
 from .track import get_breadcrumb
 from . import tags
 from . import view as flight_view
+from .view import short_zone   # one shared CDT->CT map, see view.py
 from .auth import (
     get_or_create_secret_key, count_users, create_user, get_user_by_username,
     get_user_by_id, get_user_by_share_code, verify_password, regenerate_share_code,
@@ -142,31 +143,8 @@ def fmt_local(leg: FlightLeg, which: str = "dep", time_format: str = "24",
         return time_str
     tz = ZoneInfo(info.timezone)
     sample = datetime(2026, 7, 1, 12, 0, tzinfo=tz)
-    abbr = sample.tzname() or info.timezone.split("/")[-1]
+    abbr = short_zone(sample.tzname()) or info.timezone.split("/")[-1]
     return f"{time_str} {abbr}"
-
-
-# Daylight and standard forms of the same zone collapse to one label:
-# "CDT" and "CST" both become "CT". Two characters instead of three, and
-# it is what consumer apps show.
-#
-# This RETIRES a bug rather than fixing it. tz_abbr and fmt_local both
-# sample a fixed July date to get an abbreviation, so every leg read as
-# daylight time and a December flight said CDT where CST was correct. A
-# label that never claims daylight or standard cannot be wrong about which
-# one applies, so the July sample stops mattering.
-#
-# Phoenix is the loose end: Arizona skips daylight time, so MT is a broad
-# name for it. Still the right zone, and no worse than the MST it showed.
-_TWO_LETTER_ZONE = {
-    "EST": "ET", "EDT": "ET",
-    "CST": "CT", "CDT": "CT",
-    "MST": "MT", "MDT": "MT",
-    "PST": "PT", "PDT": "PT",
-    "AKST": "AKT", "AKDT": "AKT",
-    "HST": "HT", "HDT": "HT",
-    "AST": "AT", "ADT": "AT",
-}
 
 
 def tz_abbr(leg: FlightLeg, which: str = "dep") -> Optional[str]:
@@ -183,9 +161,7 @@ def tz_abbr(leg: FlightLeg, which: str = "dep") -> Optional[str]:
     tz = ZoneInfo(info.timezone)
     sample = datetime(2026, 7, 1, 12, 0, tzinfo=tz)
     raw = sample.tzname() or info.timezone.split("/")[-1]
-    # Anything outside North America keeps whatever the zone database calls
-    # it rather than being forced into a shape it does not have.
-    return _TWO_LETTER_ZONE.get(raw, raw)
+    return short_zone(raw)
 
 
 def tracking_links(leg: FlightLeg) -> dict:
@@ -206,7 +182,7 @@ def _fmt_utc_local(dt, tz_name, time_format="24"):
         return None
     text = (local.strftime("%I:%M %p").lstrip("0") if time_format == "12"
             else local.strftime("%H:%M"))
-    return f"{text} {local.tzname() or ''}".strip()
+    return f"{text} {short_zone(local.tzname()) or ''}".strip()
 
 
 def _parse_iso(value):

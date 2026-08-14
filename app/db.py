@@ -353,6 +353,19 @@ def init_db() -> None:
         # leg share one path instead of storing it twice. The key is the
         # leg id with any "-DH" suffix stripped, so a deadhead and a
         # working leg on the same flight record into the same path.
+        # Small key/value store for things that belong to the installation
+        # rather than to any one pilot — currently just the session-signing
+        # key. It lives in the database because the database is the one
+        # thing that reliably survives a redeploy; a key kept anywhere else
+        # going missing logs everybody out.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS positions (

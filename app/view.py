@@ -68,7 +68,38 @@ def _fmt_local(dt: Optional[datetime], tz_name: Optional[str],
             else local.strftime("%H:%M"))
     if not with_zone:
         return text
-    return f"{text} {local.tzname() or tz_name.split('/')[-1]}"
+    return f"{text} {short_zone(local.tzname()) or tz_name.split('/')[-1]}"
+
+
+# Daylight and standard forms of the same zone collapse to one label:
+# "CDT" and "CST" both become "CT". Two characters instead of three, and it
+# is what consumer apps show.
+#
+# This is the ONE copy. main.py imports it. It used to exist only in
+# main.py's tz_abbr, which meant the standalone zone label said "CT" while
+# every time string that glued its own zone on said "CDT" — the same flight
+# disagreeing with itself on the same screen.
+#
+# Phoenix is the loose end: Arizona skips daylight time, so MT is a broad
+# name for it. Still the right zone, and no worse than the MST it showed.
+_TWO_LETTER_ZONE = {
+    "EST": "ET", "EDT": "ET",
+    "CST": "CT", "CDT": "CT",
+    "MST": "MT", "MDT": "MT",
+    "PST": "PT", "PDT": "PT",
+    "AKST": "AKT", "AKDT": "AKT",
+    "HST": "HT", "HDT": "HT",
+    "AST": "AT", "ADT": "AT",
+}
+
+
+def short_zone(raw: Optional[str]) -> Optional[str]:
+    """"CDT" -> "CT". Anything outside North America keeps whatever the
+    zone database calls it rather than being forced into a shape it does
+    not have."""
+    if not raw:
+        return raw
+    return _TWO_LETTER_ZONE.get(raw, raw)
 
 
 def _span(minutes: int) -> str:
@@ -166,11 +197,21 @@ def _time_line(variance: Optional[Dict[str, Any]], baseline: Optional[datetime],
             "note": (variance.get("short_text")
                      or ("on time" if variance.get("state") == "ontime" else None)),
             "state": variance.get("state"),
+            # Passed through so a caller can tell an actual update apart
+            # from the schedule handed straight back. The flight-list
+            # dropdown uses these to stay quiet until there is real news:
+            # "estimated, zero minutes off, not yet flown" is just the
+            # scheduled time wearing a different hat, and it was being
+            # printed directly under the row that already showed it.
+            "source": variance.get("source"),
+            "minutes": variance.get("minutes"),
+            "settled": variance.get("settled"),
         }
     shown = _fmt_local(baseline, tz_name, time_format)
     if not shown:
         return None
-    return {"time": shown, "was": None, "note": None, "state": "scheduled"}
+    return {"time": shown, "was": None, "note": None, "state": "scheduled",
+            "source": "scheduled", "minutes": 0, "settled": False}
 
 
 def build(row, leg, now: datetime, time_format: str = "24",
