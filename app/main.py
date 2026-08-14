@@ -1066,6 +1066,121 @@ async def calendar_page(request: Request):
 # Admin (schedule) — pilot only
 # ---------------------------------------------------------------------------
 
+@app.get("/admin/diagnostics", response_class=HTMLResponse)
+async def admin_diagnostics(request: Request):
+    """Why is there no ADS-B? Answers it on one page instead of in the logs.
+
+    Every step of the live path is shown separately, because "no tracking"
+    has half a dozen possible causes that look identical from the outside:
+    the poller not running, the callsign never resolving, the provider
+    returning nothing, or the match logic refusing what it returned. Each
+    one is reported on its own line with the actual values involved.
+    """
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+
+    import html as _html
+    import time as _time
+    from . import airplaneslive as _al
+    from . import poller as _poller
+    from .flightmatch import evaluate as _evaluate
+    from .livesource import live_state as _live_state
+
+    out = []
+
+    def row(label, value, ok=None):
+        colour = "" if ok is None else (
+            "color:#137333" if ok else "color:#c5221f;font-weight:600")
+        out.append(
+            "<tr><td style='padding:4px 14px 4px 0;color:#5f6368;"
+            "white-space:nowrap;vertical-align:top'>%s</td>"
+            "<td style='padding:4px 0;%s'><code>%s</code></td></tr>"
+            % (_html.escape(str(label)), colour, _html.escape(str(value)))
+        )
+
+    out.append("<h2>Poller</h2><table>")
+    running = _poller.is_running()
+    row("running", running, running)
+    last = _poller.last_sweep_at()
+    row("last sweep", last.isoformat() if last else "never", last is not None)
+    row("sweeps from", "T-%s min" % (_poller.PREVIEW_WINDOW.total_seconds() / 60))
+    out.append("</table>")
+
+    # A direct, uncached probe of the provider. This is the single most
+    # useful line on the page: if the endpoint has moved or is unreachable,
+    # everything downstream is None and nothing else here will make sense.
+    out.append("<h2>ADS-B provider reachable?</h2><table>")
+    row("base URL", _al.BASE_URL)
+    probe_cs = "AAL100"
+    t0 = _time.time()
+    try:
+        import requests as _rq
+        r = _rq.get("%s/callsign/%s" % (_al.BASE_URL, probe_cs), timeout=12)
+        row("probe", "GET %s/callsign/%s" % (_al.BASE_URL, probe_cs))
+        row("HTTP status", r.status_code, r.status_code == 200)
+        row("took", "%.2fs" % (_time.time() - t0))
+        body = r.text[:400]
+        row("response starts", body if body.strip() else "(empty)")
+        try:
+            j = r.json()
+            n = len(j.get("ac") or j.get("aircraft") or [])
+            row("aircraft in response", n)
+            row("recognised shape",
+                isinstance(j, dict) and ("ac" in j or "aircraft" in j),
+                isinstance(j, dict) and ("ac" in j or "aircraft" in j))
+        except Exception as e:
+            row("JSON parse", "FAILED: %s" % e, False)
+    except Exception as e:
+        row("probe", "FAILED: %s" % e, False)
+        row("meaning", "the container cannot reach this host at all", False)
+    out.append("</table>")
+
+    out.append("<h2>Your active flights</h2>")
+    active = _poller.active_flights()
+    if not active:
+        out.append("<p>Nothing in the tracking window right now. The poller "
+                   "only looks at flights from T-%s minutes until 3 hours "
+                   "past scheduled arrival.</p>"
+                   % (_poller.PREVIEW_WINDOW.total_seconds() / 60))
+    for leg_id, leg in active.items():
+        out.append("<h3>%s &mdash; %s to %s</h3><table>"
+                   % (_html.escape(leg.flight_number or leg_id),
+                      _html.escape(leg.origin or "?"),
+                      _html.escape(leg.destination or "?")))
+        row("callsign searched", leg.callsign or "(none resolved)", bool(leg.callsign))
+        if leg.callsign:
+            state = None
+            try:
+                state = _live_state(leg.callsign, cache_ttl_s=0)
+            except Exception as e:
+                row("lookup", "FAILED: %s" % e, False)
+            if state is None:
+                row("aircraft found", "NO — nothing broadcasting this callsign", False)
+            else:
+                row("aircraft found", "yes", True)
+                for k in ("icao24", "registration", "lat", "lon",
+                          "on_ground", "altitude_ft", "speed_kts",
+                          "position_age_s"):
+                    row(k, state.get(k))
+                verdict = _evaluate(leg, state)
+                row("accepted as this leg", verdict.accepted, verdict.accepted)
+                if not verdict.accepted:
+                    row("reason refused", verdict.reason, False)
+        out.append("</table>")
+
+    page = ("<html><head><title>Diagnostics</title><meta name='viewport' "
+            "content='width=device-width,initial-scale=1'></head>"
+            "<body style='font:14px/1.5 -apple-system,BlinkMacSystemFont,"
+            "system-ui,sans-serif;margin:20px;max-width:760px'>"
+            "<h1>Live tracking diagnostics</h1>"
+            "<p style='color:#5f6368'>Read top to bottom. The first red line "
+            "is the problem.</p>" + "".join(out) +
+            "<p style='margin-top:28px'><a href='/admin'>&larr; back</a></p>"
+            "</body></html>")
+    return HTMLResponse(page)
+
+
 @app.get("/admin", response_class=HTMLResponse)
 async def admin(request: Request):
     pilot = require_pilot(request)
