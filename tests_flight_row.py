@@ -15,7 +15,7 @@ os.environ["TRACK_POLLER_ENABLED"] = "0"
 from app.db import init_db, get_connection            # noqa: E402
 from app import tags, closure                          # noqa: E402
 from app.airports import enrich_leg                    # noqa: E402
-from app.flights import (get_flight, save_schedule, write, load_schedule,  # noqa: E402
+from app.flights import (get_flight, replace_schedule, write, load_schedule,  # noqa: E402
                          purge_old, flight_key, owners_of)
 from app.models import FlightLeg                       # noqa: E402
 from app.view import build, recompute_derived          # noqa: E402
@@ -52,7 +52,7 @@ def make_leg(leg_id="2026-08-04-3729-DFW-OKC", origin="DFW", destination="OKC",
 
 UID = make_user()
 LEG = make_leg()
-save_schedule(UID, [LEG])
+replace_schedule(UID, [LEG])
 DEP = LEG.dep_datetime_utc()
 ARR = LEG.arr_datetime_utc()
 
@@ -78,7 +78,7 @@ check("ALWAYS overwrites even with nothing",
 
 
 print("\n-- schedule re-import keeps observed data --")
-save_schedule(UID, [LEG])
+replace_schedule(UID, [LEG])
 check("re-pasting the same schedule keeps the observed wheels-off",
       get_flight(LEG.id)["off_observed"] is not None)
 check("re-pasting keeps the leg", len(load_schedule(UID)) == 1)
@@ -170,7 +170,7 @@ write(LEG.id, always={"status_tag": None})
 
 print("\n-- closure: the delayed-flight backstop bug --")
 L2 = make_leg("2026-08-04-3730-DFW-MFE", destination="MFE")
-save_schedule(UID, [LEG, L2])
+replace_schedule(UID, [LEG, L2])
 D2, A2 = L2.dep_datetime_utc(), L2.arr_datetime_utc()
 
 # Four hours past scheduled arrival, never departed, never any signal.
@@ -193,7 +193,7 @@ check("...and does fire once the projected arrival is 3h past",
 
 print("\n-- closure: observed arrival needs a landing first --")
 L3 = make_leg("2026-08-04-3731-DFW-ABI", destination="ABI")
-save_schedule(UID, [LEG, L2, L3])
+replace_schedule(UID, [LEG, L2, L3])
 stopped_at = L3.dep_datetime_utc() - timedelta(hours=1)
 # Parked at the departure gate, transponder off. Stationary and silent,
 # but it has never flown.
@@ -278,7 +278,7 @@ print("\n-- two crew on one flight --")
 UID2 = make_user("firstofficer")
 # The FO imports the same leg. Same date, flight number, origin and dest,
 # so the same id — he joins the existing row rather than making his own.
-save_schedule(UID2, [make_leg()])
+replace_schedule(UID2, [make_leg()])
 check("both crew are on the flight", sorted(owners_of(LEG.id)) == sorted([UID, UID2]),
       str(owners_of(LEG.id)))
 check("there is exactly ONE row for the flight",
@@ -293,7 +293,7 @@ check("the FO sees the leg on his schedule",
 # A deadhead for one pilot is a working leg for the other. Same aeroplane.
 dh = make_leg()
 dh.is_deadhead = True
-save_schedule(UID2, [dh])
+replace_schedule(UID2, [dh])
 check("deadheading is per-person, not per-flight",
       [l.is_deadhead for l in load_schedule(UID2)] == [True]
       and [l.is_deadhead for l in load_schedule(UID)][0] is False)
@@ -314,8 +314,8 @@ check("a deadhead shares the working leg's track",
 
 print("\n-- retention --")
 old = make_leg("2020-01-01-1111-DFW-OKC", on=date(2020, 1, 1))
-save_schedule(UID, [LEG, L2, L3, old])
-save_schedule(UID2, [])
+replace_schedule(UID, [LEG, L2, L3, old])
+replace_schedule(UID2, [])
 removed = purge_old()
 ids = {l.id for l in load_schedule(UID)}
 check("a leg older than 30 days is purged", old.id not in ids, str(ids))
@@ -328,7 +328,7 @@ print("\n-- a flight outlives everybody's schedule --")
 # every un-rostered flight, so the real legs were gone before he swapped
 # back and the re-import built blank rows from the timetable.
 flown = make_leg("2026-08-04-4242-DFW-ICT", on=date(2026, 8, 4))
-save_schedule(UID, [flown])
+replace_schedule(UID, [flown])
 write(flown.id, once={"gate_destination": "A17", "baggage_claim": "6",
                       "tail_api": "N600EN"})
 write(flown.id, latest={"closed": 1, "closed_by": "airline"})
@@ -337,7 +337,7 @@ record_position(flown.id, 32.9, -97.0,
                 datetime(2026, 8, 4, 18, 0, tzinfo=timezone.utc), on_ground=False)
 
 test_sched = make_leg("2026-08-05-9999-LAX-JFK", on=date(2026, 8, 5))
-save_schedule(UID, [test_sched])
+replace_schedule(UID, [test_sched])
 check("swapping schedules takes the leg off the roster",
       flown.id not in {l.id for l in load_schedule(UID)})
 
@@ -350,7 +350,7 @@ check("...its baggage belt", row is not None and row["baggage_claim"] == "6")
 check("...its aircraft", row is not None and row["tail_api"] == "N600EN")
 check("...and its track", len(get_breadcrumb(flown.id)) > 0)
 
-save_schedule(UID, [flown])
+replace_schedule(UID, [flown])
 back = get_flight(flown.id)
 check("re-adding the schedule adopts the old row, not a blank one",
       back is not None and back["gate_destination"] == "A17")
@@ -359,18 +359,76 @@ check("...and the closeout record comes back with it",
 
 # The FO case: a different pilot imports a trip they were on and inherits
 # everything already known about it.
-save_schedule(UID2, [flown])
+replace_schedule(UID2, [flown])
 check("another pilot importing the same leg adopts it too",
       flown.id in {l.id for l in load_schedule(UID2)}
       and get_flight(flown.id)["gate_destination"] == "A17")
 
 # Retention still has the last word.
 ancient = make_leg("2019-05-05-1212-DFW-OKC", on=date(2019, 5, 5))
-save_schedule(UID2, [flown, ancient])
-save_schedule(UID2, [flown])          # un-roster it, as a swap would
+replace_schedule(UID2, [flown, ancient])
+replace_schedule(UID2, [flown])          # un-roster it, as a swap would
 purge_old()
 check("an un-rostered flight past 30 days is still purged",
       get_flight(ancient.id) is None)
+
+
+# -- the taxi-in trap (1.4.0) ------------------------------------------------
+print("\nA parked aircraft that keeps transmitting must still close")
+from app.closure import decide, STOPPED_LONG, SOURCE_OBSERVED
+from datetime import timezone as _tz, timedelta as _td
+from datetime import datetime as _dt
+
+
+class _Leg:
+    id = "L"
+    flight_number = "1"
+    date = _dt.now(_tz.utc).date()
+
+    def dep_datetime_utc(self):
+        return None
+
+    def arr_datetime_utc(self):
+        return None
+
+
+class _Row(dict):
+    def __getitem__(self, k):
+        return self.get(k)
+
+
+_now = _dt(2026, 6, 15, 20, 0, tzinfo=_tz.utc)
+_landed = _Row(airborne_seen=1, landed_seen=1, relaunched=0)
+
+# THE BUG. Both the observed route and the backstop required the transponder
+# to go quiet. An aircraft parked at the gate with its transponder still on --
+# ordinary behaviour, especially with the APU running -- satisfied neither, so
+# the leg never closed and the next leg never became current. From outside,
+# the app looked frozen on a flight that had plainly finished.
+_v = decide(_landed, _Leg(), _now, observed_in=_now - _td(minutes=45),
+            stopped_for=45 * 60, signal_gap=30, enrichment_fresh=False)
+check("a 45-minute stop closes even while transmitting",
+      _v is not None and _v[0] == SOURCE_OBSERVED)
+
+# The five-minute rule still needs silence: a short stop is as likely to be
+# holding for a gate as parked at one.
+_v = decide(_landed, _Leg(), _now, observed_in=_now - _td(minutes=7),
+            stopped_for=7 * 60, signal_gap=30, enrichment_fresh=False)
+check("a short stop while transmitting does NOT close", _v is None)
+
+_v = decide(_landed, _Leg(), _now, observed_in=_now - _td(minutes=7),
+            stopped_for=7 * 60, signal_gap=600, enrichment_fresh=False)
+check("a short stop plus silence still closes",
+      _v is not None and _v[0] == SOURCE_OBSERVED)
+
+# The guard that stops a delayed flight closing itself at the gate must
+# outrank the new route.
+_v = decide(_Row(airborne_seen=0, landed_seen=0), _Leg(), _now,
+            observed_in=_now - _td(minutes=45), stopped_for=45 * 60,
+            signal_gap=30, enrichment_fresh=False)
+check("a leg that never departed cannot close on a long stop", _v is None)
+check("the long-stop threshold is longer than the short one",
+      STOPPED_LONG.total_seconds() > 5 * 60)
 
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")

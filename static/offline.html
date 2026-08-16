@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>MyPilot · Offline</title>
+<meta name="theme-color" content="#0f1419">
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  /* Deliberately self-contained beyond app.css: this page is shown when the
+     network is gone, so it can only rely on what the service worker already
+     precached. Nothing here fetches anything. */
+  .off-wrap { min-height: 70vh; display: flex; flex-direction: column;
+              align-items: center; justify-content: center; text-align: center;
+              padding: 24px; gap: 14px; }
+  .off-icon { width: 56px; height: 56px; opacity: .8; }
+  .off-title { font-size: 19px; font-weight: 600; color: var(--text); }
+  .off-body { color: var(--muted); max-width: 30ch; line-height: 1.5; }
+  .off-btn { margin-top: 6px; padding: 10px 20px; border-radius: 8px;
+             border: 1px solid var(--border); background: var(--card);
+             color: var(--text); font-size: 15px; cursor: pointer; }
+</style>
+</head>
+<body>
+  <div class="off-wrap">
+    <img class="off-icon" src="/static/icon-192.png" alt="">
+    <div class="off-title">No connection</div>
+    <div class="off-body">MyPilot can't reach the server right now. Your flights are safe — this page will load as soon as you're back online.</div>
+    <button class="off-btn" onclick="location.reload()">Try again</button>
+  </div>
+</body>
+</html>

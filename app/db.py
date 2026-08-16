@@ -57,6 +57,8 @@ import sqlite3
 from pathlib import Path
 from typing import List
 
+from .version import SCHEMA_VERSION
+
 # Overridable so a test run can point at a scratch file instead of the real
 # database. Production ignores it and uses data/flighttracker.db.
 DB_FILE = Path(os.environ.get(
@@ -88,7 +90,8 @@ FLIGHT_COLUMNS: List[tuple] = [
     ("dep_time_local",        "TEXT"),
     ("arr_time_local",        "TEXT"),
     # Which carrier actually operates this leg. A deadhead's FFDO line
-    # gives a bare number, so ENY is often wrong. Resolved once, stored.
+    # gives a bare number, so the home prefix is often wrong. Resolved once,
+    # stored. See carriers.py.
     ("operator_callsign",     "TEXT"),
     ("fa_flight_id",          "TEXT"),
 
@@ -199,6 +202,15 @@ FLIGHT_COLUMNS: List[tuple] = [
     # and invisible to the counter. See carrier.py.
     ("carrier_tries",         "INTEGER NOT NULL DEFAULT 0"),
     ("carrier_tried_at",      "TEXT"),
+    # How many LATE attempts have been made to fetch the airline's gate-in
+    # AFTER the leg already closed on other evidence, and when the last one
+    # was. Separate from api_queries_used because they answer different
+    # questions: that counter is the leg's live ticket allowance, which is
+    # spent and finished by the time these fire. Recorded BEFORE the call is
+    # made, for the same reason carrier_tries is — a timeout still counts.
+    # See enrichment.should_backfill_gate_in.
+    ("gatein_tries",          "INTEGER NOT NULL DEFAULT 0"),
+    ("gatein_tried_at",       "TEXT"),
     ("last_api_query_at",     "TEXT"),
     # Which account's AeroAPI key paid for the most recent query on this
     # shared row. Recorded so spend is attributable when several crew are
@@ -210,6 +222,17 @@ FLIGHT_COLUMNS: List[tuple] = [
     ("created_at",            "TEXT"),
     # Set when the leg closes. One indexed delete does the 30-day cleanup.
     ("purge_after",           "TEXT"),
+    # ---- test mode (1.6.0)
+    # 1 on a leg invented by app/simulator.py. This is the ONLY thing that
+    # separates a rehearsal from a real flight, so it is checked at every
+    # boundary where the difference matters: AeroAPI must never be spent on
+    # one, ADS-B must never be asked about one, and no export or logbook may
+    # ever count one. Defaulting to 0 means every existing row is real,
+    # which is the correct reading of a database written before test mode
+    # existed.
+    ("simulated",             "INTEGER NOT NULL DEFAULT 0"),
+    # Which scenario produced it, for the panel to label the row.
+    ("sim_scenario",          "TEXT"),
 ]
 
 
@@ -261,6 +284,83 @@ def _sync_flight_columns(conn) -> None:
             conn.execute(f"ALTER TABLE flights ADD COLUMN {name} {decl}")
 
 
+def get_meta(key: str, default: str = "") -> str:
+    """Read one installation-level value. Never raises on a missing table."""
+    conn = get_connection()
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS app_meta ("
+                     "key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        r = conn.execute("SELECT value FROM app_meta WHERE key = ?", (key,)).fetchone()
+        return r["value"] if r else default
+    finally:
+        conn.close()
+
+
+def set_meta(key: str, value: str) -> None:
+    conn = get_connection()
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS app_meta ("
+                     "key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        conn.execute("INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)",
+                     (key, str(value)))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _stamp_schema_version(conn) -> None:
+    """Record what shape this database is, and refuse to wreck a newer one.
+
+    Migrations here have always been append-only and idempotent, which makes
+    them safe to RUN repeatedly. What they could not do is answer "what is
+    this database?" without inspecting every table, and they could not tell
+    the difference between a database that predates a change and one that
+    postdates it.
+
+    Two things this buys, both of which only matter later:
+
+      * ORDERING. Once migrations are numbered, a database that reports 3 can
+        run 4, 5, 6 in sequence rather than every migration re-deciding for
+        itself whether it already ran.
+
+      * A GUARD AGAINST DOWNGRADES. Rolling back to an older image and
+        pointing it at a newer database is the single easiest way to lose
+        data: the old build does not know about the new columns, writes rows
+        without them, and the damage is only visible later. A database
+        stamped NEWER than the running build is a hard stop, not a warning,
+        because by the time a warning is read the writes have happened.
+
+    Deliberately NOT a hard stop in the other direction: an older database
+    with a newer build is the normal upgrade path and must just work.
+    """
+    row = conn.execute(
+        "SELECT value FROM app_meta WHERE key = 'schema_version'").fetchone()
+    if row is None:
+        conn.execute(
+            "INSERT INTO app_meta (key, value) VALUES ('schema_version', ?)",
+            (str(SCHEMA_VERSION),))
+        return
+    try:
+        found = int(row["value"])
+    except (TypeError, ValueError):
+        found = SCHEMA_VERSION
+    if found > SCHEMA_VERSION:
+        raise RuntimeError(
+            f"Database schema is version {found} but this build only "
+            f"understands {SCHEMA_VERSION}. This is an older build being "
+            f"pointed at a newer database. Refusing to start rather than "
+            f"writing rows that silently drop the newer columns. Deploy the "
+            f"matching build, or restore a backup from before the upgrade."
+        )
+    if found < SCHEMA_VERSION:
+        # Column-level migrations above already ran and are idempotent, so
+        # reaching current is simply a matter of recording that they did.
+        print(f"[db] schema {found} -> {SCHEMA_VERSION}")
+        conn.execute(
+            "UPDATE app_meta SET value = ? WHERE key = 'schema_version'",
+            (str(SCHEMA_VERSION),))
+
+
 def init_db() -> None:
     conn = get_connection()
     try:
@@ -275,6 +375,7 @@ def init_db() -> None:
                 recovery_code_hash TEXT,
                 time_format TEXT DEFAULT '24',
                 theme TEXT DEFAULT 'dark',
+                icon_style TEXT DEFAULT 'modern',
                 poll_seconds INTEGER DEFAULT 45,
                 show_flightaware INTEGER DEFAULT 1,
                 show_fr24 INTEGER DEFAULT 1,
@@ -306,6 +407,11 @@ def init_db() -> None:
             ("aeroapi_period", "TEXT"),
             ("show_flightaware", "INTEGER DEFAULT 1"),
             ("show_fr24", "INTEGER DEFAULT 1"),
+            # v7.5. Which plane silhouette this user sees, on the map AND as
+            # the installed app icon. Defaults to the shape every install had
+            # before the setting existed, so an upgrade changes nothing until
+            # somebody chooses otherwise.
+            ("icon_style", "TEXT DEFAULT 'modern'"),
         ]:
             if name not in ucols:
                 conn.execute(f"ALTER TABLE users ADD COLUMN {name} {decl}")
@@ -366,6 +472,21 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS debug_events (
+                id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                at      TEXT NOT NULL,
+                event   TEXT NOT NULL,
+                subject TEXT,
+                detail  TEXT
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_debug_at ON debug_events(id DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_debug_subject "
+                     "ON debug_events(subject, id DESC)")
+        _stamp_schema_version(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS positions (

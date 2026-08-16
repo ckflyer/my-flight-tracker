@@ -1,18 +1,21 @@
 from fastapi import FastAPI, Request, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from pathlib import Path
-from datetime import datetime, date, timedelta, time as dtime
+from datetime import datetime, date, timedelta, timezone, time as dtime
 from zoneinfo import ZoneInfo
 from typing import Optional
 import calendar as cal_module
 from types import SimpleNamespace
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from .schedule import load_schedule, get_current_info, delete_leg, save_schedule
+from .schedule import (load_schedule, get_current_info, delete_leg,
+                       merge_schedule, remove_legs)
+from .importer import (ADDED, CHANGED, REMOVED, UNCHANGED, build_diff,
+                       month_labels, months_covered)
 from .enrichment import query_stats, budget_state
-from .flights import get_flight
+from .flights import get_flight, flight_key
 from .models import FlightLeg
 from .parser import parse_schedule_text
 from .airports import enrich_leg
@@ -20,14 +23,17 @@ from .settings import load_settings, save_settings, AppSettings
 from .track import get_breadcrumb
 from . import tags
 from . import view as flight_view
-from .view import short_zone   # one shared CDT->CT map, see view.py
+from .view import short_zone, zone_label  # THE zone label, see view.py
 from .auth import (
     get_or_create_secret_key, count_users, create_user, get_user_by_username,
     get_user_by_id, get_user_by_share_code, verify_password, regenerate_share_code,
-    list_all_users, delete_user, set_recovery_code, reset_password_with_recovery_code,
+    list_all_users, delete_user, set_admin, set_recovery_code,
+    reset_password_with_recovery_code,
 )
+from . import simulator
 from .ratelimit import check_rate_limit
-from .version import VERSION
+from . import debuglog
+from .version import VERSION, API_VERSION, MIN_CLIENT_VERSION, client_is_supported
 
 BASE = Path(__file__).resolve().parent.parent
 jinja_env = Environment(
@@ -36,7 +42,7 @@ jinja_env = Environment(
 )
 jinja_env.globals["version"] = VERSION
 
-app = FastAPI(title="Pilot Tracker")
+app = FastAPI(title="MyPilot")
 app.mount("/static", StaticFiles(directory=str(BASE / "static")), name="static")
 
 
@@ -114,6 +120,34 @@ def current_viewer_user_id(request: Request) -> Optional[int]:
     return viewer_user_id
 
 
+def viewer_display_overrides(request: Request, pilot, settings_dict: dict) -> dict:
+    """Apply a viewer's own display preferences on top of the pilot's.
+
+    Viewers can pick their own theme, clock format and link visibility; those
+    live in cookies on their device and never touch the pilot's account.
+
+    This exists as ONE function because the override used to be written
+    inline in the tracker route and simply forgotten in the calendar route.
+    A viewer on light mode therefore got a light tracker and a dark
+    calendar — the same person, two pages, two themes. Anything rendering a
+    page for a possibly-viewer must go through here.
+    """
+    out = dict(settings_dict)
+    if pilot:
+        return out
+    cookie_tf = request.cookies.get("pt_viewer_tf")
+    if cookie_tf in ("12", "24"):
+        out["time_format"] = cookie_tf
+    cookie_theme = request.cookies.get("pt_viewer_theme")
+    if cookie_theme in ("dark", "light"):
+        out["theme"] = cookie_theme
+    if "pt_viewer_show_fa" in request.cookies:
+        out["show_flightaware"] = request.cookies.get("pt_viewer_show_fa") == "1"
+    if "pt_viewer_show_fr24" in request.cookies:
+        out["show_fr24"] = request.cookies.get("pt_viewer_show_fr24") == "1"
+    return out
+
+
 def require_pilot(request: Request):
     """Returns the pilot user row, or a redirect response if not logged in
     as a pilot. Callers must check `isinstance(result, RedirectResponse)`."""
@@ -141,10 +175,12 @@ def fmt_local(leg: FlightLeg, which: str = "dep", time_format: str = "24",
         time_str = t.strftime("%H:%M")
     if not info or not with_zone:
         return time_str
-    tz = ZoneInfo(info.timezone)
-    sample = datetime(2026, 7, 1, 12, 0, tzinfo=tz)
-    abbr = short_zone(sample.tzname()) or info.timezone.split("/")[-1]
-    return f"{time_str} {abbr}"
+    # Was: a hard-coded sample of 2026-07-01, i.e. ALWAYS the summer label,
+    # plus a fallback that rendered the city name ("Chicago") where a zone
+    # belonged. Both are why labels looked inconsistent. leg.date is the
+    # real date, so daylight time is answered for the day being shown.
+    abbr = zone_label(info.timezone, leg.date)
+    return f"{time_str} {abbr}" if abbr else time_str
 
 
 def tz_abbr(leg: FlightLeg, which: str = "dep") -> Optional[str]:
@@ -158,10 +194,7 @@ def tz_abbr(leg: FlightLeg, which: str = "dep") -> Optional[str]:
     info = leg.origin_info if which == "dep" else leg.dest_info
     if not info:
         return None
-    tz = ZoneInfo(info.timezone)
-    sample = datetime(2026, 7, 1, 12, 0, tzinfo=tz)
-    raw = sample.tzname() or info.timezone.split("/")[-1]
-    return short_zone(raw)
+    return zone_label(info.timezone, leg.date)
 
 
 def tracking_links(leg: FlightLeg) -> dict:
@@ -182,7 +215,8 @@ def _fmt_utc_local(dt, tz_name, time_format="24"):
         return None
     text = (local.strftime("%I:%M %p").lstrip("0") if time_format == "12"
             else local.strftime("%H:%M"))
-    return f"{text} {short_zone(local.tzname()) or ''}".strip()
+    label = zone_label(tz_name, dt)
+    return f"{text} {label}".strip() if label else text
 
 
 def _parse_iso(value):
@@ -500,6 +534,39 @@ def build_review_legs(legs: list, time_format: str = "24") -> list:
             "is_deadhead": leg.is_deadhead,
             "suggested_break_before": bool(leg.trip_start and i > 0),
         })
+    return out
+
+
+def build_diff_rows(entries: list, time_format: str = "24") -> list:
+    """Render one section of the import diff. (N1, 1.5.0)
+
+    A "changed" entry carries the OLD times as well as the new ones,
+    because "3729 DFW→OKC changed" tells the pilot nothing he can act on,
+    and the whole reason the diff exists is to be actionable.
+    """
+    out = []
+    for entry in entries:
+        leg, was = entry["leg"], entry.get("was")
+        row = {
+            "id": flight_key(leg.id),
+            "callsign": leg.callsign,
+            "route": f"{leg.origin} → {leg.destination}",
+            "date_label": leg.date.strftime("%b %d").replace(" 0", " "),
+            "dep": fmt_local(leg, "dep", time_format, with_zone=False),
+            "arr": fmt_local(leg, "arr", time_format, with_zone=False),
+            "dep_zone": tz_abbr(leg, "dep"),
+            "arr_zone": tz_abbr(leg, "arr"),
+            "same_zone": tz_abbr(leg, "dep") == tz_abbr(leg, "arr"),
+            "is_deadhead": leg.is_deadhead,
+            "was": None,
+        }
+        if was is not None:
+            row["was"] = {
+                "dep": fmt_local(was, "dep", time_format, with_zone=False),
+                "arr": fmt_local(was, "arr", time_format, with_zone=False),
+                "is_deadhead": was.is_deadhead,
+            }
+        out.append(row)
     return out
 
 
@@ -961,7 +1028,7 @@ async def viewer_settings_post(
 # ---------------------------------------------------------------------------
 
 @app.get("/calendar", response_class=HTMLResponse)
-async def calendar_page(request: Request):
+async def calendar_page(request: Request, month: Optional[str] = None):
     pilot = current_pilot(request)
     viewer_uid = None if pilot else current_viewer_user_id(request)
     user_id = pilot["id"] if pilot else viewer_uid
@@ -992,15 +1059,42 @@ async def calendar_page(request: Request):
                 return trip
         return None
 
-    # Only the months that actually have at least one flight — no
-    # prev/next browsing needed since nothing else has anything to show.
+    # ONE MONTH AT A TIME (1.5.0). This used to render every month that
+    # had a flight, stacked down one page. That was fine while retention
+    # was 30 days and the import replaced the roster — there was never
+    # more than a month of it. With 365-day retention and N1's additive
+    # import, the same code renders a whole YEAR of grids and agendas into
+    # a single document, on a phone.
+    #
+    # The month shown is a URL parameter, so it survives a refresh, can be
+    # linked, and is what the browser Back button steps through.
     months_with_data = sorted({(l.date.year, l.date.month) for l in legs})
     if not months_with_data:
         months_with_data = [(today.year, today.month)]
 
+    def _key(y, m):
+        return f"{y:04d}-{m:02d}"
+
+    available = [_key(y, m) for y, m in months_with_data]
+    # Default to the month being LIVED IN if there is anything in it,
+    # otherwise the nearest month that has flights — landing a crew member
+    # on an empty January because it happens to sort first is exactly the
+    # kind of thing that reads as broken.
+    active = month if month in available else None
+    if active is None:
+        this_month = _key(today.year, today.month)
+        if this_month in available:
+            active = this_month
+        else:
+            future = [k for k in available if k >= this_month]
+            active = future[0] if future else available[-1]
+    idx = available.index(active)
+    prev_month = available[idx - 1] if idx > 0 else None
+    next_month = available[idx + 1] if idx < len(available) - 1 else None
+
     cal = cal_module.Calendar(firstweekday=6)  # weeks start Sunday
     month_blocks = []
-    for year, month in months_with_data:
+    for year, month in [(int(active[:4]), int(active[5:7]))]:
         weeks = []
         week = []
         for d in cal.itermonthdates(year, month):
@@ -1057,7 +1151,13 @@ async def calendar_page(request: Request):
     return HTMLResponse(template.render(
         request=request,
         month_blocks=month_blocks,
-        settings=settings.model_dump(),
+        active_month=active,
+        prev_month=prev_month,
+        next_month=next_month,
+        month_choices=[{"value": k,
+                        "label": datetime.strptime(k, "%Y-%m").strftime("%B %Y")}
+                       for k in reversed(available)],
+        settings=viewer_display_overrides(request, pilot, settings.model_dump()),
         is_pilot=pilot is not None,
     ))
 
@@ -1214,6 +1314,39 @@ async def admin_diagnostics(request: Request):
                    "Every lookup returns nothing and no flight will show live "
                    "tracking, however healthy the rest of the app looks.</p>")
 
+    # The probe above says whether the host answers RIGHT NOW. This says
+    # what the poller actually got on real flights, which is the question
+    # that matters and can disagree with the probe.
+    hist = _al.recent_results()
+    out.append("<h2>Recent real lookups</h2>")
+    if not hist:
+        out.append("<p style='color:#5f6368'>Nothing recorded yet. This fills "
+                   "in as the poller looks up flights in the tracking "
+                   "window, and survives restarts.</p>")
+    else:
+        good = sum(1 for h in hist if h.get("ok"))
+        out.append("<p style='color:#5f6368;font-size:13px'>%d of the last %d "
+                   "lookups succeeded. If these are green while the probe "
+                   "above is red, the feed is working and the probe is being "
+                   "rate-limited — trust this table.</p>" % (good, len(hist)))
+        out.append("<table style='width:100%;border-collapse:collapse;"
+                   "font-size:12px'>")
+        for h in hist[:15]:
+            out.append(
+                "<tr style='border-top:1px solid #e8eaed'>"
+                "<td style='padding:5px 10px 5px 0;color:#5f6368;"
+                "white-space:nowrap'>%s</td>"
+                "<td style='padding:5px 10px 5px 0'>%s</td>"
+                "<td style='padding:5px 10px 5px 0;font-family:monospace'>%s</td>"
+                "<td style='padding:5px 0;%s'>%s</td></tr>"
+                % (_html.escape((h.get("at") or "")[5:16].replace("T", " ")),
+                   _html.escape(h.get("callsign") or ""),
+                   _html.escape((h.get("feed") or "").replace("https://", "")),
+                   "color:#137333" if h.get("ok") else "color:#c5221f",
+                   _html.escape(h.get("detail") or ""))
+            )
+        out.append("</table>")
+
     out.append("<h2>Your active flights</h2>")
     active = _poller.active_flights()
     if not active:
@@ -1259,8 +1392,44 @@ async def admin_diagnostics(request: Request):
     return HTMLResponse(page)
 
 
+
+@app.get("/admin/debug", response_class=HTMLResponse)
+async def admin_debug(request: Request, subject: Optional[str] = None,
+                      event: Optional[str] = None, limit: int = 200):
+    """The decision log, rendered for reading on a phone.
+
+    Admin-only. It records what the app DECIDED and why, so a question like
+    "why is this leg still showing taxi-in" is answered by reading rather
+    than by reasoning about code. Off unless PT_DEBUG_LOG=1.
+    """
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    if not pilot["is_admin"]:
+        return RedirectResponse("/", status_code=303)
+    events = debuglog.recent(limit=min(int(limit), 1000),
+                             subject=subject, event=event)
+    template = jinja_env.get_template("debug.html")
+    return HTMLResponse(template.render(
+        request=request, events=events, subject=subject or "",
+        event=event or "", enabled=debuglog.ENABLED,
+        is_admin=True, is_pilot=True,
+    ))
+
+
+@app.post("/admin/debug/clear")
+async def admin_debug_clear(request: Request):
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    if not pilot["is_admin"]:
+        return RedirectResponse("/", status_code=303)
+    debuglog.clear()
+    return RedirectResponse("/admin/debug", status_code=303)
+
+
 @app.get("/admin", response_class=HTMLResponse)
-async def admin(request: Request):
+async def admin(request: Request, month: Optional[str] = None):
     pilot = require_pilot(request)
     if isinstance(pilot, RedirectResponse):
         return pilot
@@ -1269,6 +1438,30 @@ async def admin(request: Request):
     info = get_current_info(pilot["id"])
     upcoming_legs = ([info.current] if info.current else []) + list(info.upcoming)
     past_legs = info.past
+
+    # Month filter (1.5.0). Now that imports ACCUMULATE rather than roll
+    # over (N1), this table grows by ~46 legs a month and would otherwise
+    # be an unbroken scroll by the end of a year. Filtering server-side
+    # rather than hiding rows in the browser, because the point is to stop
+    # sending 550 rows to a phone, not to stop showing them.
+    #
+    # Months are offered NEWEST FIRST: the reason to open this page is
+    # almost always the trip you are on or the one just flown.
+    all_legs = list(upcoming_legs) + list(past_legs)
+    months = sorted({l.date.strftime("%Y-%m") for l in all_legs}, reverse=True)
+    month_options = [{
+        "value": m,
+        "label": datetime.strptime(m, "%Y-%m").strftime("%B %Y"),
+        "count": sum(1 for l in all_legs if l.date.strftime("%Y-%m") == m),
+    } for m in months]
+    # An unknown or stale month (a bookmark from a month since purged)
+    # falls back to showing everything rather than an empty page.
+    active_month = month if month in months else None
+    if active_month:
+        upcoming_legs = [l for l in upcoming_legs
+                         if l.date.strftime("%Y-%m") == active_month]
+        past_legs = [l for l in past_legs
+                     if l.date.strftime("%Y-%m") == active_month]
 
     def build_rows(legs):
         rows = []
@@ -1296,28 +1489,83 @@ async def admin(request: Request):
 
     upcoming_rows = build_rows(upcoming_legs)
     past_rows = build_rows(past_legs)
+
+    # Admin-only panels (1.6.0). Everything that administers the INSTALL
+    # now lives here rather than being split between here and Settings.
+    # Settings is where a pilot changes how the app behaves for them;
+    # /admin is where whoever runs the box operates it. Two different jobs
+    # and, on a shared install, two different people.
+    is_admin = bool(pilot["is_admin"])
+    people, sim_rows, sim_scenarios = [], [], []
+    if is_admin:
+        people = list_all_users()
+        sim_scenarios = [{"key": sc.key, "title": sc.title,
+                          "description": sc.description,
+                          "route": f"{sc.origin}–{sc.destination}",
+                          "legs": sc.legs, "block_min": sc.block_min}
+                         for sc in simulator.SCENARIOS]
+        for r in simulator.active_sim_rows():
+            sc = simulator.SCENARIOS_BY_KEY.get(r["sim_scenario"] or "")
+            sim_rows.append({
+                "id": r["id"],
+                "callsign": f"{r['flight_number']} {r['origin']}→{r['destination']}",
+                "scenario": sc.title if sc else (r["sim_scenario"] or "—"),
+                "phase": r["phase_tag"] or "—",
+                "status": r["status_tag"] or "—",
+                "closed": bool(r["closed"]),
+                "closed_by": r["closed_by"] or "—",
+                "airborne": bool(r["airborne_seen"]),
+                "landed": bool(r["landed_seen"]),
+                "stopped_since": r["stopped_since"],
+            })
+
     template = jinja_env.get_template("admin.html")
     return HTMLResponse(template.render(
         request=request, upcoming_rows=upcoming_rows, past_rows=past_rows,
-        past_count=len(past_legs), count=len(upcoming_legs) + len(past_legs),
+        past_count=len(past_legs),
+        count=len(upcoming_legs) + len(past_legs),
+        total_count=len(all_legs),
+        month_options=month_options, active_month=active_month,
+        active_month_label=(datetime.strptime(active_month, "%Y-%m").strftime("%B %Y")
+                            if active_month else None),
+        is_admin=is_admin, people=people, pilot_id=pilot["id"],
+        sim_rows=sim_rows, sim_scenarios=sim_scenarios,
         settings=settings.model_dump(), share_code=pilot["share_code"],
     ))
 
 
 @app.post("/admin/import")
 async def admin_import(request: Request, text: str = Form(...)):
+    """Show what this paste would change. Applies NOTHING. (N1, 1.5.0)
+
+    Through 1.4.0 this page listed the paste and the confirm step replaced
+    the roster with it, so a leg's absence from the paste was silently a
+    deletion. Now the page is a DIFF, and the two failures that never
+    announce themselves — a dropped trip the pilot forgot to remove, and a
+    leg flown that was never on the line — are both visible in one place.
+    """
     pilot = require_pilot(request)
     if isinstance(pilot, RedirectResponse):
         return pilot
     legs = parse_schedule_text(text)
     if not legs:
         # Nothing valid parsed — nothing to review, just go back.
-        return RedirectResponse(url="/admin", status_code=303)
+        return RedirectResponse(url="/admin?err=parse", status_code=303)
     apply_gap_trip_starts(legs)
     settings = load_settings(pilot["id"])
+
+    now = datetime.now(timezone.utc)
+    diff = build_diff(legs, load_schedule(pilot["id"]), now)
     review_legs = build_review_legs(legs, settings.time_format)
     template = jinja_env.get_template("import_review.html")
-    return HTMLResponse(template.render(request=request, legs=review_legs, settings=settings.model_dump()))
+    return HTMLResponse(template.render(
+        request=request, legs=review_legs, settings=settings.model_dump(),
+        scope_label=month_labels(months_covered(legs)),
+        added=build_diff_rows(diff[ADDED], settings.time_format),
+        changed=build_diff_rows(diff[CHANGED], settings.time_format),
+        removed=build_diff_rows(diff[REMOVED], settings.time_format),
+        unchanged_count=len(diff[UNCHANGED]),
+    ))
 
 
 @app.post("/admin/import/confirm")
@@ -1359,8 +1607,57 @@ async def admin_import_confirm(request: Request):
         enrich_leg(leg)
         legs.append(leg)
 
-    save_schedule(pilot["id"], legs)
+    # ADD, never replace. The only legs that go are the ones the pilot
+    # left ticked on the review page, and the review page only ever offers
+    # future legs inside the months this paste covers — so importing
+    # September cannot touch August, and no import can revise history.
+    merge_schedule(pilot["id"], legs)
+    removals = [r for r in form.getlist("remove_id") if r]
+    if removals:
+        offered = set(form.getlist("removable_id"))
+        # Only honour removals the page actually offered. Without this a
+        # crafted form could delete any leg on the roster, including flown
+        # ones, which is the exact class of silent history edit N1 exists
+        # to prevent.
+        remove_legs(pilot["id"], [r for r in removals if r in offered])
     return RedirectResponse(url="/admin", status_code=303)
+
+
+@app.post("/admin/add")
+async def admin_add(request: Request,
+                    leg_date: str = Form(...), flight: str = Form(...),
+                    origin: str = Form(...), dep: str = Form(...),
+                    destination: str = Form(...), arr: str = Form(...),
+                    deadhead: str = Form("0")):
+    """Add one leg by hand. (N1, 1.5.0)
+
+    The case this exists for is a diversion that then continued to the
+    original destination: a leg that was flown, is not in any bid line,
+    and never will be. Without a manual add there is no way to record it,
+    and the logbook would be permanently short a leg. Same path as an
+    import — merge, never replace.
+    """
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    try:
+        d = date.fromisoformat(leg_date.strip())
+        num = flight.strip().lstrip("0") or flight.strip()
+        o, dst = origin.strip().upper(), destination.strip().upper()
+        dep_t, arr_t = dtime.fromisoformat(dep), dtime.fromisoformat(arr)
+        if not num or len(o) != 3 or len(dst) != 3 or o == dst:
+            raise ValueError("bad leg")
+    except Exception:
+        return RedirectResponse(url="/admin?err=add", status_code=303)
+
+    is_dh = deadhead == "1"
+    leg = FlightLeg(id=f"{d.isoformat()}-{num}-{o}-{dst}", date=d,
+                    flight_number=num, origin=o, destination=dst,
+                    dep_time_local=dep_t, arr_time_local=arr_t,
+                    is_deadhead=is_dh, trip_start=False)
+    enrich_leg(leg)
+    merge_schedule(pilot["id"], [leg])
+    return RedirectResponse(url="/admin?added=1", status_code=303)
 
 
 @app.post("/admin/delete/{leg_id}")
@@ -1370,6 +1667,103 @@ async def admin_delete(request: Request, leg_id: str):
         return pilot
     delete_leg(pilot["id"], leg_id)
     return RedirectResponse(url="/admin", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Admin-only: test mode, and the people panel
+# ---------------------------------------------------------------------------
+
+@app.post("/admin/test/start")
+async def admin_test_start(request: Request, scenario: str = Form(...)):
+    """Begin a rehearsal. Costs nothing and touches no real flight."""
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    if not pilot["is_admin"]:
+        return RedirectResponse(url="/admin", status_code=303)
+    simulator.start(pilot["id"], scenario)
+    return RedirectResponse(url="/admin#test-mode", status_code=303)
+
+
+@app.post("/admin/test/stop")
+async def admin_test_stop(request: Request):
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    if not pilot["is_admin"]:
+        return RedirectResponse(url="/admin", status_code=303)
+    simulator.stop(pilot["id"])
+    return RedirectResponse(url="/admin#test-mode", status_code=303)
+
+
+@app.post("/admin/test/age")
+async def admin_test_age(request: Request, leg_id: str = Form(...),
+                         minutes: int = Form(30)):
+    """Shift a simulated leg's observed timestamps backwards.
+
+    The alternative to a clock multiplier. Nothing is faked and no
+    threshold is lowered — see simulator.age.
+    """
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    if not pilot["is_admin"]:
+        return RedirectResponse(url="/admin", status_code=303)
+    # Bounded, and only ever backwards. Ageing FORWARD would put stored
+    # events in the future, which nothing downstream is written to expect.
+    simulator.age(leg_id, max(1, min(int(minutes), 720)))
+    return RedirectResponse(url="/admin#test-mode", status_code=303)
+
+
+@app.post("/admin/users/promote/{user_id}")
+async def admin_promote_user(request: Request, user_id: int):
+    """Make another account an admin. (1.6.0)
+
+    Until now the ONLY admin was whoever registered first — `create_user`
+    sets `is_admin` on the first account and there was no route, button or
+    documented method to make a second one. On a box the owner cannot SSH
+    into, that means losing the first account loses admin entirely, with
+    the data still sitting there.
+
+    Promotion is deliberately not symmetric with demotion below: see there.
+    """
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    if not pilot["is_admin"]:
+        return RedirectResponse(url="/admin", status_code=303)
+    set_admin(user_id, True)
+    return RedirectResponse(url="/admin#people", status_code=303)
+
+
+@app.post("/admin/users/demote/{user_id}")
+async def admin_demote_user(request: Request, user_id: int):
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    if not pilot["is_admin"]:
+        return RedirectResponse(url="/admin", status_code=303)
+    if user_id == pilot["id"]:
+        # An admin may not demote themselves. Combined with the last-admin
+        # guard in set_admin, this makes it impossible to end up with a
+        # database that has data in it and nobody able to administer it —
+        # a state with no recovery path short of editing SQLite by hand.
+        return RedirectResponse(url="/admin#people", status_code=303)
+    set_admin(user_id, False)
+    return RedirectResponse(url="/admin#people", status_code=303)
+
+
+@app.post("/admin/users/delete/{user_id}")
+async def admin_delete_user(request: Request, user_id: int):
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    if not pilot["is_admin"]:
+        return RedirectResponse(url="/admin", status_code=303)
+    if user_id == pilot["id"]:
+        return RedirectResponse(url="/admin#people", status_code=303)
+    delete_user(user_id)
+    return RedirectResponse(url="/admin#people", status_code=303)
 
 
 @app.post("/admin/regenerate-code")
@@ -1420,11 +1814,13 @@ async def settings_page(request: Request):
     s = load_settings(pilot["id"])
     template = jinja_env.get_template("settings.html")
     ctx = {"request": request, "s": s, "saved": False, "is_admin": bool(pilot["is_admin"]),
-           "is_pilot": True, "post_to": "/settings",
+           "is_pilot": True, "post_to": "/settings", "icon_styles": ICON_STYLES,
            "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"]),
            "poller": poller_status(s.time_format)}
-    if pilot["is_admin"]:
-        ctx["all_users"] = list_all_users()
+    # NO all_users here any more (1.6.0). Administering the install moved
+    # to /admin in one piece; leaving a second copy of the people table
+    # behind would mean two places to keep in step and two places to check
+    # when something looks wrong.
     return HTMLResponse(template.render(**ctx))
 
 
@@ -1456,6 +1852,7 @@ async def settings_save(
     poll_seconds: int = Form(15),
     show_flightaware: Optional[str] = Form(None),
     show_fr24: Optional[str] = Form(None),
+    icon_style: str = Form("modern"),
 ):
     pilot = require_pilot(request)
     if isinstance(pilot, RedirectResponse):
@@ -1478,37 +1875,185 @@ async def settings_save(
         poll_seconds=max(10, min(300, int(poll_seconds))),
         show_flightaware=show_flightaware is not None,
         show_fr24=show_fr24 is not None,
+        # Validated against the known set rather than stored as submitted:
+        # this value is interpolated into the manifest and used to pick an
+        # icon filename, so an unknown string would 404 every icon and leave
+        # the installed app with a blank tile.
+        icon_style=icon_style if icon_style in ICON_STYLES else "modern",
     )
     save_settings(pilot["id"], s)
     template = jinja_env.get_template("settings.html")
     ctx = {"request": request, "s": s, "saved": True, "is_admin": bool(pilot["is_admin"]),
-           "is_pilot": True, "post_to": "/settings",
+           "is_pilot": True, "post_to": "/settings", "icon_styles": ICON_STYLES,
            "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"]),
            "poller": poller_status(s.time_format)}
-    if pilot["is_admin"]:
-        ctx["all_users"] = list_all_users()
+    # NO all_users here any more (1.6.0). Administering the install moved
+    # to /admin in one piece; leaving a second copy of the people table
+    # behind would mean two places to keep in step and two places to check
+    # when something looks wrong.
     return HTMLResponse(template.render(**ctx))
 
 
 @app.post("/settings/users/delete/{user_id}")
 async def settings_delete_user(request: Request, user_id: int):
-    pilot = require_pilot(request)
-    if isinstance(pilot, RedirectResponse):
-        return pilot
-    if not pilot["is_admin"]:
-        return RedirectResponse(url="/settings", status_code=303)
-    if user_id == pilot["id"]:
-        # Refuse to let an admin delete their own account from this panel —
-        # avoids locking yourself out with no one left to fix it.
-        return RedirectResponse(url="/settings", status_code=303)
-    delete_user(user_id)
-    return RedirectResponse(url="/settings", status_code=303)
+    """Moved to /admin/users/delete in 1.6.0. Kept as a redirect.
+
+    A phone with Settings still open from before the update would post
+    here, and a 404 on a DELETE button is the worst possible way to find
+    out a route moved — the admin cannot tell whether it happened.
+    """
+    return RedirectResponse(url="/admin#people", status_code=307)
+
+
+# ---------------------------------------------------------------------------
+# App shell: icon styles, manifest, service worker
+# ---------------------------------------------------------------------------
+
+# The plane silhouettes a user can choose between. Keys are the filename stems
+# written by make_icons.py — keep the two in step or an icon 404s to a blank
+# tile. Order is the order shown in settings.
+ICON_STYLES = {
+    "modern":  "Modern",
+    "sharp":   "Sharp",
+    "rounded": "Rounded",
+    "delta":   "Delta",
+}
+DEFAULT_ICON_STYLE = "modern"
+
+
+def _icon_style_for(request: Request) -> str:
+    """Whichever style this visitor should get, falling back safely.
+
+    A viewer (family member) has no settings row of their own, so they
+    inherit the pilot's choice — the point is that the household sees one
+    consistent app, not that each phone picks its own.
+    """
+    try:
+        pilot = current_pilot(request)
+        uid = pilot["id"] if pilot else current_viewer_user_id(request)
+        if uid:
+            style = load_settings(uid).icon_style
+            if style in ICON_STYLES:
+                return style
+    except Exception:
+        # The manifest is requested before login on a cold install, and a
+        # broken manifest blocks installation entirely. Never raise here.
+        pass
+    return DEFAULT_ICON_STYLE
+
+
+@app.get("/manifest.webmanifest")
+async def web_manifest(request: Request):
+    """The install descriptor, generated per user so the icon choice applies.
+
+    IMPORTANT AND COUNTERINTUITIVE: changing this does NOT change an icon
+    that is already sitting on someone's home screen. Both iOS and Android
+    read the manifest once, at install time, and then keep what they got.
+    Changing the setting updates the map marker instantly and the installed
+    icon only after the app is removed and re-added. Say so in the UI rather
+    than letting people think it is broken — the settings page does.
+
+    A native shell can do this properly (iOS has an alternate-icon API), so
+    this limitation goes away at the point we ship one, not before.
+    """
+    style = _icon_style_for(request)
+    return JSONResponse({
+        "name": "MyPilot",
+        "short_name": "MyPilot",
+        "description": "Live flight tracking and schedule for airline crew and their families",
+        "start_url": "/",
+        "scope": "/",
+        "display": "standalone",
+        "background_color": "#0f1419",
+        # Matches --bg. It used to be #1e3a8a, which produced a blue flash
+        # on launch before the app's own dark background painted.
+        "theme_color": "#0f1419",
+        "icons": [
+            {"src": f"/static/icon-{style}-192.png", "sizes": "192x192",
+             "type": "image/png", "purpose": "any"},
+            {"src": f"/static/icon-{style}-512.png", "sizes": "512x512",
+             "type": "image/png", "purpose": "any"},
+            {"src": f"/static/icon-{style}-maskable-512.png", "sizes": "512x512",
+             "type": "image/png", "purpose": "maskable"},
+        ],
+    }, media_type="application/manifest+json")
+
+
+@app.get("/sw.js")
+async def service_worker():
+    """Serve the worker from the ROOT, with the version baked in.
+
+    Two things are happening here and both matter:
+
+    1. SCOPE. A service worker may only control URLs at or below the path it
+       was served from. Served from /static/sw.js it could never see a page
+       navigation or an /api/ call, which is everything we need it for.
+       Serving it at /sw.js gives it the whole origin.
+
+    2. CACHE KEYING. __APP_VERSION__ is replaced with the running build's
+       version, so every deploy produces a different cache name and the
+       worker's activate step discards the old one. Without this a phone
+       would keep serving the previous build's CSS and JS indefinitely and
+       `update.sh` would appear to do nothing.
+
+    no-store on the worker itself is deliberate: browsers cache sw.js, and a
+    cached worker cannot ship the fix that replaces itself.
+    """
+    src = (BASE / "static" / "sw.js").read_text()
+    src = src.replace("__APP_VERSION__", VERSION)
+    return Response(content=src, media_type="application/javascript",
+                    headers={"Cache-Control": "no-store, max-age=0"})
 
 
 # ---------------------------------------------------------------------------
 # JSON API — pilot or viewer, same rules as the tracker page
 # ---------------------------------------------------------------------------
 
+# Every endpoint below is mounted TWICE: once under /api/v1/ and once at the
+# bare /api/ path it has always had.
+#
+# The versioned path is the one any future client should call. The bare path
+# is an alias kept alive so the currently deployed pages (and anything a
+# family member has open right now) do not break the moment this ships.
+#
+# The distinction matters because of clients we cannot reach. A browser
+# always has the newest build seconds after a deploy; an installed app does
+# not, and may be months behind. When a field is renamed or removed, v1 keeps
+# serving the old shape and the new shape goes to /api/v2/ — so an old build
+# keeps working instead of going blank. Adding a field is not a break and
+# does not need a new version. See app/version.py.
+
+@app.get("/api/v1/meta")
+async def api_meta(client: Optional[str] = None):
+    """What this server is, and whether the caller is new enough to talk to it.
+
+    Nothing needs this today: every client is a browser holding code this
+    server handed it seconds ago, so client and server cannot disagree. It
+    exists because that stops being true the day a native app ships, and
+    retrofitting it then means the builds already in the wild are exactly the
+    ones that cannot use it.
+
+    A client passes its own build as ?client=1.2.3 on launch. `supported`
+    false means the contract has moved past what it understands and it should
+    show an update prompt rather than render a blank screen. Omitting the
+    parameter is fine and reports supported, so a caller that does not care
+    is not forced to.
+
+    Deliberately unauthenticated: a client has to be able to discover it is
+    too old to log in.
+    """
+    supported = client_is_supported(client) if client else True
+    return {
+        "app": "MyPilot",
+        "version": VERSION,
+        "api_version": API_VERSION,
+        "min_client_version": MIN_CLIENT_VERSION,
+        "client_version": client,
+        "supported": supported,
+    }
+
+
+@app.get("/api/v1/current")
 @app.get("/api/current")
 async def api_current(request: Request):
     pilot = current_pilot(request)
@@ -1520,6 +2065,7 @@ async def api_current(request: Request):
     return info.model_dump(mode="json")
 
 
+@app.get("/api/v1/selected")
 @app.get("/api/selected")
 async def api_selected(request: Request, leg: Optional[str] = None):
     """Lightweight polling endpoint: just the live/progress data for the
@@ -1582,6 +2128,7 @@ async def api_selected(request: Request, leg: Optional[str] = None):
     }
 
 
+@app.get("/api/v1/leg/{leg_id}")
 @app.get("/api/leg/{leg_id}")
 async def api_leg(request: Request, leg_id: str):
     """Everything the tracker page needs to switch to a different flight

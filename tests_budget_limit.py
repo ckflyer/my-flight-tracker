@@ -24,7 +24,7 @@ from app import enrichment                             # noqa: E402
 from app.settings import AppSettings, load_settings, save_settings  # noqa: E402
 from app.models import FlightLeg                       # noqa: E402
 from app.airports import enrich_leg                    # noqa: E402
-from app.flights import save_schedule                  # noqa: E402
+from app.flights import replace_schedule                  # noqa: E402
 
 PASS, FAIL = [], []
 
@@ -106,7 +106,7 @@ def main():
     # A leg that was only ever a Python object has no row, so refresh()
     # correctly declines to spend on it — which used to make this suite
     # pass for the wrong reason.
-    save_schedule(uid, [leg])
+    replace_schedule(uid, [leg])
 
     print("\nBudget setting round-trips")
     save_settings(uid, AppSettings(aeroapi_enabled=True, aeroapi_key="fake-key-for-test",

@@ -3,16 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="Pilot Tracker">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="theme-color" content="#1e3a8a">
-  <title>Pilot Tracker</title>
-  <link rel="manifest" href="/static/manifest.json?v={{ version }}">
-  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png?v={{ version }}">
-  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png?v={{ version }}">
-  <link rel="shortcut icon" href="/static/favicon.ico?v={{ version }}">
-  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png?v={{ version }}">
+  {% include "partials/app_shell.html" %}
+  <script src="/static/planes.js?v={{ version }}"></script>
+  <title>MyPilot</title>
   <!-- Served from this box, not unpkg.com. The script tag below is
        render-blocking: the browser draws NOTHING until it arrives. Fetched
        from a public CDN that meant a slow or unreachable third party gave
@@ -456,7 +449,7 @@
     }
     /* The map is a fixed, full-screen layer starting at the very top of the
        screen, so Leaflet parks its +/- buttons 10px from the top-left corner
-       — which is exactly where "Pilot Tracker" is printed. They were sitting
+       — which is exactly where "MyPilot" is printed. They were sitting
        on each other. Drop the zoom stack below the title instead. */
     .leaflet-top.leaflet-left {
       top: calc(max(1rem, env(safe-area-inset-top)) + 40px);
@@ -515,6 +508,14 @@
        a height of 0 would still render ~29px tall and the panel would snap
        open by that much before sliding — which is the jump this replaces. */
     .expand-details { display: none; overflow: hidden; }
+    /* Once the panel is taller than the room above the tab pills, it scrolls
+       inside itself rather than pushing the card past them. -webkit- keeps
+       the momentum scroll on iOS. */
+    .expand-details.open.capped {
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+    }
     .expand-details.open { display: block; }
     .expand-details.animating { transition: height 260ms cubic-bezier(0.4, 0, 0.2, 1); }
     .ed-inner {
@@ -637,6 +638,9 @@
   </style>
 </head>
 <body>
+  <div id="conn-bar" class="conn-bar" role="status" aria-live="polite">
+    <span class="conn-dot" aria-hidden="true"></span><span id="conn-text"></span>
+  </div>
   {% if current %}
   <div class="map-bg">
     <div id="flight-map"></div>
@@ -678,7 +682,7 @@
   {% endif %}
 
   <div class="topbar">
-    <div class="brand">Pilot Tracker</div>
+    <div class="brand">MyPilot</div>
   </div>
 
   {% if current %}
@@ -711,20 +715,24 @@
             <div class="route-code" id="card-origin-code">{{ current.origin }}</div>
             <span class="route-time-wrap">
               <span class="chip-time {{ current.dep_delay.state if current.dep_delay and current.dep_delay.state in ('early','late') else '' }}" id="card-dep-time">{{ (current.dep_delay.time_short if current.dep_delay and current.dep_delay.time_short else current.dep_short) or current.dep }}</span>
-              {%- if not current.same_zone and current.dep_zone %}<span class="tz">{{ current.dep_zone }}</span>{% endif %}
+              {%- if current.dep_zone %}<span class="tz" aria-hidden="true">{{ current.dep_zone }}</span>{% endif %}
             </span>
           </div>
           <div class="route-end arr">
             <div class="route-code" id="card-dest-code">{{ current.destination }}</div>
             <span class="route-time-wrap">
               <span class="chip-time {{ current.arr_delay.state if current.arr_delay and current.arr_delay.state in ('early','late') else '' }}" id="card-arr-time">{{ (current.arr_delay.time_short if current.arr_delay and current.arr_delay.time_short else current.arr_short) or current.arr }}</span>
-              {%- if not current.same_zone and current.arr_zone %}<span class="tz">{{ current.arr_zone }}</span>{% endif %}
+              {%- if current.arr_zone %}<span class="tz" aria-hidden="true">{{ current.arr_zone }}</span>{% endif %}
             </span>
             <span class="chip-delay {{ current.arr_delay.state if current.arr_delay else '' }}" id="card-arr-delay"
                   style="{{ '' if (current.arr_delay and current.arr_delay.state in ('early','late','cancelled')) else 'display:none' }}">{{ current.arr_delay.short_text if current.arr_delay and current.arr_delay.short_text else '' }}</span>
           </div>
         </div>
-        <div class="route-line" id="progress-wrap-el">
+        {#- An empty track at 0% is not information, it is a bar that looks
+            broken. Show the strip only when there is a real position fix, or
+            when the leg has arrived and the full bar means something. -#}
+        <div class="route-line" id="progress-wrap-el"
+             style="{{ '' if (current.progress_pct is not none or current.phase_tag == 'Arrived') else 'display:none' }}">
           <div class="route-track"><div class="route-fill" id="progress-fill-el" style="width: {{ fill_pct }}%"></div></div>
           <div class="route-plane" id="route-plane-el"
                style="left: {{ fill_pct }}%;{{ '' if current.progress_pct is not none else ' display:none' }}"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true" style="transform: rotate(90deg);"><path d="M12 2c.9 0 1.6 1.3 1.6 2.9v4.4l7.4 4.3v2l-7.4-2.3v4.6l2.4 1.8v1.7L12 20.3l-4 1.1v-1.7l2.4-1.8v-4.6L3 15.6v-2l7.4-4.3V4.9C10.4 3.3 11.1 2 12 2z"/></svg></div>
@@ -881,8 +889,8 @@
                  arrival; one that crosses a zone states it at both ends. The
                  label is always its own element, so it can never be the thing
                  that wraps a time onto a second line. #}
-              <div class="row-chip"><span class="row-chip-icon"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline></svg></span><span class="row-chip-time">{{ leg.dep_short or leg.dep }}</span>{% if not leg.same_zone and leg.dep_zone %}<span class="tz">{{ leg.dep_zone }}</span>{% endif %}</div>
-              <div class="row-chip"><span class="row-chip-icon"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="7" y1="7" x2="17" y2="17"></line><polyline points="17 7 17 17 7 17"></polyline></svg></span><span class="row-chip-time">{{ leg.arr_short or leg.arr }}</span>{% if leg.arr_zone %}<span class="tz">{{ leg.arr_zone }}</span>{% endif %}</div>
+              <div class="row-chip"><span class="row-chip-icon"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline></svg></span><span class="row-chip-time">{{ leg.dep_short or leg.dep }}</span>{% if leg.dep_zone %}<span class="tz" aria-hidden="true">{{ leg.dep_zone }}</span>{% endif %}</div>
+              <div class="row-chip"><span class="row-chip-icon"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="7" y1="7" x2="17" y2="17"></line><polyline points="17 7 17 17 7 17"></polyline></svg></span><span class="row-chip-time">{{ leg.arr_short or leg.arr }}</span>{% if leg.arr_zone %}<span class="tz" aria-hidden="true">{{ leg.arr_zone }}</span>{% endif %}</div>
             </div>
           </div>
           <div class="leg-head-tags">
@@ -990,8 +998,18 @@
 
         if (open) {
           details.classList.add('open');
+          details.classList.remove('capped');
+          details.style.maxHeight = '';
           details.style.height = 'auto';
-          var target = details.getBoundingClientRect().height;
+          var natural = details.getBoundingClientRect().height;
+          // Apply the cap, then re-measure. If the panel wanted more room
+          // than exists, it is now the capped height and scrolls internally
+          // — which is what keeps the card's bottom edge, and the button on
+          // it, exactly where it was when you tapped.
+          if (window._ptCapPanel) window._ptCapPanel();
+          var capPx = parseFloat(details.style.maxHeight) || natural;
+          var target = Math.min(natural, capPx);
+          if (target < natural - 1) details.classList.add('capped');
           details.style.height = '0px';
           void details.offsetHeight;          // force the 0 to take effect
           // Measured with the panel at zero, so this is the card's height
@@ -1027,7 +1045,7 @@
           // curve, and the bottom edge again holds still.
           if (window._ptLayoutHero) window._ptLayoutHero(Math.max(0, cardBase), true);
           slideTimer = setTimeout(function() {
-            details.classList.remove('open', 'animating');
+            details.classList.remove('open', 'animating', 'capped');
             details.style.height = '';
             slideTimer = null;
           }, 300);
@@ -1234,6 +1252,38 @@
       // at the moment the slide starts the panel is still at its old height;
       // measuring then would compute the spacer for the wrong card size and
       // the bottom edge would lurch.
+      // The highest the card can physically go: below the title bar, clear
+      // of any notch. Measured off the card's own offset parent rather than
+      // assumed, so it is right on every device.
+      function minTop() {
+        // Derived from the card itself, not from hunting down a .topbar.
+        // The spacer is the ONLY thing between the card and its highest
+        // possible position, so subtracting the spacer's current height
+        // from the card's current top gives exactly where the card would
+        // sit with the spacer at zero — title bar, safe-area notch and all.
+        //
+        // The previous version looked up '.topbar' and fell back to 8px if
+        // it did not find one. The fallback is what fired, so the cap was
+        // calculated as though the card could start ~100px higher than it
+        // physically can, and the card overshot the tab pills by that much.
+        var spaceH = space.getBoundingClientRect().height;
+        var top = card.getBoundingClientRect().top + (window.scrollY || 0);
+        return Math.max(0, Math.round(top - spaceH));
+      }
+
+      // Largest the details panel may be before it starts scrolling inside
+      // itself. Everything the card shows above the panel — flight number,
+      // route, times, progress, and the Show/Hide row — has to fit too.
+      function capPanel() {
+        var panel = document.getElementById('expand-details');
+        if (!panel) return;
+        var chrome = card.getBoundingClientRect().height -
+                     panel.getBoundingClientRect().height;
+        var room = tabTop() - GAP - minTop() - chrome;
+        panel.style.maxHeight = Math.max(120, Math.round(room)) + 'px';
+      }
+      window._ptCapPanel = capPanel;
+
       function layout(growTo, animate) {
         var vh = window.innerHeight;
         var cardH = (typeof growTo === 'number')
@@ -1242,10 +1292,24 @@
         var desiredTop = tabTop() - GAP - cardH;
 
         if (card.classList.contains('expanded')) {
-          // Open, the only limit is the top of the screen. A panel taller
-          // than the space available pins the card there and runs off the
-          // bottom, which is what scrolling is for.
-          desiredTop = Math.max(0, desiredTop);
+          // THE CARD MUST NEVER BE TALLER THAN THE SPACE ABOVE THE PILLS.
+          //
+          // This used to be Math.max(0, desiredTop), which looks harmless
+          // and is not. When an open card is taller than the room above the
+          // tab bar, the sum goes negative and gets clamped to 0 — but the
+          // card cannot actually sit at 0, because the title bar and the
+          // safe-area padding hold it at ~105px. So its bottom landed at
+          // 105 + cardHeight, overshot the pills, and buried the Show/Hide
+          // row underneath the menu — exactly where you cannot reach it
+          // without scrolling. It only bit on tall panels, which is why it
+          // came and went: a flight with live ADS-B, gates and delay tags
+          // has a far taller panel than a bare scheduled one.
+          //
+          // The fix is to stop the card growing that big at all. The panel
+          // gets a max height and scrolls inside itself instead, so the
+          // bottom edge stays welded above the pills no matter how much
+          // detail there is.
+          desiredTop = Math.max(minTop(), desiredTop);
         } else {
           // Shut, also keep a usable strip of map above it on short screens
           // (a phone in landscape, a half-height desktop window).
@@ -1305,6 +1369,25 @@
       // height by a few pixels; a second pass costs nothing.
       window.requestAnimationFrame(layout);
       window.addEventListener('load', layout);
+
+      // THE CARD CHANGES HEIGHT ON ITS OWN. The poller adds a progress bar
+      // when a flight goes airborne, a "Delayed" pill when the airline
+      // pushes a time, a live ADS-B readout when an aircraft is acquired.
+      // Each makes the card taller, and none of them fired a resize or a
+      // scroll — so nothing recomputed and the card quietly grew down over
+      // the tab pills. That is the intermittent overlap: it only appeared
+      // once real data landed, which is why it looked random.
+      if (window.ResizeObserver) {
+        var pending = false;
+        new ResizeObserver(function() {
+          if (pending) return;            // one relayout per frame, not per pixel
+          pending = true;
+          window.requestAnimationFrame(function() {
+            pending = false;
+            if (!card.classList.contains('expanded')) layout();
+          });
+        }).observe(card);
+      }
 
       // On a phone, the address bar sliding away as you scroll fires a
       // resize and changes innerHeight by 60-120px. Relaying out then would
@@ -1486,7 +1569,7 @@
         head.setAttribute('aria-expanded', 'true');
         if (panel.getAttribute('data-loaded') === '1') return;
         panel.setAttribute('data-loaded', '1');
-        fetch('/api/leg/' + encodeURIComponent(legId))
+        fetch('/api/v1/leg/' + encodeURIComponent(legId))
           .then(function(r) { return r.json(); })
           .then(function(data) { renderLegDetail(panel, data); })
           .catch(function() {
@@ -1677,12 +1760,33 @@
       let originMarker = null, destMarker = null, remainingLine = null, flownLine = null, planeMarker = null;
       let lastFitPts = [];
 
+      // The silhouette comes from static/planes.js, which is GENERATED by
+      // make_icons.py from the same paths the app icons are cut from. That
+      // is the whole point: the plane on the map and the plane on the home
+      // screen are one shape, and a change to either is a change to both.
+      //
+      // Marker paint is white-fill/dark-outline regardless of the icon's
+      // own colours. The icon sits on a ground we control; the marker sits
+      // on arbitrary map tiles, and a dark plane over dark terrain
+      // disappears. Same shape, different treatment, on purpose.
+      const PLANE_STYLE = {{ (settings.icon_style if settings and settings.icon_style else 'modern') | tojson }};
+
       function makePlaneIcon(track) {
+        const styles = window.PLANE_STYLES || {};
+        const st = styles[PLANE_STYLE] || styles.modern;
+        if (!st) {
+          // planes.js failed to load. A missing marker is much worse than an
+          // ugly one, so fall back to a plain dot rather than nothing.
+          return L.divIcon({ className: 'plane-icon', iconSize: [14, 14], iconAnchor: [7, 7],
+                             html: '<svg width="14" height="14"><circle cx="7" cy="7" r="5" fill="#fff" stroke="#0f172a" stroke-width="1.5"/></svg>' });
+        }
+        const vb = st.vb;
+        const body = st.body.replace(/<(path|rect)/g,
+          '<$1 fill="#ffffff" stroke="#0f172a" stroke-width="1.4" stroke-linejoin="round"');
         const svg = `
-          <svg width="40" height="40" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"
-               style="transform: rotate(${track}deg); transform-origin: 20px 20px; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.55));">
-            <path fill="#ffffff" stroke="#0f172a" stroke-width="1" stroke-linejoin="round"
-              d="M20 2 L23.5 14 L36 18 L36 21 L23.5 19.5 L22 30 L27 34 L27 36 L20 33 L13 36 L13 34 L18 30 L16.5 19.5 L4 21 L4 18 L16.5 14 Z"/>
+          <svg width="40" height="40" viewBox="0 0 ${vb} ${vb}" xmlns="http://www.w3.org/2000/svg"
+               style="transform: rotate(${track}deg); transform-origin: ${vb / 2}px ${vb / 2}px; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.55));">
+            ${body}
           </svg>`;
         return L.divIcon({ className: 'plane-icon', html: svg, iconSize: [40, 40], iconAnchor: [20, 20] });
       }
@@ -1832,6 +1936,11 @@
         const stats = document.getElementById('progress-label-el');
         const known = (pct != null);
         const at = known ? Math.round(pct) : (phaseTag === 'Arrived' ? 100 : 0);
+        // Mirrors the server-side condition above. Without this the strip
+        // would render hidden and then be un-hidden, empty, by the first
+        // poll -- which is how it looked broken before 1.4.0.
+        const wrap = document.getElementById('progress-wrap-el');
+        if (wrap) wrap.style.display = (known || phaseTag === 'Arrived') ? '' : 'none';
         if (fill) fill.style.width = at + '%';
         if (plane) {
           plane.style.left = at + '%';
@@ -1853,12 +1962,74 @@
       // Poll-driven refresh: updates live stats, status, progress, and the
       // map's plane/trail in place — never touches scroll position,
       // expand/collapse state, or the map's current pan/zoom.
+      // ---- connection state ------------------------------------------
+      // Deliberately driven by whether the last POLL actually succeeded,
+      // not by navigator.onLine alone. onLine only reports whether the
+      // device has A network; it says "true" on airport wifi that has not
+      // been paid for, on a captive portal, and while the server is down.
+      // Those are exactly the situations a family member hits, so trusting
+      // it would make the bar lie precisely when it is needed.
+      //
+      // setConnState is called on every poll outcome, so recovery clears
+      // the bar on its own without anything extra having to notice.
+      var connEl = document.getElementById('conn-bar');
+      var connTextEl = document.getElementById('conn-text');
+      var lastGoodAt = Date.now();
+
+      function setConnState(state) {
+        if (!connEl) return;
+        if (!state) {
+          connEl.classList.remove('show');
+          connEl.removeAttribute('data-state');
+          return;
+        }
+        var msg;
+        if (state === 'offline') {
+          msg = 'Offline' + agoSuffix();
+        } else if (state === 'unreachable') {
+          msg = "Can't reach server" + agoSuffix();
+        } else {
+          msg = 'Showing saved data' + agoSuffix();
+        }
+        connTextEl.textContent = msg;
+        connEl.setAttribute('data-state', state);
+        connEl.classList.add('show');
+      }
+
+      // Naming the age matters more than naming the fault: "offline" alone
+      // leaves someone wondering whether what they can see is five seconds
+      // or five hours old, which is the actual question being asked.
+      function agoSuffix() {
+        var mins = Math.floor((Date.now() - lastGoodAt) / 60000);
+        if (mins < 1) return ' \u00b7 just now';
+        if (mins === 1) return ' \u00b7 1 min ago';
+        if (mins < 60) return ' \u00b7 ' + mins + ' min ago';
+        var hrs = Math.floor(mins / 60);
+        return ' \u00b7 ' + hrs + (hrs === 1 ? ' hr ago' : ' hrs ago');
+      }
+
+      window.addEventListener('offline', function() { setConnState('offline'); });
+      window.addEventListener('online', function() { refreshLiveData(); });
+
       function refreshLiveData() {
         if (!selectedId) return;
-        fetch('/api/selected?leg=' + encodeURIComponent(selectedId))
-          .then(function(r) { return r.json(); })
+        fetch('/api/v1/selected?leg=' + encodeURIComponent(selectedId))
+          .then(function(r) {
+            // The service worker tags a response it served from disk after
+            // the network failed. Without this the page would render an old
+            // body as though it were live.
+            var stale = r.headers.get('X-MyPilot-Stale') === '1';
+            if (r.status === 503) throw new Error('offline');
+            return r.json().then(function(d) { d.__stale = stale; return d; });
+          })
           .then(function(data) {
             if (data.error) return;
+            if (data.__stale) {
+              setConnState('stale');
+            } else {
+              lastGoodAt = Date.now();
+              setConnState(null);
+            }
 
             // The 5-minute full-page reload existed to notice this: one
             // flight ending and the next becoming active. Now the poll
@@ -1930,7 +2101,11 @@
             liveData = data.live;
             renderMap(currentData, liveData, false);
           })
-          .catch(function() {});
+          .catch(function() {
+            // Was a silent no-op through v7.4, which is why a dropped
+            // connection looked like a page that had simply stopped moving.
+            setConnState(navigator.onLine ? 'unreachable' : 'offline');
+          });
       }
 
       // Swap the card + map to a different flight WITHOUT a page load, so
@@ -2174,7 +2349,7 @@
       function selectLeg(legId, opts) {
         if (!legId) return;
         if (!opts || !opts.automatic) userPinnedSelection = true;
-        fetch('/api/leg/' + encodeURIComponent(legId))
+        fetch('/api/v1/leg/' + encodeURIComponent(legId))
           .then(function(r) { return r.json(); })
           .then(applyLegPayload)
           .catch(function() {});
@@ -2237,6 +2412,7 @@
     {% if is_pilot %}<a href="/admin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="9" y1="6.5" x2="20" y2="6.5"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="17.5" x2="20" y2="17.5"/><circle cx="4.5" cy="6.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="4.5" cy="17.5" r="1.4" fill="currentColor" stroke="none"/></svg><span>Flights</span></a>{% endif %}
     {% if is_pilot %}<a href="/settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 14.5a1.6 1.6 0 0 0 .32 1.77l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.6 1.6 0 0 0-1.77-.32 1.6 1.6 0 0 0-.97 1.47V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9.1 19.4a1.6 1.6 0 0 0-1.77.32l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.6 1.6 0 0 0 .32-1.77 1.6 1.6 0 0 0-1.47-.97H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.47-1.05 1.6 1.6 0 0 0-.32-1.77l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.6 1.6 0 0 0 1.77.32H9.1A1.6 1.6 0 0 0 10.15 3.1V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 .97 1.47 1.6 1.6 0 0 0 1.77-.32l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.6 1.6 0 0 0-.32 1.77V9.1a1.6 1.6 0 0 0 1.47.97H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5.43z"/></svg><span>Settings</span></a>{% else %}<a href="/viewer-settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 14.5a1.6 1.6 0 0 0 .32 1.77l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.6 1.6 0 0 0-1.77-.32 1.6 1.6 0 0 0-.97 1.47V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9.1 19.4a1.6 1.6 0 0 0-1.77.32l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.6 1.6 0 0 0 .32-1.77 1.6 1.6 0 0 0-1.47-.97H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.47-1.05 1.6 1.6 0 0 0-.32-1.77l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.6 1.6 0 0 0 1.77.32H9.1A1.6 1.6 0 0 0 10.15 3.1V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 .97 1.47 1.6 1.6 0 0 0 1.77-.32l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.6 1.6 0 0 0-.32 1.77V9.1a1.6 1.6 0 0 0 1.47.97H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5.43z"/></svg><span>Settings</span></a>{% endif %}
   </nav>
+{% include "partials/sw_register.html" %}
 </body>
 </html>
       document.addEventListener('click', function(e) {

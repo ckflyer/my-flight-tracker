@@ -10,17 +10,23 @@ from zoneinfo import ZoneInfo
 
 from .db import init_db
 from .flights import (delete_leg, get_flight, legs_sharing_callsign,
-                      load_schedule, save_schedule, set_operator_callsign)
+                      load_schedule, merge_schedule, remove_legs,
+                      replace_schedule, set_operator_callsign)
 from .models import CurrentFlightInfo, FlightLeg
 
 # Ensure tables exist as soon as this module loads.
 init_db()
 
-__all__ = ["load_schedule", "save_schedule", "delete_leg", "set_operator_callsign",
-           "legs_sharing_callsign", "get_current_info"]
+__all__ = ["load_schedule", "merge_schedule", "remove_legs", "replace_schedule",
+           "delete_leg", "set_operator_callsign", "legs_sharing_callsign",
+           "get_current_info", "CURRENT_GRACE"]
 
 # How long past SCHEDULED arrival a leg stays current on the clock alone.
 CURRENT_GRACE = timedelta(hours=3)
+# How long before SCHEDULED departure a leg stops being "upcoming" and
+# becomes eligible for the card. Named rather than repeated: _window_open
+# and the split below must agree exactly, or a leg falls into no list.
+CURRENT_WINDOW_BEFORE_DEP = timedelta(minutes=20)
 # The hard ceiling on holding a leg current because it is still flying.
 # Without it a row with a stuck airborne flag would own the card forever.
 MAX_AIRBORNE_HOLD = timedelta(hours=12)
@@ -83,6 +89,94 @@ def _has_started(leg, now: datetime) -> bool:
                 or _col(row, "off_actual_api") or _col(row, "out_observed"))
 
 
+def _on_ground(leg, now: datetime) -> bool:
+    """Any indication at all that this leg's aeroplane is DOWN. (1.5.0)
+
+    Owner's rule, and the right one: "if there is any indication of the
+    flight being on the ground, and the next flight is scheduled to be
+    active, then it needs to cycle to the next flight."
+
+    Deliberately BROAD, and that is the opposite of how the rest of this
+    file reasons. Everywhere else — `has_departed`, `_has_started`,
+    closure's guards — the app demands strong evidence, because the cost of
+    being wrong is closing a flight that is still going. Here the cost runs
+    the other way. Being wrong means showing a family member a finished leg
+    while the pilot is boarding the next one, and the recovery is automatic:
+    the moment the aeroplane is airborne again `_still_flying` takes over
+    and the card is right anyway. So any one of six signals is enough.
+
+    The last of them matters most in practice. `landed_seen` needs a
+    sustained touchdown to be OBSERVED, which a station with no ground
+    coverage never provides; but an aircraft that we watched get airborne
+    and are now seeing on the ground has landed, whatever the confirmation
+    timer thinks.
+    """
+    row = get_flight(leg.id)
+    if row is None:
+        return False
+    if _col(row, "closed"):
+        return True
+    for key in ("landed_seen", "on_actual_api", "in_actual_api", "in_observed"):
+        if _col(row, key):
+            return True
+    return bool(_col(row, "airborne_seen") and _col(row, "last_on_ground"))
+
+
+def _window_open(leg, now: datetime) -> bool:
+    """Has this leg reached the point where it could be the live one?
+
+    Same T-20 boundary `get_current_info` uses to move a leg out of
+    `upcoming`, so a leg can only ever take the card at the moment it stops
+    being upcoming. Derived rather than repeated, because two independent
+    copies of this number drifting apart would create a gap where a leg is
+    in neither list.
+    """
+    dep = leg.dep_datetime_utc()
+    return bool(dep and now >= dep - CURRENT_WINDOW_BEFORE_DEP)
+
+
+def _pick_current(candidates: List[FlightLeg], now: datetime) -> Optional[FlightLeg]:
+    """Which of the overlapping candidates is the live one.
+
+    Three rules, applied in order, each fixing a failure the ones above it
+    produced:
+
+      1. A leg with real evidence of having DEPARTED beats one that has
+         merely reached its scheduled time. Without this a 40-minute delay
+         on leg 2 took the card off an airborne leg 1, because leg 2's
+         window opened first.
+
+      2. ...but a leg that is DOWN hands the card on as soon as the next
+         leg's window opens. (1.5.0) Rule 1 on its own meant a landed leg
+         held the card for the full three-hour grace while the crew were
+         already boarding the next one — the closeout fix in this same
+         release made legs close properly and did NOT fix this, because
+         selection never asked whether the leg had closed. It asked only
+         which leg had started, and a finished leg has still started.
+
+      3. With no evidence anywhere, the clock decides and the latest
+         qualifying leg wins.
+    """
+    if not candidates:
+        return None
+    started = [l for l in candidates if _has_started(l, now)]
+    if not started:
+        return candidates[-1]
+
+    best = started[-1]
+    if not _on_ground(best, now):
+        return best
+
+    # It is down. Hand over to the earliest later candidate whose own
+    # window has opened — the NEXT leg, not the last one of the day, so a
+    # long duty period steps forward one leg at a time.
+    order = {id(l): i for i, l in enumerate(candidates)}
+    for leg in candidates:
+        if order[id(leg)] > order[id(best)] and _window_open(leg, now):
+            return leg
+    return best
+
+
 def get_current_info(user_id: int, now: Optional[datetime] = None) -> CurrentFlightInfo:
     """Split this user's schedule by the clock, then let evidence override it.
 
@@ -124,7 +218,7 @@ def get_current_info(user_id: int, now: Optional[datetime] = None) -> CurrentFli
         arr_utc = leg.arr_datetime_utc()
         if not dep_utc or not arr_utc:
             continue
-        if now < dep_utc - timedelta(minutes=20):
+        if now < dep_utc - CURRENT_WINDOW_BEFORE_DEP:
             upcoming.append(leg)
             if next_leg is None:
                 next_leg = leg
@@ -133,14 +227,9 @@ def get_current_info(user_id: int, now: Optional[datetime] = None) -> CurrentFli
         else:
             past.append(leg)
 
-    # Prefer the latest leg with real evidence it has begun; otherwise the
-    # latest by clock. `candidates` is already in schedule order.
-    current: Optional[FlightLeg] = None
-    started = [l for l in candidates if _has_started(l, now)]
-    if started:
-        current = started[-1]
-    elif candidates:
-        current = candidates[-1]
+    # Which of the overlapping candidates is live. `candidates` is already
+    # in schedule order. See _pick_current for the three rules.
+    current: Optional[FlightLeg] = _pick_current(candidates, now)
 
     # Anything that lost the contest is over, not pending — it is behind the
     # leg now flying. Without this a superseded candidate would simply

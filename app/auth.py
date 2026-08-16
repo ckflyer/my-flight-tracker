@@ -210,6 +210,55 @@ def list_all_users() -> list:
     return [dict(r) for r in rows]
 
 
+def count_admins() -> int:
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT COUNT(*) AS n FROM users WHERE is_admin = 1").fetchone()
+        return int(row["n"]) if row else 0
+    finally:
+        conn.close()
+
+
+def set_admin(user_id: int, make_admin: bool) -> bool:
+    """Grant or remove admin. Returns whether anything changed. (1.6.0)
+
+    Before this there was no way to create a second admin at all —
+    `create_user` sets the flag on whoever registers first and nothing else
+    ever touched it. On a self-hosted box that meant losing the first
+    account lost administration of the install permanently.
+
+    THE LAST-ADMIN GUARD is the only interesting part. Removing the final
+    admin leaves a database with real flight data in it that nobody can
+    administer, and there is no recovery path from the app — it would mean
+    opening SQLite by hand on the NAS. So the last one cannot be removed.
+    Refused silently rather than raising: this is reached from a form post,
+    and the caller re-renders a page that will simply still show that
+    person as an admin, which is the truth.
+    """
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT is_admin FROM users WHERE id = ?",
+                           (user_id,)).fetchone()
+        if row is None:
+            return False
+        currently = bool(row["is_admin"])
+        if currently == bool(make_admin):
+            return False
+        if currently and not make_admin:
+            others = conn.execute(
+                "SELECT COUNT(*) AS n FROM users WHERE is_admin = 1 AND id != ?",
+                (user_id,)).fetchone()
+            if not others or int(others["n"]) == 0:
+                print("[auth] refused to remove the last admin")
+                return False
+        conn.execute("UPDATE users SET is_admin = ? WHERE id = ?",
+                     (1 if make_admin else 0, user_id))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
 def delete_user(user_id: int) -> None:
     """Removes an account and everything it owns.
 

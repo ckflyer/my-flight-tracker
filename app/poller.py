@@ -39,14 +39,17 @@ from . import tags
 from .carrier import needs_resolution, resolve as resolve_carrier
 from .closure import maybe_close
 from .db import get_connection
-from .enrichment import (credentials, payer_for, refresh as refresh_enrichment,
+from .enrichment import (GATEIN_BACKFILL_TRIES, backfill_gate_in, credentials,
+                         payer_for, refresh as refresh_enrichment,
                          refresh_usage)
 from .flightmatch import (ACQUIRE_BEFORE_DEP_MINUTES, evaluate, has_flown,
                           observe, observed_gate_in, signal_gap_seconds,
                           stopped_seconds, wheels_down_at)
-from .flights import get_flight, owners_of, purge_old, write
+from .flights import (get_flight, owners_of, purge_old, rows_awaiting_gate_in,
+                      row_to_leg, unclosed_rows, write)
 from .livesource import live_state
-from .schedule import get_current_info
+from .schedule import CURRENT_GRACE, get_current_info
+from .simulator import state_for as sim_state_for
 from .track import record_position
 from .view import recompute_derived
 
@@ -238,6 +241,92 @@ def _refresh_all_usage(now: datetime) -> None:
             print(f"[poller] usage refresh failed for {user_id}: {e}")
 
 
+def _closeout_sweep(now: datetime) -> int:
+    """Judge legs the ordinary sweep has already let go of. (1.5.0)
+
+    THE HOLE THIS FILLS. `active_flights()` returns the CURRENT leg and
+    imminent upcoming ones, and nothing else. `get_current_info` releases a
+    leg 3 hours past its SCHEDULED arrival unless it is demonstrably still
+    airborne. After that, nothing in the app ever looked at it again.
+
+    Closure was written on the opposite assumption. Its backstop matures 3
+    hours after the REVISED arrival — later than the scheduled one on every
+    late flight, which is precisely the population the backstop exists for.
+    `relaunch` needs a sweep to notice the aircraft flying again. The
+    1.4.0 long-stop route needs a sweep at the 30-minute mark. All three
+    quietly stopped being reachable at the same instant, and a leg that
+    blocked in without an airline gate-in simply stayed open forever.
+
+    This costs NOTHING and is deliberately kept that way: every value
+    `closure.decide` reads is already stored on the row, so this is pure
+    re-evaluation with no ADS-B call and no AeroAPI call. `stopped_since`
+    and `last_signal_at` are timestamps, so the stopped-for and
+    signal-gap figures keep growing correctly on their own without anyone
+    fetching anything.
+
+    Note the ordering against the live sweep: a leg still inside its
+    window is being polled properly and is skipped here, so the two can
+    never both judge the same leg in one pass.
+    """
+    closed = 0
+    for row in unclosed_rows(now):
+        try:
+            leg = row_to_leg(row)
+            if leg is None:
+                continue
+            arr = leg.arr_datetime_utc()
+            # Leave anything still inside the live window alone — it has a
+            # real sweep with live data, and that one is better informed.
+            if arr and now < arr + CURRENT_GRACE:
+                continue
+            if maybe_close(leg, row, now,
+                           observed_in=observed_gate_in(row),
+                           stopped_for=stopped_seconds(row, now),
+                           signal_gap=signal_gap_seconds(row, now),
+                           enrichment_fresh=False):
+                closed += 1
+                _update_tags(leg, now)
+        except Exception as e:
+            print(f"[poller] closeout sweep failed for {row['id']}: {e}")
+    return closed
+
+
+def _gate_in_sweep(now: datetime) -> int:
+    """Chase the airline gate-in on legs that closed without one. (1.5.0)
+
+    `closure.maybe_close` has always been able to UPGRADE an observed or
+    backstop close to the airline's own figure. It could never happen,
+    because a closed leg was never polled again and `should_query` refuses
+    to spend on one — the upgrade was a door with a wall behind it.
+
+    This is the only paid part of the two new sweeps, and it is small: at
+    most three queries, on only those legs that finished without an
+    airline gate-in, spaced out over roughly a day. It matters more for
+    the logbook (N3) than for the tracker, because `in_actual_api` is what
+    a logbook export is allowed to use — an observed time must never
+    masquerade as a reported one in a legal record.
+    """
+    upgraded = 0
+    for row in rows_awaiting_gate_in(now, max_tries=GATEIN_BACKFILL_TRIES):
+        try:
+            leg = row_to_leg(row)
+            if leg is None:
+                continue
+            payer = payer_for(leg.id)
+            if payer is None:
+                continue
+            if not backfill_gate_in(payer, leg, now):
+                continue
+            # Re-read: the query may have just landed the gate-in, which
+            # is what makes the upgrade path reachable at last.
+            fresh = get_flight(leg.id)
+            if maybe_close(leg, fresh, now):
+                upgraded += 1
+        except Exception as e:
+            print(f"[poller] gate-in sweep failed for {row['id']}: {e}")
+    return upgraded
+
+
 def poll_once(now: Optional[datetime] = None) -> int:
     """One sweep. Returns how many flights had a position recorded."""
     global _last_sweep_at
@@ -270,7 +359,14 @@ def poll_once(now: Optional[datetime] = None) -> int:
 
             state = None
             try:
-                state = live_state(leg.callsign)
+                # A simulated leg gets its positions from simulator.py and
+                # NEVER touches the network. Routed here rather than inside
+                # live_state so the shared ADS-B cache and its 1 req/s
+                # floor stay entirely untouched by test mode.
+                if row is not None and row["simulated"]:
+                    state = sim_state_for(leg, now)
+                else:
+                    state = live_state(leg.callsign)
             except Exception as e:
                 print(f"[poller] lookup failed for {leg.callsign}: {e}")
 
@@ -297,6 +393,18 @@ def poll_once(now: Optional[datetime] = None) -> int:
             _update_tags(leg, now)
         except Exception as e:
             print(f"[poller] {leg_id} failed: {e}")
+
+    # AFTER the live sweep, never before: a leg inside its window is
+    # better judged with live data, and these two deliberately skip
+    # anything the loop above has already handled this pass.
+    try:
+        _closeout_sweep(now)
+    except Exception as e:
+        print(f"[poller] closeout sweep failed: {e}")
+    try:
+        _gate_in_sweep(now)
+    except Exception as e:
+        print(f"[poller] gate-in sweep failed: {e}")
     return recorded
 
 

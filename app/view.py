@@ -24,7 +24,7 @@ minute — the card used to print a scheduled time next to a note saying
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date as date_cls, datetime, timezone
 from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
@@ -55,22 +55,6 @@ def _col(row, name):
         return None
 
 
-def _fmt_local(dt: Optional[datetime], tz_name: Optional[str],
-               time_format: str = "24", with_zone: bool = True) -> Optional[str]:
-    """A UTC instant as a clock time at the airport, with its zone."""
-    if dt is None or not tz_name:
-        return None
-    try:
-        local = dt.astimezone(ZoneInfo(tz_name))
-    except Exception:
-        return None
-    text = (local.strftime("%I:%M %p").lstrip("0") if time_format == "12"
-            else local.strftime("%H:%M"))
-    if not with_zone:
-        return text
-    return f"{text} {short_zone(local.tzname()) or tz_name.split('/')[-1]}"
-
-
 # Daylight and standard forms of the same zone collapse to one label:
 # "CDT" and "CST" both become "CT". Two characters instead of three, and it
 # is what consumer apps show.
@@ -90,6 +74,10 @@ _TWO_LETTER_ZONE = {
     "AKST": "AKT", "AKDT": "AKT",
     "HST": "HT", "HDT": "HT",
     "AST": "AT", "ADT": "AT",
+    # Newfoundland, the half-hour zone. The only North American zone the map
+    # missed; found by generating a label for every airport in the realistic
+    # network and listing whatever failed to collapse to two letters.
+    "NST": "NT", "NDT": "NT",
 }
 
 
@@ -100,6 +88,75 @@ def short_zone(raw: Optional[str]) -> Optional[str]:
     if not raw:
         return raw
     return _TWO_LETTER_ZONE.get(raw, raw)
+
+
+def zone_label(tz_name: Optional[str], on: Optional[object] = None) -> Optional[str]:
+    """THE zone label. Every surface in the app comes through here.
+
+    WHY THIS EXISTS (v1.2.0)
+    ------------------------
+    There were three producers of a zone label — `view._fmt_local`,
+    `main.fmt_local` and `main._fmt_utc_local` — and they disagreed on both
+    of the things that matter:
+
+      * WHEN daylight time applies. `main.fmt_local` derived the label from
+        a HARD-CODED sample date of 2026-07-01, so every label it produced
+        was the summer one. For North America that is invisible, because
+        CDT and CST both collapse to "CT". For anywhere the collapse map
+        does not cover it is simply wrong: a January London leg was
+        labelled BST.
+
+      * WHAT to show when the zone abbreviation is unavailable. One fell
+        back to `tz_name.split('/')[-1]`, which renders "Chicago" — a city
+        name sitting where a two-letter zone belongs, which is most of why
+        the labels looked like they came in different lengths. Another fell
+        back to an empty string. The third to the city name again.
+
+    `on` is the date or datetime the label describes. Passing it is what
+    makes the label honest about daylight time; omitting it falls back to
+    today, which is right for "now" and wrong for a flight in another
+    season. Pass it whenever you have it.
+    """
+    if not tz_name:
+        return None
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        return None
+
+    if isinstance(on, datetime):
+        sample = on if on.tzinfo else on.replace(tzinfo=ZoneInfo("UTC"))
+        sample = sample.astimezone(tz)
+    elif isinstance(on, date_cls):
+        sample = datetime(on.year, on.month, on.day, 12, 0, tzinfo=tz)
+    else:
+        sample = datetime.now(tz)
+
+    raw = sample.tzname()
+    if not raw:
+        return None
+    # A zone database with no abbreviation yields things like "+09" or
+    # "GMT+9". Those are legitimate labels, but a CITY name is not — the
+    # old fallback put "Chicago" where "CT" belonged, and that single line
+    # accounts for most of the inconsistency people noticed.
+    return short_zone(raw)
+
+
+def _fmt_local(dt: Optional[datetime], tz_name: Optional[str],
+               time_format: str = "24", with_zone: bool = True) -> Optional[str]:
+    """A UTC instant as a clock time at the airport, with its zone."""
+    if dt is None or not tz_name:
+        return None
+    try:
+        local = dt.astimezone(ZoneInfo(tz_name))
+    except Exception:
+        return None
+    text = (local.strftime("%I:%M %p").lstrip("0") if time_format == "12"
+            else local.strftime("%H:%M"))
+    if not with_zone:
+        return text
+    label = zone_label(tz_name, dt)
+    return f"{text} {label}".strip() if label else text
 
 
 def _span(minutes: int) -> str:

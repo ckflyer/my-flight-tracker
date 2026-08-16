@@ -27,6 +27,11 @@ class AppSettings(BaseModel):
     show_flightaware: bool = True
     show_fr24: bool = True
     theme: str = "dark"
+    # Which plane silhouette to draw. Applies to the map marker immediately
+    # and to the web manifest's icons, which is as far as a browser lets us
+    # go — see ICON_STYLES in main.py for why an ALREADY-INSTALLED home
+    # screen icon does not change until the app is reinstalled.
+    icon_style: str = "modern"
     poll_seconds: int = 15
 
 
@@ -36,7 +41,7 @@ def load_settings(user_id: int) -> AppSettings:
         row = conn.execute(
             """
             SELECT aeroapi_enabled, aeroapi_key, aeroapi_budget, time_format, theme, poll_seconds,
-                   show_flightaware, show_fr24
+                   show_flightaware, show_fr24, icon_style
             FROM users WHERE id = ?
             """,
             (user_id,),
@@ -52,6 +57,7 @@ def load_settings(user_id: int) -> AppSettings:
                         if row["aeroapi_budget"] is not None else 4.90),
         time_format=row["time_format"] or "24",
         theme=row["theme"] or "dark",
+        icon_style=row["icon_style"] or "modern",
         poll_seconds=row["poll_seconds"] or 15,
         show_flightaware=bool(row["show_flightaware"]),
         show_fr24=bool(row["show_fr24"]),
@@ -66,13 +72,13 @@ def save_settings(user_id: int, s: AppSettings) -> None:
             UPDATE users SET
                 aeroapi_enabled = ?, aeroapi_key = ?, aeroapi_budget = ?,
                 time_format = ?, theme = ?, poll_seconds = ?,
-                show_flightaware = ?, show_fr24 = ?
+                show_flightaware = ?, show_fr24 = ?, icon_style = ?
             WHERE id = ?
             """,
             (
                 int(s.aeroapi_enabled), s.aeroapi_key, float(s.aeroapi_budget),
                 s.time_format, s.theme, s.poll_seconds,
-                int(s.show_flightaware), int(s.show_fr24),
+                int(s.show_flightaware), int(s.show_fr24), s.icon_style,
                 user_id,
             ),
         )

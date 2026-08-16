@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import requests
@@ -130,6 +131,66 @@ def endpoints_are_locked() -> bool:
     return _env_pin() is not None
 
 
+
+# ---------------------------------------------------------------------------
+# What actually happened, kept in the database.
+#
+# The diagnostics page could only show a synthetic probe of callsign AAL100,
+# fired at the moment the page was opened. That answers "is this host up
+# right now", which is NOT the same question as "did the poller get a
+# position for my flight" — the two can and do disagree. A feed that
+# rate-limits a burst of probes looks dead on the page while serving the
+# poller perfectly a minute later.
+#
+# So every real lookup records its outcome here, and the page shows that
+# alongside the probe. Survives restarts, because it is the history that
+# makes an intermittent fault legible.
+# ---------------------------------------------------------------------------
+
+_LOG_KEY = "adsb_last_results"
+_LOG_MAX = 40
+
+
+def record_result(feed: str, callsign: str, ok: bool, detail: str) -> None:
+    try:
+        conn = get_connection()
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS app_meta ("
+                         "key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            r = conn.execute("SELECT value FROM app_meta WHERE key = ?",
+                             (_LOG_KEY,)).fetchone()
+            log = json.loads(r["value"]) if r and r["value"] else []
+        except Exception:
+            log = []
+        log.insert(0, {
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "feed": feed, "callsign": callsign, "ok": bool(ok),
+            "detail": detail[:160],
+        })
+        del log[_LOG_MAX:]
+        conn.execute("INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)",
+                     (_LOG_KEY, json.dumps(log)))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[adsb] could not record result: {e}")
+
+
+def recent_results():
+    try:
+        conn = get_connection()
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS app_meta ("
+                         "key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            r = conn.execute("SELECT value FROM app_meta WHERE key = ?",
+                             (_LOG_KEY,)).fetchone()
+        finally:
+            conn.close()
+        return json.loads(r["value"]) if r and r["value"] else []
+    except Exception:
+        return []
+
+
 # Which endpoint last answered. Tried first next time so a working feed is
 # not re-discovered on every single sweep.
 _preferred: Optional[str] = None
@@ -138,7 +199,7 @@ REQUEST_TIMEOUT = 12
 
 # airplanes.live returns `t` as an ICAO type code ("E75L"). Nothing in the
 # response spells the aircraft out in words, so this maps the types an
-# Envoy/American Eagle pilot actually flies into something a family member
+# regional crew member actually flies into something a family member
 # reading the page would recognize. Anything not listed falls back to the
 # raw code, which is still better than showing nothing.
 TYPE_NAMES = {
@@ -341,11 +402,18 @@ def fetch_state(callsign: str) -> Optional[Dict[str, Any]]:
             print(f"[adsb] using {base}")
             _preferred = base
         try:
-            return _parse(data)
+            state = _parse(data)
         except Exception as e:
             print(f"[adsb] parse error from {base}: {e}")
+            record_result(base, cs, False, f"parse error: {e}")
             return None
+        n = len(data.get("ac") or data.get("aircraft") or [])
+        record_result(base, cs, True,
+                      "position found" if state else
+                      f"feed healthy, {n} aircraft on this callsign, none with a position")
+        return state
 
     if last_error:
         print(f"[adsb] no usable feed — last error: {last_error}")
+        record_result("(none)", cs, False, last_error)
     return None

@@ -187,8 +187,8 @@ def resolve_operator(api_key: str, flight_number: str, origin: str,
     """Which carrier operates this flight number on this route?
 
     An FFDO line gives a bare number and a (D) marker. A deadhead is very
-    often on mainline American or another wholly-owned regional, so
-    assuming ENY looks up a flight that doesn't exist and the leg never
+    often on the mainline or a sibling regional, so assuming the home
+    callsign looks up a flight that doesn't exist and the leg never
     tracks. Flight number alone is ambiguous; flight number CROSSED WITH
     THE ROUTE is not — only one carrier flies 4110 DFW-LFT on a given day.
 

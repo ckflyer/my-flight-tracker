@@ -21,7 +21,7 @@ from app.db import init_db                             # noqa: E402
 from app.auth import create_user                       # noqa: E402
 from app.airports import enrich_leg                    # noqa: E402
 from app.models import FlightLeg                       # noqa: E402
-from app.flights import get_flight, save_schedule       # noqa: E402
+from app.flights import get_flight, replace_schedule       # noqa: E402
 from app.track import get_breadcrumb                   # noqa: E402
 from app import livesource, poller, tags               # noqa: E402
 
@@ -41,7 +41,7 @@ LEG = FlightLeg(id=f"{TODAY}-3729-DFW-OKC", date=TODAY,
                 flight_number="3729", origin="DFW", destination="OKC",
                 dep_time_local=time(14, 0), arr_time_local=time(15, 10))
 enrich_leg(LEG)
-save_schedule(UID, [LEG])
+replace_schedule(UID, [LEG])
 O, D = LEG.origin_info, LEG.dest_info
 DEP = LEG.dep_datetime_utc()
 
@@ -246,6 +246,27 @@ try:
     check("...and a healthy one", _al.probe(_good)[:2] == (200, 1))
 finally:
     _al.save_endpoints(_saved); _al._preferred = None; _ls.reset_cache()
+
+print("\n-- real lookup outcomes are recorded and survive a restart --")
+# The diagnostics page could only show a synthetic probe fired when the page
+# was opened. That answers "is this host up now", not "did the poller get a
+# position for my flight" — and the two disagree when a feed rate-limits a
+# burst of probes while serving the poller fine.
+_al.save_endpoints([{"url": _good, "enabled": True, "api_key": ""}])
+_ls.reset_cache()
+_al.fetch_state("ENY3898")
+_hist = _al.recent_results()
+check("a successful lookup is recorded", bool(_hist))
+check("...with the feed that answered", _hist[0].get("feed") == _good, str(_hist[:1]))
+check("...and marked ok", _hist[0].get("ok") is True)
+
+_al.save_endpoints([{"url": _dead, "enabled": True, "api_key": ""}])
+_ls.reset_cache()
+_al.fetch_state("ENY9999")
+_hist = _al.recent_results()
+check("a failed lookup is recorded too", _hist[0].get("ok") is False, str(_hist[:1]))
+check("...with the error visible", "403" in (_hist[0].get("detail") or ""))
+check("...and the earlier success is still there", len(_hist) >= 2)
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 if FAIL:

@@ -1,0 +1,20 @@
+{# Registers the service worker. Put this at the END of <body> on every page.
+
+   Registration is deliberately late and deliberately silent. It is not
+   required for the page to work, so it must never be able to break one: a
+   browser without service worker support, a page served over plain HTTP, or
+   a registration that simply fails all end up doing nothing at all rather
+   than throwing.
+
+   NOTE ON http:// — service workers only run on https or on localhost. On a
+   LAN address over plain http the registration is skipped by the browser and
+   offline support silently does not exist. That is not a bug in this file;
+   it is why the roadmap puts a real domain with TLS at trigger T1.
+#}
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('/sw.js').catch(function () {});
+    });
+  }
+</script>

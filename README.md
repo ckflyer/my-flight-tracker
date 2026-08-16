@@ -1,7 +1,10 @@
-# flight-tracker
+# MyPilot
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 5.5.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.4.0.
+
+Formerly "flight-tracker" / "Pilot Tracker". Renamed in 1.0.0; see VERSION
+HISTORY for why the version number restarted.
 
 <!--
 READER: THIS FILE IS OPTIMISED FOR AI CONSUMPTION, NOT HUMAN BROWSING.
@@ -20,12 +23,16 @@ have drifted. If the packaged zip and the deployed build disagree, stop
 and say so before editing — that has already cost a working feature once.
 
 **Session end (required, before packaging):**
-1. Bump `app/version.py`.
+1. Bump `app/version.py`. It is SEMVER now (MAJOR.MINOR.PATCH) — pick the
+   field that matches the size of the change, and read the docstring in that
+   file before guessing. VERSION also keys the service worker cache, so
+   skipping the bump means phones keep serving the old build.
 2. Add a `## VERSION HISTORY` entry at the top of it.
 3. Update `## STATE` and `## OPEN`.
 4. Record any bug you hit and how it was diagnosed.
-5. Run all six test suites. Package only if all pass.
-6. Never ship `data/*.db` or `data/secret_key.txt`.
+5. Run all EIGHT test suites. Package only if all pass.
+6. Never ship `data/*.db` or `data/secret_key.txt`. Check the packaged
+   zip, not just the working tree — a test run recreates both.
 
 **Owner context:** no programming background. Explain reasoning in prose in
 chat, not jargon. He is a line pilot and is the authority on operational
@@ -38,24 +45,34 @@ seriously.
 
 ## STATE
 
-v6.3. Deployed target: TrueNAS. Multi-user: the owner plus several FOs,
-who fly the same legs — hence shared flight rows (v5.1).
+**v1.6.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+owner plus several FOs, who fly the same legs — hence shared flight rows
+(v5.1, retained).
 
-v5.6 was a UI pass (route strip, always-visible schedule). v5.7 makes the
-route strip's figures honest — ETE was still falling back to the clock —
-and stops the retention sweep deleting flights merely because nobody has
-them rostered. No schema change and no migration in either.
+The v6.4–v7.4 documentation gap is CLOSED as far as inspection can close it:
+what those versions built has been verified against the tree and folded into
+the sections below. Their RATIONALE is still unrecorded and unrecoverable —
+if you are about to change the shared stylesheet, the tab bar, or the light
+theme, read the code, because this file cannot tell you why they are the way
+they are.
 
-Tests: 400, six suites, all passing.
+**Current work: see `## NEXT UP`.** N1 is DONE (1.5.0). N2 is next.
+
+Tests: **889**, eleven suites, all passing.
 
 | Suite | N | Covers |
 |---|---|---|
-| `tests_flight_row.py` | 63 | write modes, both tag ladders, closure guards, shared crew, retention |
-| `tests_poller_end_to_end.py` | 27 | full flight gate-to-gate, scripted ADS-B feed |
+| `tests_flight_row.py` | 68 | write modes, both tag ladders, closure guards, shared crew, retention |
+| `tests_poller_end_to_end.py` | 47 | full flight gate-to-gate, scripted ADS-B feed |
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
-| `tests_carrier_cap.py` | 13 | deadhead lookup cap, FFDO placeholder filter |
-| `tests_ui_fixes.py` | 261 | layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit |
+| `tests_carrier_cap.py` | 13 | deadhead lookup cap, placeholder filter |
+| `tests_ui_fixes.py` | 355 | layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
+| `tests_app_shell.py` | 158 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
+| `tests_timezones.py` | 68 | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
+| `tests_closeout_sweep.py` | 42 | the abandonment cliff, the on-ground handover, the late gate-in chase and its cap |
+| `tests_import_merge.py` | 39 | additive import, month scoping, future-only reconciliation, the diff, manual add |
+| `tests_test_mode.py` | 63 | simulator isolation (no spend, no ADS-B, no logbook), each scenario, admin promotion, the last-admin guard |
 
 ## OPEN
 
@@ -74,16 +91,533 @@ Tests: 400, six suites, all passing.
   ≈ $1.25; worst case ≈ $2.00. Headroom exists.
 - Distribution undecided. Airplanes.live is non-commercial; AeroAPI
   Personal tier is personal-use only.
-- **UI, agreed but not yet done (v5.6 brainstorm).** Eleven templates each
-  carry a private copy of the colour palette and they already disagree
-  (`--border` is `#2a3548` on the tracker, `#334155` on settings/admin) —
-  one shared stylesheet in `/static` should come before any further visual
-  work. Five templates (`login`, `register`, `setup`, `forgot_password`,
-  `recovery_code`) have no light theme at all, so a light-mode user gets a
-  black login and then a white app. Manifest `theme_color` (#1e3a8a) does
-  not match the app background (#0f1419), and the manifest is linked from
-  only 2 of 11 pages. A bottom tab bar and a full-bleed map were scoped out
-  of v5.6 deliberately, not forgotten.
+### CLOSED since this list was last edited ✅
+
+Verified in the v7.4 tree, listed here so nobody "fixes" them twice:
+
+- **One shared palette — DONE.** `static/app.css` now holds the only copy
+  and all ten templates link it. Its header comment documents the
+  `data-theme` vs `prefers-color-scheme` precedence rule; the
+  `:not([data-theme])` guard on the media query is load-bearing and
+  explained there.
+- **Light theme on the auth pages — DONE.** Handled by the same file.
+- **Bottom tab bar — DONE.** `<nav class="tabbar">` on all four logged-in
+  pages (viewer, calendar, admin, settings), pilot-only entries gated on
+  `is_pilot`. See the caveat in ROADMAP P0-4: the links are plain `<a
+  href>`, so every tap is still a full page load.
+
+- **Service worker — DONE (1.0.0).** `static/sw.js`, served from `/sw.js` so
+  its scope is the whole origin. Cache name keyed to VERSION.
+- **Manifest and theme-color on every page — DONE (1.0.0).** Via
+  `templates/partials/app_shell.html`, included by all ten templates and
+  enforced by `tests_app_shell.py`. The manifest is now a ROUTE
+  (`/manifest.webmanifest`), generated per user so the icon choice applies.
+- **`theme_color` mismatch — DONE (1.0.0).** Now `#0f1419`, matching `--bg`.
+- **Carrier trademarks — DONE (1.0.0).** Renamed to MyPilot throughout;
+  callsign prefixes moved to `app/carriers.py` as configuration. A regression
+  guard scans templates and static files for the old names.
+- **API versioning — DONE (1.0.0).** `/api/v1/…` with the bare paths kept as
+  aliases.
+- **Retention — DONE (1.0.0).** 30 days → 365, in `flights.py` and
+  `track.py` together, `PT_RETENTION_DAYS` overridable. See BACKUP.md: this
+  is the release where the database stopped being disposable.
+- **Offline/connection state — DONE (1.0.0).** Three distinguished states,
+  driven by real poll outcomes rather than `navigator.onLine`.
+
+### STILL OPEN — verified against the v1.0.0 tree ✅
+
+- **1,376 of viewer.html's 2,333 lines are inline `<script>`.** This is the
+  mechanism behind the recurring "viewer.html silently loses JavaScript"
+  failure documented in NOTES — layout edits and logic edits collide
+  because they live in one file. See ROADMAP P0-6.
+- **Cookie-auth only** — no bearer tokens. See MIGRATION AND FUTURE-PROOFING.
+- **API returns presentation, not facts.** `/api/selected` emits
+  `dep_line`, `arr_line`, `dep_shown`, `ete`, `status` as pre-formatted
+  display strings, and takes `time_format` ("12"/"24") as an argument so
+  the SERVER does the formatting. Only `enriched_at_iso` and
+  `last_signal_iso` send a machine-readable value. Any non-browser client
+  is blocked on this. See ROADMAP P1-1.
+- **Schedule import has only ever been fed one carrier's FFDO lines.** This is the
+  gate on every other person using the app, and it is not a UI problem.
+  See ROADMAP P0-7.
+- **Import REPLACES the roster rather than adding to it.** Pasting a new
+  month deletes roster rows for legs not in the paste, including past ones.
+  Flight rows survive (shared, adopted); only the link is pruned. This is
+  the single blocker on the app being a record rather than a rolling
+  window. Owned by NEXT UP / N1.
+- **One share code per pilot.** No named invites, no per-person
+  revocation, no expiry, no last-seen. Owned by NEXT UP / N4.
+- **No self-service account deletion.** `settings.html` has admin-deletes-
+  a-user only (`/settings/users/delete/{user_id}`). Apple requires an
+  in-app deletion path for any app offering account creation, and it is
+  correct regardless. See ROADMAP P0-9.
+- **AeroAPI Personal tier is personal-use only; community ADS-B feeds
+  (adsb.lol, adsb.fi) are non-commercial.** airplanes.live already
+  withdrew access. Neither permits charging money. This is a hard legal
+  gate in front of any paid tier, not a detail. See ROADMAP T2.
+
+## NEXT UP — the agreed build order
+
+These five are COMMITTED, in this order, and the order is a dependency
+chain rather than a preference. Everything after N1 assumes flights
+accumulate instead of rolling over, so building any of N2–N5 first means
+building it twice.
+
+This section is the working plan. P0/P1 below remain the standing backlog.
+
+---
+
+### N1 — additive import + manual remove ✅ DONE in 1.5.0
+
+**The problem.** `save_schedule` currently REPLACES a pilot's roster: any
+leg not present in the new paste has its roster row deleted. Pasting
+September therefore erases August from that pilot's view. Combined with the
+old 30-day retention this made the app a rolling window, which is exactly
+what a logbook cannot be.
+
+Note what is NOT broken: flight ROWS are shared and adopted, never
+duplicated (v5.1). Only the roster LINK is pruned. So this is a small
+change, not a rewrite.
+
+**The change.**
+- Prune only FUTURE roster entries. A re-paste is the pilot correcting what
+  is COMING; a leg that already departed happened, and an import must not
+  be able to revise history.
+- Import runs by MONTH. The paste declares which month it covers, and
+  reconciliation is scoped to that month — so importing September cannot
+  touch August even for future-dated legs.
+- Nothing is applied silently. `import_review.html` already exists; it
+  becomes a DIFF the pilot approves: added / removed / changed / unchanged.
+- Manual per-leg remove, and manual per-leg ADD. The add path is what
+  covers a diversion that continued to the original destination — a leg
+  that never existed in any bid line and never will.
+
+**Why a diff rather than a silent merge.** Two failures need catching and
+neither announces itself: a trip dropped from the line that the pilot
+forgot to remove, and a leg flown that was never on the line. The diff is
+the only point where a human can see both.
+
+**Decided (owner, 1.5.0):** a removed PAST leg is DELETED OUTRIGHT. The
+archive idea was rejected as a state nobody would ever look at — it buys a
+distinction ("did not fly" vs "never imported") that costs a column, a
+filter on every query that reads the roster, and a second meaning of
+"removed" in the UI. An import can never remove a past leg anyway, so the
+only way to reach this is a human deliberately deleting one.
+
+**As built.** `save_schedule` is renamed `replace_schedule` and is OFF the
+import path entirely — the rename is the fix, because the old name read as
+"save this" while the behaviour was "make the roster exactly this". Two new
+primitives replace it there: `merge_schedule` (add, remove nothing) and
+`remove_legs` (targeted, explicit). Both re-sequence the whole roster into
+departure order afterwards, because `sort_index` used to be the leg's
+position in the paste, which only works while the paste IS the whole
+roster. `app/importer.py` owns the diff and nothing else; the two scope
+rules live there with the reasoning attached.
+
+Also shipped alongside, because N1 is what makes them necessary — before
+this the roster could not exceed about a month:
+- **Month filter on the flights page.** Server-side, `?month=YYYY-MM`, with
+  a per-month count and an all-months option.
+- **Calendar shows ONE month at a time**, with prev/next and a picker. It
+  used to render every month that had data, stacked down one page; at
+  365-day retention that is a year of grids in one document.
+- **Per-leg drop on the review page**, on the same page as the trip breaks.
+  Dropping disables the row's inputs rather than deleting the row, so the
+  leg stays visible, struck through, and the choice is reversible.
+
+---
+
+### N2 — logbook view
+
+**Why it needs its own surface.** ~46 legs/month is ~550/year and ~2,750 in
+five years. A flat list dies well before that. The tracker must stay small
+FOREVER — its whole job is a family member opening it and instantly seeing
+where the pilot is. It shows current trip and next trip, and never becomes
+a history browser.
+
+**Three views, ONE database.** (An earlier version of this discussion said
+"separate databases" — that was a misreading and would break the shared
+flight row design that keeps one AeroAPI query serving every crew member on
+a leg. One database, three ways of looking at it.)
+
+| View | Job | Scope |
+|---|---|---|
+| Tracker | where are they right now | current + next trip |
+| Calendar | browse by month | one month |
+| **Logbook** | the archive | everything, paged |
+
+**The change.** New pilot-only page. Paged (never render 2,750 rows),
+grouped by month, searchable by date range, tail, airport and flight
+number. Columns are the logbook fields: date, flight number, tail,
+origin/destination, OOOI, block, flight time.
+
+---
+
+### N3 — CSV export
+
+**Everything actual, from the API.** Owner's call, and the right one. Each
+OOOI event is stored twice — `*_actual_api` (the airline's figure) and
+`*_observed` (what we watched). The export uses the API value. Where it is
+absent the row is INCOMPLETE, not filled in from observation: a logbook is
+a legal record and a derived time must never masquerade as a reported one.
+Carry a source column anyway so the distinction survives the export.
+
+**Deadheads excluded.** `roster.is_deadhead` already knows. You do not log
+a deadhead as flight time.
+
+**Leg verification before export.** The owner's refinement, and better than
+what was originally proposed. Legs must be CONFIRMED as flown before they
+can be exported. This is the mechanism that makes the diversion problem
+tractable: rather than the app inferring what happened, the pilot ticks off
+what actually did. It also bounds the AeroAPI backfill — only confirmed
+legs need their missing OOOI values fetched, so reconciliation cannot run
+away with the budget.
+
+**Format.** A plain spreadsheet. Good logbook apps accept an arbitrary CSV
+and let the user map columns, so a clean, well-named sheet beats guessing
+at one vendor's schema. Both UTC and local for every time, block AND flight
+time as separate columns.
+
+**Depends on 1.1.0/1.2.0.** These exports are built from resolved instants.
+Shipping this before the timezone work would have written hour-wrong OOOI
+times into a real pilot's logbook twice a year.
+
+---
+
+### N4 — per-viewer named invites
+
+**The problem.** One share code per pilot means the family is one
+undifferentiated blob. Revocation is all-or-nothing: cutting off one person
+logs out the spouse, the parents and every FO simultaneously. And a code is
+a bearer secret — whoever holds the text has a live position feed.
+
+**Why not require viewer accounts.** It would fix revocation and cost
+adoption. The person who most needs this app is the least likely to create
+an account and choose a password. Named invites get most of the security
+for none of the signup friction.
+
+**The change.** Codes move to their own table, one row per invite: name,
+code, created, last seen, optional expiry, revoked flag. Settings gets a
+panel listing active invites, with an add button opening a dialog for name
+and expiry, plus per-invite regenerate and revoke.
+
+Same code-generation logic as today. **New constraint: a new code may not
+collide with any other ACTIVE code**, across all pilots — two households
+must never share a code, and the check has to be against live codes rather
+than merely unique-per-pilot.
+
+**Also:** a global pause-sharing switch. Crew on days off may not want a
+live feed running at all.
+
+---
+
+### N5 — viewer-side framing
+
+**The insight.** A family member is not asking "where is the aircraft".
+They are asking **"when are you home"**. The tracker answers the first
+question well and the second one barely.
+
+**The change.**
+- Arrival time in the VIEWER's timezone, not the destination airport's.
+  Someone in Dallas waiting on a pilot landing in Phoenix wants to know
+  when to leave for the airport in their own clock.
+- Trip-level framing: "away until Thursday · 2 legs left".
+- Surface the pickup details already stored — gate, terminal, baggage.
+- A landed-safe history: the last few arrivals, with times.
+
+**Template split happens here.** Pilot and viewer currently share
+`viewer.html` (2,333 lines) with `is_pilot` toggles. The owner's proposed
+trigger — split on whether the visitor is signed in as a pilot — is the
+right line, and N2 plus N5 make it unavoidable. Do the split as part of
+N5, not before: splitting an unchanged file achieves nothing, and doing it
+alongside a behaviour change makes a regression impossible to attribute.
+
+**Sequencing note:** P0-6 (moving viewer.html's inline JavaScript to
+`/static/app.js`) should land BETWEEN N4 and N5. Splitting a template that
+still carries 1,376 lines of inline script means splitting the script too,
+by hand, which is precisely how the documented "viewer.html silently loses
+JavaScript" bug happens.
+
+---
+
+### What this sequence deliberately does NOT do
+
+- **No native client work.** The on-ramp (P1) is being laid as normal
+  iteration; the client itself waits for trigger T2.5.
+- **No push notifications.** P1-6 records the events; delivery needs a
+  host that is always up (T1) and a store presence (T2.5).
+- **No payment or hosting work.** Those are trigger-gated below and none of
+  the triggers have fired.
+
+---
+
+## ROADMAP
+
+Ordered by cost, not by appeal. Phases P0/P1 are free and are done in
+evenings. Everything from T1 down is gated behind a **trigger** — a
+condition that must be TRUE before the money is spent. The triggers are
+the point of this section. Spending ahead of one is how a hobby becomes an
+expensive hobby.
+
+**Governing rule: never do work that only pays off in a future that might
+not arrive.** Every P1 item below is dual-purpose — it improves the web
+app today AND is the on-ramp to a native client. If a proposed task fails
+that test, it is premature.
+
+### P0 — free, small, do first
+
+**Items 1, 2, 3 and 5 shipped in 1.0.0.** Item 4 is partly done: the tab bar
+existed already (built in the undocumented v6.x–v7.x range), but its links
+are still plain `<a href>`, so every tap is a full page load. That remains
+the clearest "this is a website" tell.
+
+Ordered by perceived-quality gain per hour spent.
+
+1. ~~**Service worker.**~~ **DONE 1.0.0.**
+2. ~~**Manifest + `theme-color` on all ten templates.**~~ **DONE 1.0.0.**
+3. ~~**`theme_color` → `#0f1419`.**~~ **DONE 1.0.0.**
+4. **Tab bar taps should not reload the page.** The `<nav class="tabbar">`
+   already exists and looks right; each `<a href>` is a full navigation,
+   which flashes and resets scroll. Swap content in place using the
+   existing `fetch()` pattern, or adopt htmx (~14KB, designed for
+   server-rendered apps, leaves the Jinja templates intact). This is the
+   remaining "it's a website" tell.
+5. ~~**Rename off carrier trademarks.**~~ **DONE 1.0.0** — MyPilot.
+6. **Move viewer.html's 1,376 script lines to `/static/app.js`.** No
+   behaviour change. Kills the collision class of bug documented in NOTES.
+   Keep `test_template_contract` pointed at whatever the new arrangement
+   is.
+7. **Schedule import for another carrier's bid line.** The real gate. Until
+   an FO at another airline can paste a pairing and have it parse, this is
+   the owner's app rather than a product. Partly unblocked in 1.0.0:
+   callsign prefixes are now configuration (`PT_HOME_CALLSIGN`), so what
+   remains is the PARSER, not the carrier assumptions around it.
+8. **First-run onboarding for a non-technical viewer.** The person who
+   most needs this app is the least equipped to set it up.
+9. **Self-service account deletion.** See OPEN.
+
+### P1 — free, and also the native on-ramp
+
+Do these as normal iteration, not as a project.
+
+1. **Send facts alongside the formatted strings.** For every time value
+   emitted, add an ISO-8601 UTC field and the airport's IANA zone name,
+   the way `enriched_at_iso` already does. Keep the pretty string.
+   *Today:* the 12/24 toggle stops needing a round trip and the
+   `pt_viewer_tf` cookie workaround can retire. *Later:* this is the only
+   thing a non-browser client can consume.
+2. **Version the API** — `/api/v1/…`. Web clients always have the newest
+   build; app clients do not. Without a version, the day a field changes
+   is the day an installed build breaks.
+3. **Bearer-token auth alongside cookies.** Cookies are fine in a browser
+   and inside a WebView. Native clients want a token, and push
+   registration needs one. `auth.py` is 10KB now; it will not stay that
+   way.
+4. **API-first habit.** New feature ⇒ JSON endpoint first, page consumes
+   it second. Never build a feature that exists only inside a template.
+5. **Keep the client dumb.** In the JS, sort code that DECIDES from code
+   that DISPLAYS, and push decisions serverward as they surface. The v4→v5
+   move already did this for status and closure — that work is why a
+   native client would inherit the app's intelligence for free. Do not
+   regress it.
+6. **Record notification events.** The poller already knows wheels-down,
+   gate-in, delay-published, diversion. Write them to a small table when
+   they occur. *Today:* an audit trail and an in-app feed. *Later:* that
+   table IS the push queue, and none of the logic is client-specific.
+
+### T1 — trigger: P0 done AND ~10 crew families want in
+
+**Spend: ~$25/mo + ~$15/yr.** Cloud VPS + domain; move off the NAS.
+Reason is not performance (FastAPI + SQLite is light) — it is that
+strangers should not be reaching the owner's home network, and push later
+requires a host that is always up.
+
+`docker-compose.yml` ports over nearly unchanged. Back up
+`data/flighttracker.db` first; see STORAGE & MIGRATION.
+
+### T1.5 — trigger: retention is now a year, so backups are mandatory
+
+**Spend: nothing.** Set up the schedule in BACKUP.md. This moved up the list
+in 1.0.0: the database went from a disposable 30-day window to the only copy
+of a year of flying, in one release. Do this before T2, not after.
+
+### T2 — trigger: ~30 people have said, by name, that they would pay
+
+**Spend: ~$150/mo.** AeroAPI **Standard** ($100/mo minimum, and the
+minimum is a floor that usage counts toward, not a surcharge), LLC,
+Stripe, privacy policy, terms.
+
+Measured spend is ~$2.76/leg-month per pilot, worst case $3.69, hard
+ceiling $4.50 at 18 tickets/leg. So the crossover is ≈36 paying crew:
+below that the minimum dominates; above it, marginal cost per pilot stays
+under $3/mo indefinitely.
+
+**Blocking sub-task: settle the ADS-B licence before taking a dollar.**
+adsb.lol and adsb.fi are non-commercial community feeds — the same
+category as airplanes.live, which already revoked access. Either obtain
+commercial terms or fall back to AeroAPI-only for the paid tier.
+
+**Also at T2:** BYOAPI disappears. One Standard key, held centrally. The
+existing per-user spend cap becomes a fair-use limit rather than a billing
+guard — same code, different meaning.
+
+### T2.5 — trigger: hosted centrally, and people want it on their phones
+
+**Spend: $99/yr (Apple) and/or $25 once (Google).**
+
+- **TestFlight** takes up to 10,000 external testers by public link. Beta
+  App Review is a lighter gate than full App Store review, so real push on
+  real crew phones arrives well before the minimum-functionality argument
+  has to be won. Builds expire every 90 days — re-upload is permanent
+  homework. No real in-app purchases (sandbox only); bill via the web.
+- **Google Play internal testing** holds 100 testers with no closed-test
+  requirement. Cheapest possible real-app experiment.
+
+Shell = Capacitor around the existing web app. Server-rendered UI means
+`update.sh` still updates the app's content for everyone instantly; only
+the shell itself needs store review.
+
+### T3 — trigger: revenue covers costs, two months running
+
+**Spend: as T2.5 plus a contractor for push plumbing.**
+
+Public store listings. **Do not submit a bare wrapper.** Apple's guideline
+4.2 rejects wrapped sites with no native function, and a second submission
+of the same thing with a new icon does not pass. Ship with: push tied to
+real events, a lock-screen Live Activity for the leg in progress, offline
+state, and Face ID. Those are not decoration — they are the reason the
+shell exists, and P1-6 already built the server half.
+
+Android production note: personal Play accounts created after 2023-11-13
+must run a closed test with ≥12 testers opted in for 14 continuous days.
+Trivial with a crew base; an organisation account (LLC + D-U-N-S) is
+exempt but verification takes weeks.
+
+### T4 — trigger: ~300 paying users AND the owner is the bottleneck
+
+**Spend: equity, not cash.** Bring in an engineer — ideally a pilot who
+codes, since the domain transfer is the expensive part and they arrive
+with it. Vest over four years. Never trade equity for a promise.
+
+### Explicitly NOT on this roadmap
+
+- **A Flutter/React Native rewrite.** Backend survives; all ten templates
+  do not. Same cost as a second product, for benefits that do not apply
+  at this size, and it forfeits instant deploys.
+- **Removing server rendering.** It is why `update.sh` updates everyone at
+  once. That property is load-bearing for a one-person project.
+- **A native iOS build against a free Personal Team.** 7-day profile
+  expiry, 3-app cap — and personal teams cannot sign the push entitlement
+  at all, so it cannot test the only feature that justifies the shell.
+
+## VERSIONING
+
+Four numbers, each answering a different question. Full rationale lives in
+`app/version.py`; this is the map.
+
+| Number | Answers | Today | Moves when |
+|---|---|---|---|
+| `VERSION` | which BUILD is running | `1.0.0` | every release |
+| `API_VERSION` | what SHAPE the JSON is | `1` | a field is removed, renamed or retyped |
+| `SCHEMA_VERSION` | what SHAPE the database is | `1` | a migration changes table structure |
+| `MIN_CLIENT_VERSION` | oldest BUILD still allowed | `1.0.0` | an old client genuinely cannot work |
+
+**Why the decimal scheme was abandoned.** Versions used to be 5.5, 6.3, 7.4.
+After 7.9 comes 7.10, and `"7.10" < "7.9"` as text while `7.10 == 7.1` as a
+number. Anything comparing versions reads the newer build as older, and no
+later patch can fix it because the numbers themselves are ambiguous. Semver
+compares field by field as integers. Use `version_tuple()`; never compare
+version strings directly and never cast one to a float.
+
+**Which field to bump.** MAJOR breaks something — data migrates one way, or
+an old client stops working; back up first. MINOR adds a capability without
+breaking anything; the common case. PATCH fixes a bug and adds nothing.
+
+**VERSION is not cosmetic any more.** It keys the service worker cache name
+(`static/sw.js`). Ship without bumping it and every installed phone keeps
+serving the previous build's CSS and JavaScript — a failure that looks
+exactly like "the server didn't update", and the worst thing on this list to
+debug.
+
+## MIGRATION AND FUTURE-PROOFING
+
+Everything here is about clients and databases this build **cannot reach**.
+That set is empty today and stops being empty the first time an app is
+installed from a store. All of it was cheap to add now and expensive-to-
+impossible to retrofit later, which is the only reason it exists this early.
+
+### The problem in one paragraph
+
+A browser always runs code this server handed it seconds ago, so client and
+server literally cannot disagree. An installed app can be six months old,
+sitting on a phone you have no access to, and it will keep calling whatever
+endpoints it was built against until its owner chooses to update. Every
+mechanism below exists to make that survivable.
+
+### What is already in place
+
+**Versioned API with living aliases.** Endpoints mount at `/api/v1/…` and
+also at the bare `/api/…` paths they have always had. When a shape changes,
+`v1` KEEPS SERVING THE OLD SHAPE and the new shape goes to `/api/v2/`. Old
+builds keep working instead of going blank. Removing an alias is a MAJOR
+change, never a tidy-up.
+
+**A client support floor.** `GET /api/v1/meta?client=1.2.3` reports the
+build, the API version, and whether that client is still supported. A native
+app calls this on launch and shows "please update" instead of rendering a
+blank screen against a contract it no longer understands. Unauthenticated on
+purpose — a client must be able to discover it is too old to log in.
+
+**A stamped schema with a downgrade guard.** `app_meta.schema_version`
+records what shape the database is. A build refuses to start against a
+database NEWER than itself, because the classic disaster is rolling back to
+an older image, which then writes rows silently missing the new columns and
+does damage only visible weeks later. Refusing to boot is deliberate: a
+warning would be read after the writes.
+
+**Carrier callsigns as configuration.** `PT_HOME_CALLSIGN` and
+`PT_CANDIDATE_CALLSIGNS` (see `app/carriers.py`). Not branding — strip them
+and deadhead resolution stops working. Now a crew member at any airline sets
+two environment variables instead of editing code.
+
+**Icon styles by key, not by file.** `ICON_STYLES` in `main.py` maps to
+filename stems generated by `make_icons.py`. Adding a style is a dict entry
+plus a re-run, and the map marker and app icon are generated from one source
+so they cannot drift.
+
+### What is deliberately NOT done yet
+
+Listed so nobody "discovers" them as oversights:
+
+- **The API still returns formatted display strings** (`dep_line`, `ete`,
+  `dep_shown`) and takes `time_format` as an argument, so the SERVER
+  formats. A native client cannot use those. The fix is additive — emit an
+  ISO-8601 UTC value and the airport's IANA zone alongside each pretty
+  string, as `enriched_at_iso` already does — so it does not need a v2. See
+  ROADMAP P1-1. **Do this before writing any native client.**
+- **No token auth.** Cookies only. Fine in a browser and inside a WebView,
+  wrong for a native client, and painful to retrofit through a whole app
+  later. ROADMAP P1-3.
+- **No push infrastructure.** The poller already knows the moments worth
+  notifying (wheels-down, gate-in, delay published, diversion); nothing
+  records them yet. ROADMAP P1-6.
+- **Leg confirmation does not exist yet.** The logbook export depends on a
+  pilot confirming which legs actually flew (NEXT UP / N3). Until that
+  lands, nothing should export flight times anywhere.
+- **Migrations are column-level and idempotent, not numbered.**
+  `SCHEMA_VERSION` makes numbering possible; nothing needs it yet. When a
+  migration first has to be ORDERED rather than merely repeatable, add the
+  numbered runner then — not before.
+
+### Rules for whoever ships the native client
+
+1. Call `/api/v1/meta` on launch. Handle `supported: false` with an update
+   prompt, never a blank screen.
+2. Never parse a display string. If a value is needed as data, add a machine
+   field to the API; do not regex the pretty one.
+3. Send the client version on every request so the server can measure what
+   is actually in the wild before deciding what it can drop.
+4. Assume every version you ship lives forever on somebody's phone.
 
 ## DATA MODEL
 
@@ -142,6 +676,30 @@ because `actual_on` publishes with a lag.
 
 ## INVARIANTS
 
+**Zone LABELS come from `view.zone_label()`. Always.** Never call
+`tzname()` elsewhere, and never derive a label from a hard-coded sample
+date — that is what made every label the summer one year-round. Pass the
+date being displayed so daylight time is answered for the right day.
+
+**Every time displays its own zone, as a superscript.** No surface
+suppresses a label by comparing departure to arrival. The superscript is
+what makes that affordable — at full size a zone beside every time wrapped
+rows on a phone, which is what drove the old suppression rule. Lift it with
+`transform`, never `vertical-align: super`, which grows the line box and
+spaces the rows apart. Where a compact RANGE is shown on one line
+(calendar agenda, import review, admin), one suffix covers it: `CT` when
+both ends match, `CT/MT` when they do not. Those are the only two patterns
+permitted.
+
+**Wall-clock to UTC goes through `app/timezones.py`. Always.** Never call
+`datetime.combine(d, t, tzinfo=ZoneInfo(...))` anywhere else. That form
+silently invents an instant for a time that does not exist (spring forward)
+and silently picks one of two for a time that happens twice (fall back).
+Never infer an arrival DATE by comparing local clock times — the two clocks
+are in different zones. `tests_timezones.py` enforces this by scanning the
+package.
+
+
 Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
 
 1. **Phase only moves forward.** `tags.advance_phase`. Coverage gap → phase
@@ -194,6 +752,38 @@ Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
     real-world flight, and deleting on it destroyed real data every time a
     test schedule was imported. Un-rostered rows age out at
     `RETENTION_DAYS` with everything else. Nothing polls them meanwhile.
+17. **A closure rule is worthless unless something still asks it.** Every
+    route in `closure.decide` assumed the leg is judged forever; selection
+    stopped judging at scheduled arrival + 3h, and three of the five routes
+    silently became unreachable. Whenever you add a rule that matures on a
+    clock, check that the thing which CALLS it is still running by then.
+    `poller._closeout_sweep` is that guarantee and costs nothing, because
+    everything closure reads is already stored on the row. (1.5.0)
+18. **An import ADDS. Only a human removes.** `merge_schedule` and
+    `remove_legs`, never `replace_schedule`, on any user-facing path. Scope
+    reconciliation to the months the paste covers and to legs that have not
+    departed — a bid line is a statement about one month and about the
+    future, and reading it as a statement about the whole roster is what
+    made pasting September erase August. A past leg can only be removed by
+    a person deliberately deleting it. (1.5.0)
+19. **A leg that is DOWN gives up the card.** Selection asks whether a leg
+    has STARTED, and a finished leg has still started, so leg 1 held the
+    card through its whole three-hour grace while the crew boarded leg 2.
+    `_on_ground` is deliberately broad here — six signals, any one enough —
+    because unlike everywhere else in this app, the cost of being wrong is
+    a stale card that self-corrects, not a flight ended early. (1.5.0)
+20. **A simulated leg never spends, never asks ADS-B, and never counts.**
+    `flights.simulated` is checked at the top of `enrichment.refresh` and
+    `backfill_gate_in` before the API key is read, in `poller` before
+    `live_state`, and in the gate-in sweep's own SQL. Any logbook or export
+    added later MUST filter it too. Beyond the money: a real flight
+    somewhere may share an invented callsign, and one leak mixes invention
+    with fact in a single row with no way to tell them apart afterwards.
+    (1.6.0)
+21. **The last admin cannot be removed.** `auth.set_admin` refuses, and an
+    admin cannot demote themselves. An install with flight data and no
+    administrator has no recovery path short of editing SQLite on the NAS
+    by hand. (1.6.0)
 
 ## MODULE MAP
 
@@ -211,6 +801,8 @@ livesource.py   shared cache + 1 req/s floor over the ADS-B provider
 airplaneslive.py / aeroapi.py / carrier.py   providers
 db.py           schema + migrations (v4 and v5.0 -> v5.1)
 schedule.py     past/current/upcoming split, and which leg is live
+simulator.py    test mode. Produces POSITIONS only; the app judges them.
+importer.py     what a paste would CHANGE. Describes, never applies.
 parser.py models.py auth.py settings.py airports.py geo.py ratelimit.py
 templates/viewer.html   the app (65KB, edit surgically)
 ```
@@ -263,13 +855,78 @@ moved into columns.
 | `relaunch` | aircraft took off again. Unambiguous, free |
 | `observed` | confirmed landing + 5 min stopped + 8 min silent |
 | `backstop` | 3h past revised arrival, quiet, no fresh airline data |
+| `observed` (long stop) | landed + stationary 30 min, **transmitting or not** |
 
 Observed closes the leg **even with an API key** (owner's decision).
 `actual_in` is the OOOI field most often missing; v5.0 waited on it and
-hung. A late airline gate-in **upgrades** an observed/backstop close.
+hung. A late airline gate-in **upgrades** an observed/backstop close — and
+as of 1.5.0 that upgrade can actually happen, see below.
 
-Both halves of `observed` are required: a plane holding off-gate stays
-stationary while transmitting; a coverage hole is silence without a stop.
+Both halves of the SHORT `observed` route are required: a plane holding
+off-gate stays stationary while transmitting; a coverage hole is silence
+without a stop.
+
+**The LONG STOP route (1.4.0) exists because requiring silence everywhere
+created a trap with no exit.** An aircraft that lands, taxis in, parks and
+keeps transmitting — ordinary, especially with the APU running — never
+reaches `SIGNAL_GONE_MIN`. `observed` could not fire, and the backstop's
+`quiet` test could not either. The only remaining exits were an airline
+gate-in (the OOOI field most often missing) and `relaunch`, which on the
+last leg of a day means the following morning. So the leg sat in taxi-in
+indefinitely and, because it never closed, **the next leg never became
+current** — the app appeared frozen on a finished flight.
+
+Thirty minutes stationary is itself the evidence. Pairing five minutes with
+silence is a fair way to tell "parked" from "holding for a gate"; at thirty
+it is not, and closing early is much the smaller error than blocking every
+leg behind it.
+
+**The 1.4.0 fix was correct and could not work, because nothing was asking
+(fixed 1.5.0).** Every rule in this table was written as though a leg is
+judged forever. It is not. `poller.active_flights()` returns only the
+current leg and imminent upcoming ones, and `get_current_info` releases a
+leg 3 hours past its SCHEDULED arrival unless it is demonstrably still
+airborne. After that instant nothing in the app ever looked at the leg
+again. So three of the five routes expired together:
+
+  * the **backstop** matures 3h past the REVISED arrival, which on any late
+    flight is later than 3h past the scheduled one — so on exactly the
+    population it exists for, the leg was abandoned before its own backstop
+    came due;
+  * **relaunch** needs a later sweep to notice the aircraft flying again;
+  * the **long stop** needs a sweep at the 30-minute mark, which a leg
+    blocking in near the end of its grace never got.
+
+Reported as: blocked in at 07:00, still open at 11:30.
+
+**Fix: `poller._closeout_sweep`.** After each normal sweep, unclosed
+rostered legs from the last 7 days are re-judged. It costs NOTHING and is
+deliberately kept that way — every value `closure.decide` reads is already
+on the row, so this is pure re-evaluation with no ADS-B and no AeroAPI
+call. `stopped_since` and `last_signal_at` are timestamps, so stopped-for
+and signal-gap keep growing correctly without anyone fetching anything. A
+leg still inside its live window is skipped, so the two sweeps can never
+both judge one leg in a pass.
+
+**The upgrade path was a door with a wall behind it (fixed 1.5.0).**
+`maybe_close` has always been able to upgrade a provisional close to the
+airline's own gate-in. It could never fire: a closed leg was never polled
+again, and `should_query` refuses to spend on one, so the single value that
+could trigger the upgrade was the one value nothing would ever fetch.
+
+**Fix: `poller._gate_in_sweep` + `enrichment.should_backfill_gate_in`.** A
+leg that closed on anything other than `airline` and is still missing
+`in_actual_api` gets three late attempts — +90 min, +6 h, +18 h from the
+previous attempt, reaching roughly 24 hours past block-in. The owner's
+report set those numbers: usually the airline is quick (already covered by
+the leg's own live tickets), but a 07:00 block-in had nothing by 11:30.
+Attempts are recorded BEFORE the call goes out, the `carrier.py` lesson, so
+a timeout still counts. A silent airline costs exactly three queries no
+matter how many thousand sweeps run — under two cents, enforced by test.
+
+This matters more for the logbook (N2/N3) than for the tracker:
+`in_actual_api` is what an export is allowed to use, because an observed
+time must never masquerade as a reported one in a legal record.
 
 ## WHICH LEG IS CURRENT
 
@@ -290,10 +947,132 @@ alone produced in the opposite direction:
     evidence of having departed beats one that has merely reached its
     scheduled time. Without it a delayed leg 2 took the card off an
     airborne leg 1, because leg 2's window opened first.
+  * ...but a leg that is DOWN hands the card on as soon as the next leg's
+    window opens (`_on_ground`, 1.5.0). The rule above, alone, meant a
+    landed leg held the card for the full three-hour grace while the crew
+    were already boarding the next one — because selection asked which leg
+    had STARTED, and a finished leg has still started. Fixing closure in
+    the same release did NOT fix this; selection never asked whether a leg
+    had closed.
+
+`_on_ground` is deliberately BROAD, and that is the opposite of how the
+rest of this app reasons. Everywhere else — `has_departed`, `_has_started`,
+closure's guards — the demand is for strong evidence, because the cost of
+being wrong is ending a flight that is still going. Here the cost runs the
+other way: being wrong shows a family member a finished leg while the pilot
+is boarding the next one, and the recovery is automatic, since the moment
+the aeroplane is airborne again `_still_flying` takes over. So any ONE of
+six signals is enough: `closed`, `landed_seen`, `on_actual_api`,
+`in_actual_api`, `in_observed`, or `airborne_seen AND last_on_ground`.
+
+That last one carries the outstations. `landed_seen` needs a SUSTAINED
+touchdown to be observed, which a field with no ground coverage never
+provides; but an aircraft we watched get airborne and are now seeing on the
+ground has landed, whatever the confirmation timer thinks. The
+`airborne_seen` half is what keeps pushback from reading as arrival.
+
+Handover is ONE LEG AT A TIME — the earliest later candidate whose window
+has opened, not the last leg of the day — so a four-leg duty steps forward
+properly.
 
 `MAX_AIRBORNE_HOLD` (12h) is the ceiling, so a stuck `airborne_seen` flag
 cannot own the card indefinitely. A candidate that loses is appended to
 `past`, not dropped — it is behind the leg now flying.
+
+## TEST MODE
+
+**Admin page → Admin · Test mode.** Rehearse a flight without waiting for a
+real one and without spending an AeroAPI credit.
+
+Every bug this app has shipped was found the same way: the owner flew a
+trip, something looked wrong, and the evidence was gone by the time anyone
+could look at it. Reproducing a closure bug used to cost a duty period.
+
+**What it does, and what it deliberately does not.** The simulator produces
+ONE thing: position reports, in the exact shape `livesource.live_state`
+returns. Those then go through the same `flightmatch.observe`,
+`flightmatch.evaluate`, `tags` and `closure.maybe_close` a real flight
+does. If closure is wrong, test mode is wrong in the same way and by the
+same amount — which is the only property that makes it worth having. A
+simulator that wrote `closed = 1` directly would prove nothing.
+
+**Three isolation rules**, each guarding a different way this could do harm:
+
+| Rule | Enforced at |
+|---|---|
+| Never spend | `flights.simulated = 1` checked at the top of `enrichment.refresh` AND `backfill_gate_in`, before the key is read |
+| Never ask ADS-B | `poller` routes a simulated leg to `simulator.state_for`, so the shared rate limiter is untouched |
+| Never count | excluded from the gate-in sweep; **must** be excluded from the logbook and any export (N2/N3) |
+
+Beyond the money, the first rule matters because a real flight somewhere
+may share an invented callsign, and letting its data into a simulated row
+would mix invention with fact in one place. Simulated legs use flight
+numbers from 9900 up, which no US regional operates, so an invented leg can
+never collide with a real one on the shared flight id.
+
+### Scenarios
+
+Each is named for the BUG IT REPRODUCES, not the flight it describes.
+
+| Scenario | Proves |
+|---|---|
+| Normal leg | the happy path; closes on the short observed route |
+| Taxi-in trap | 1.4.0 — parks, keeps transmitting, no silence anywhere. Age 30m |
+| Coverage lost in cruise | never seen to land; only the backstop can end it. Age 3h |
+| Blocked in, no airline gate-in | 1.5.0 — the abandonment cliff. Age 3h |
+| Two-leg turn | 1.5.0 — the card hands over the moment leg 1 is down and leg 2's window opens |
+| Scheduled, never departs | the `has_departed` guard; nothing may close this, at any age |
+
+### Why there is no speed control
+
+The obvious design is a clock multiplier. It was rejected: the poller, the
+card, `get_current_info` and every stored timestamp run on the real clock,
+so a leg running at 60× is judged at one time and displayed at another, and
+every discrepancy that produced would be a property of the simulator rather
+than of the app.
+
+Two honest mechanisms instead. Scenarios use SHORT legs (10–14 minutes of
+block time), so a full gate-to-gate happens while you watch. And for rules
+that mature on a long clock, **Age this leg** shifts the row's recorded
+timestamps backwards. Nothing is faked and no threshold is lowered: after
+ageing 30 minutes the leg genuinely has been stopped for 30 minutes, and
+the real production rule fires on the real number with no knowledge that
+test mode exists. Ageing never touches `date`, `dep_time_local` or
+`arr_time_local` — those define the leg's window, and moving them would
+change which rules are in play rather than just making the leg older.
+
+**Stop & delete** removes simulated legs outright, with their roster rows
+and tracks. Not retired — retention protects a record of flights that
+happened, and a rehearsal did not happen.
+
+## ADMINISTERING THE INSTALL
+
+Everything that operates the install is on the **Admin page** (1.6.0).
+Settings is where a pilot changes how the app behaves for *them*; /admin is
+where whoever runs the box runs it. On a shared install those are two
+different people, and only one of them sees the admin panels.
+
+Moved there from Settings: the registered-pilots table, the live-tracking
+diagnostics link, and the decision log. The old
+`/settings/users/delete/{id}` route is kept as a 307 redirect, because a
+phone with Settings still open from before the update would post to it, and
+a 404 on a Delete button is the worst possible way to learn a route moved.
+
+### Adding a second admin
+
+**Before 1.6.0 there was no way to do this at all.** `create_user` sets
+`is_admin` on whoever registers first and nothing else ever touched the
+flag — so on a self-hosted box, losing the first account lost
+administration of the install permanently, with the data still sitting
+there.
+
+1. Send them this server's `/register` page. They create their own account.
+2. Admin page → **Admin · Registered pilots** → **Make admin**.
+
+**The last admin cannot be demoted or deleted**, including by themselves.
+Removing the final admin leaves a database with real flight data that
+nobody can administer, and there is no recovery path from the app — it
+would mean opening SQLite by hand on the NAS.
 
 ## QUICK START
 
@@ -423,6 +1202,21 @@ The leg stops spending the moment there's nothing left to learn — gate-in
 received, cancelled, or closed. Unspent tickets simply go unspent; there is
 no prize for using them.
 
+**One exception, added 1.5.0: the late gate-in chase.** The rule above is
+right for the LIVE allowance — once a leg is closed there is nothing left
+to watch. But it also meant `in_actual_api` could be permanently missing on
+any leg whose airline reported late, and that is the one figure a logbook
+export is allowed to use. So a closed leg that is still missing gate-in
+gets up to three attempts on a SEPARATE allowance (`gatein_tries`, not
+`api_queries_used`) at +90 min / +6 h / +18 h. Two different questions, so
+two different counters and two different functions —
+`should_backfill_gate_in`, never `should_query`.
+
+Worst case is 3 queries × $0.005 on only those legs that closed without an
+airline gate-in: about **$0.46/month** if every one of 46 legs needed all
+three, and realistically pennies, since most legs get gate-in from their
+own live tickets and never enter the chase at all.
+
 The background poller has to reach a leg BEFORE it becomes the current
 flight, or the first look can never happen: a leg isn't `current` until
 T-20, so the poller carries its own `PREVIEW_WINDOW` (35 min) and sweeps
@@ -472,9 +1266,10 @@ cannot exceed $4.50 even if every single flight goes wrong.
 four times as much, which is why deadhead carrier resolution is capped,
 counted at four units, and stored permanently once it succeeds.
 
-At 18 tickets per leg, a heavy 50-leg month has a hard ceiling of $4.50,
-and real spend lands well under because most legs stop early the moment
-gate-in arrives. The per-pilot monthly limit is a hard stop on top of that
+At 18 tickets per leg, a heavy 50-leg month has a hard ceiling of $4.50
+(plus at most $0.75 of late gate-in chasing if every single leg needed it,
+which would mean the airline never reported once all month), and real spend
+lands well under because most legs stop early the moment gate-in arrives. The per-pilot monthly limit is a hard stop on top of that
 — queries cease entirely once it's reached, so the app can never quietly
 produce a bill.
 
@@ -624,11 +1419,18 @@ v4`, or `merged N per-user v5.0 rows into shared flights`.
 ## TESTS
 
 ```bash
-python tests_flight_row.py          # 50
-python tests_poller_end_to_end.py   # 27
-python tests_past_leg_detail.py     # 19
-python tests_budget_limit.py        # 17
-```
+python tests_flight_row.py          #  68
+python tests_poller_end_to_end.py   #  47
+python tests_past_leg_detail.py     #  19
+python tests_budget_limit.py        #  17
+python tests_carrier_cap.py         #  13
+python tests_ui_fixes.py            # 355
+python tests_app_shell.py           # 158
+python tests_timezones.py           #  68
+python tests_closeout_sweep.py      #  42
+python tests_import_merge.py        #  39
+python tests_test_mode.py           #  63
+```                                  # 889
 
 Each uses its own scratch DB via `PT_DB_FILE`. Read
 `tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
@@ -646,8 +1448,394 @@ invariant 1.
   Patch `poller.live_state`, not `livesource.live_state`.
 - Usernames must be ≥3 chars; `create_user` rejects shorter silently from
   the HTTP layer's perspective (form redisplay, HTTP 200).
+- **Flight rows are SHARED BY ID.** A fresh user is not a fresh fixture. Two
+  test cases both using flight 6001 on the same date write to the SAME row,
+  so case two starts with case one's `landed_seen` already set and passes
+  for entirely the wrong reason. Give each case its own flight NUMBER.
+- **A rule and its caller are two separate pieces of correctness.** Driving
+  `closure.maybe_close` directly proves the rule; it proves nothing about
+  whether anything still calls it at the moment it matures. That gap hid
+  the 1.5.0 abandonment cliff behind 714 passing tests for two releases.
+  `tests_closeout_sweep.py` runs `poll_once` PAST the three-hour grace for
+  exactly this reason.
 
 ## VERSION HISTORY
+
+### 1.6.0 — test mode, and a second admin
+
+**Test mode.** Rehearse any scenario on demand, in minutes, for nothing.
+The simulator produces position reports and nothing else; the app's own
+tracking, tagging and closure code runs on them unchanged, so what you see
+is what a real flight would do. Six scenarios, each named for the bug it
+reproduces. Three isolation rules — never spend, never ask ADS-B, never
+count — enforced at the boundaries rather than by convention. See TEST MODE.
+
+The interesting design decision was rejecting a clock multiplier in favour
+of **Age this leg**, which shifts recorded timestamps backwards. A
+multiplier would have had the leg judged at one time and displayed at
+another, and every resulting discrepancy would have been a property of the
+simulator rather than of the app — a test harness that produces its own
+bugs is worse than none.
+
+**A second admin is now possible.** It was not before, which was a genuine
+hole rather than a missing convenience: `create_user` set `is_admin` on the
+first account and nothing else in the codebase ever touched the flag, so
+losing that account lost administration of a self-hosted install for good.
+`auth.set_admin` plus Make admin / Remove admin on the admin page, with a
+last-admin guard that makes an unadministerable database unreachable.
+
+**All administration moved to /admin.** The registered-pilots table and the
+diagnostics link were in Settings; the decision log had no link at all. The
+split was arbitrary — Settings is per-pilot preference, /admin is operating
+the install — and on a shared install those are two different people.
+
+Tests: 826 → 889, one new suite. Most of it is isolation: an invented
+flight that leaked into a bill or a logbook would be worse than having no
+test mode at all.
+
+### 1.5.0 — the leg that would not let go, and N1
+
+Four bugs, and the first three are the same bug wearing different hats: a
+leg reaching the end of its life and nothing noticing.
+
+**1. The abandonment cliff.** Reported as: blocked in at 07:00, still open
+at 11:30. The 1.4.0 long-stop route was supposed to close that leg after 30
+stationary minutes. It was correct and it could not run, because the leg
+had stopped being swept. `active_flights()` returns the current leg and
+imminent upcoming ones; `get_current_info` releases a leg 3 hours past its
+SCHEDULED arrival. After that nothing looked at it again — while the
+backstop was not due until 3 hours past the REVISED arrival, always later
+on a late flight. Three of the five closure routes expired at that instant.
+
+Fix: `poller._closeout_sweep`, re-judging unclosed rostered legs from the
+last 7 days after each normal sweep. Costs nothing — every value closure
+reads is already on the row.
+
+**Why 714 tests missed it.** They drove `maybe_close` directly, or drove
+`poll_once` over a 70-minute leg that finished well inside its window.
+Nothing ran past the three-hour line, which is the only place the bug
+lives. The lesson is not "write more tests"; it is that a rule and the
+thing that CALLS the rule are two separate pieces of correctness, and the
+suites only ever tested the first.
+
+**2. The unreachable upgrade.** `maybe_close` could upgrade a provisional
+close to the airline's real gate-in and never did, because a closed leg was
+never polled and `should_query` refuses to spend on one. A door with a wall
+behind it. Fix: `_gate_in_sweep`, three late attempts at +90 min / +6 h /
++18 h, capped and recorded before the call. This is the difference between
+a logbook that can quote the airline's own figure and one that cannot.
+
+**3. The handover.** Closing the leg turned out to be only half of it.
+Selection asked which leg had STARTED, and a finished leg has still
+started — so leg 1 held the card for the full three-hour grace while the
+crew were boarding leg 2. Fix: `_on_ground`, deliberately broad (any of six
+signals), handing over one leg at a time as soon as the next leg's window
+opens. See WHICH LEG IS CURRENT for why broad is right here and wrong
+everywhere else.
+
+**4. N1 — additive import.** `save_schedule` replaced the roster, so
+pasting September erased August. Renamed to `replace_schedule` and taken
+off the import path; `merge_schedule` and `remove_legs` replace it there.
+Reconciliation is scoped to the months the paste covers and to FUTURE legs
+only, and every removal is proposed on a diff the pilot approves. A removed
+past leg is deleted outright (owner's call). New `app/importer.py`.
+
+Because the roster now accumulates, three surfaces had to grow up with it:
+a server-side month filter on the flights page, a calendar that shows one
+month at a time instead of stacking every month with data, and a per-leg
+drop control on the review page beside the trip breaks.
+
+Tests: 714 → 826, two new suites.
+
+### 1.4.0 — the taxi-in trap, and a way to see why
+
+**The bug.** A leg would stick on taxi-in forever and the next leg would
+never become current. Cause: EVERY remaining closure route required the
+transponder to go quiet. `observed` needed `signal_gap >= 8 min`; the
+backstop tested `quiet` as well. An aircraft parked at the gate still
+transmitting satisfies neither — and that is ordinary behaviour, not an
+edge case. The only other exits were an airline gate-in, which is the OOOI
+field most often absent, and `relaunch`, which on the last leg of a day
+does not happen until the next morning.
+
+**Fix:** a LONG STOP route. Landed, stationary for 30 minutes, closes the
+leg regardless of signal. The five-minute-plus-silence pairing is retained
+unchanged for the short case, and the `has_departed` guard still outranks
+everything, so a delayed flight still cannot close itself at the gate. Five
+regression tests in `tests_flight_row.py`, including the two negative cases
+that keep the old behaviour honest.
+
+**Why it took a code read to find, and what changed.** Nothing recorded WHY
+a leg failed to close. The poller ran, the logic said "not yet", and that
+decision left no trace. New `app/debuglog.py` records decisions with the
+inputs that produced them — for closure, every threshold logged beside the
+value it was compared against, so a near-miss is visible without opening
+code. Read it at `/admin/debug`, filterable by flight id or event prefix.
+
+Deliberate constraints: SQLite in the same database (already backed up,
+already reachable from a phone); self-trimming at 20,000 rows, since the
+poller would otherwise grow it without bound; retention NOT tied to
+`PT_RETENTION_DAYS`, because flight history is precious and diagnostics are
+disposable; never raises, because an app that dies over a debug row is
+worse than one with no debug rows; and key-like fields are redacted on the
+way in as a backstop to the rule of not passing secrets at all.
+
+**Off by default** (`PT_DEBUG_LOG=1`). It writes a row per poll and is only
+worth the writes while chasing something.
+
+**Progress strip hides when there is no progress.** It used to render an
+empty track at 0% whenever there was no position fix, which reads as a
+broken bar rather than as absent information. Now gated on a real fix, or
+on the leg having arrived — where a full bar means something. The live poll
+applies the same rule; without that the strip would render hidden and be
+un-hidden, empty, on the first refresh.
+
+**A brittle test corrected.** `tests_ui_fixes.py` asserted the template
+count equalled ten, which broke the moment a page was added. What it meant
+was that `viewer_settings.html` stayed merged into `settings.html`; it now
+asserts that instead.
+
+Tests: 680 -> **714**.
+
+
+### 1.3.1 — the plan, written down
+
+Documentation only. No code changed, so no test count moved.
+
+Added `## NEXT UP`, recording the five committed features (additive import,
+logbook view, CSV export, named invites, viewer-side framing), the order
+they go in, and WHY that order is a dependency chain rather than a
+preference: everything after N1 assumes flights accumulate instead of
+rolling over, so building any of the others first means building it twice.
+
+Each entry carries the design decisions already settled in discussion, so
+they do not have to be re-litigated or, worse, silently re-decided:
+
+- Import runs by MONTH and prunes only FUTURE legs; history is not
+  revisable by a paste.
+- Nothing applies silently — `import_review.html` becomes an approved diff.
+- Leg CONFIRMATION gates the logbook export. This is what makes diversions
+  tractable without the app having to infer anything, and it bounds the
+  AeroAPI backfill.
+- The export uses `*_actual_api` values only. A missing value leaves the
+  row incomplete rather than being filled in from observation — a derived
+  time must never masquerade as a reported one in a legal record.
+- ONE database, three views. An earlier misreading of "separate views" as
+  "separate databases" is corrected in place, since splitting the database
+  would break the shared flight row design.
+- The pilot/viewer template split happens WITH N5, not before, and P0-6
+  (moving inline JavaScript out of viewer.html) lands immediately before
+  it.
+
+Also recorded what the sequence deliberately omits — native client work,
+push delivery, and anything trigger-gated — so a future session does not
+read their absence as an oversight.
+
+
+### 1.3.0 — the zone as a superscript
+
+Follow-up to 1.2.0, closing the reason the inconsistency existed at all.
+
+**Why the old rule existed.** Zones were suppressed when departure and
+arrival matched because a full-size label beside every time was wide enough
+to wrap a row on a phone. The economy was real; the cost was that three
+surfaces implemented it three different ways.
+
+**The fix removes the tradeoff instead of picking a side.** `.tz` is now a
+superscript at 0.5625rem. Two letters cost a couple of millimetres, so
+every time can carry its own label and the layout stops caring. Consistent
+AND compact.
+
+Lifted with `transform: translateY`, not `vertical-align: super` — the
+latter grows the line box and spaces out every row it appears in.
+
+**Newfoundland.** Generating a label for every airport in the realistic
+network (US, Canada, Mexico, Central America, Caribbean) and listing
+whatever failed to collapse to two letters turned up exactly one gap:
+`NST`/`NDT` for America/St_Johns. Added. Every zone in that network now
+reads as two letters, and a test asserts it airport by airport.
+
+**Accessibility.** The superscript is decoration for someone scanning a
+column of times; a screen reader announcing "C T" after each one is noise.
+The span carries `aria-hidden="true"` and the time itself stays readable.
+The first attempt put `aria-hidden` in the CSS, where it does nothing —
+a test now fails on that specific mistake.
+
+Tests: 654 -> **680**.
+
+
+### 1.2.0 — one zone label, one rule
+
+1.1.0 fixed timezone CORRECTNESS. This fixes what was actually reported:
+labels that looked inconsistent from screen to screen.
+
+**Three producers, three answers.** `view._fmt_local`, `main.fmt_local` and
+`main._fmt_utc_local` each built zone labels independently and disagreed on
+both things that matter:
+
+- `main.fmt_local` and `main.tz_abbr` derived the label from a HARD-CODED
+  sample date of `2026-07-01`, so every label they produced was the SUMMER
+  one. Invisible in North America, since CDT and CST both collapse to "CT".
+  Wrong everywhere else: a January London leg was labelled BST.
+- The fallbacks differed. One rendered `tz_name.split('/')[-1]`, putting
+  the CITY name — "Chicago", "Phoenix" — where a two-letter zone belonged.
+  Another fell back to an empty string. That single line explains most of
+  the reported "some are 3 letter, some are 2".
+
+All three now call `view.zone_label(tz_name, on)`, which takes the date
+being displayed and answers daylight time for that day. `tests_timezones.py`
+fails the build if `tzname()` is called anywhere outside it, or if a
+hard-coded sample date reappears.
+
+**Three display rules on one screen.** In `viewer.html`, the flight list
+showed the arrival zone always but the departure only when the two
+differed, while the current-flight card showed NEITHER when they matched.
+Reported as "some after both times, some after just the second time" —
+which was exactly right.
+
+Now: **every time carries its own zone, everywhere.** The "state it once
+where you can" economy was not worth it. A family member does not know that
+a missing label means "same as the other one"; they just see a gap.
+
+The compact-RANGE surfaces (calendar agenda, import review, admin) keep one
+suffix for the pair — `CT`, or `CT/MT` when the ends differ. That is a
+different layout, not a different rule, and it is now the only permitted
+alternative.
+
+Tests: 641 -> **654**.
+
+
+### 1.1.0 — timezones, actually fixed
+
+The owner reported repeatedly that times were wrong and that previous
+attempts had been bandaids. He was right. Three separate bugs, all SILENT —
+nothing raised, nothing logged, no leg vanished. The times were just wrong,
+and the only detection mechanism was a pilot looking at a schedule and
+saying "that isn't right".
+
+**Bug 1 — nonexistent local times.** On a spring-forward date the wall clock
+jumps 0200 to 0300, so 0230 never happens. `datetime.combine(d, t,
+tzinfo=tz)` accepted it and produced an instant anyway, with no signal.
+
+**Bug 2 — ambiguous local times.** On a fall-back date 0100-0159 happens
+twice. Python's default `fold=0` silently picked the first. Correct, as it
+turns out, but by inheritance rather than by decision — and untested.
+
+**Bug 3 — the bandaid, and the real one.** Arrival dates were inferred with
+`if arr_time_local < dep_time_local: add a day`. That compares a clock in
+the ORIGIN's zone against a clock in the DESTINATION's zone as though they
+were one clock. The code's own comment called it a "simple heuristic". It is
+right for most domestic legs BY LUCK and wrong outright once offsets differ
+enough: an ANC-NRT leg lost a full day, because 1700 reads later than 1400
+and the condition never fired.
+
+**The fix.** New module `app/timezones.py` owns every wall-clock-to-instant
+conversion. Arrival dates are no longer inferred from clock arithmetic at
+all — departure is resolved to a real instant, then each candidate arrival
+DATE is tested and the first one landing after departure inside a believable
+block (20h ceiling) wins. That is correct for every zone pair including the
+date line, with no special cases and no heuristic.
+
+DST edges are now handled by DECISION rather than default, and documented:
+a nonexistent time resolves FORWARD past the gap (0230 becomes 0330, never
+0130 — an hour early is the direction that makes a crew member miss a
+report), and an ambiguous time takes the first occurrence, which is what a
+published schedule means.
+
+**A latent crash fixed on the way past.** `parser.py`'s sort fallback built
+a NAIVE datetime while resolved legs produced aware ones. Python refuses to
+compare the two, so any paste mixing known and unknown airports would have
+raised and lost the entire import. Never reported, presumably because every
+airport in the owner's flying resolves.
+
+**New INVARIANT, enforced by test:** nothing outside `app/timezones.py` may
+build a UTC instant from a named zone. `tests_timezones.py` greps the app
+package for `datetime.combine(..., tzinfo=<named zone>)` and fails on any
+hit. `tzinfo=timezone.utc` is exempt — there is no wall clock there and no
+DST to get wrong.
+
+**Why this landed before the logbook.** A logbook export is a legal record
+built from these instants. Shipping the export first would have written an
+hour-wrong OOOI time into a real pilot logbook twice a year, and a wrong
+block time on anything crossing enough zones. Order matters here.
+
+Tests: 609 -> **641**, seven suites -> eight.
+
+
+### 1.0.0 — the rebrand, the install shell, and a year of memory
+
+Renamed **Pilot Tracker → MyPilot**, and restarted the version numbers.
+
+**Why the numbers restarted.** The old scheme was a single decimal: 5.5,
+6.3, 7.4. After 7.9 comes 7.10, which sorts BEFORE 7.9 as text and equals
+7.1 as a number — so anything that ever compares versions reads the newer
+build as older, and no later fix can disambiguate the numbers themselves.
+1.0.0 rather than 0.1.0 because the app already flies real trips for real
+families with hundreds of tests behind it. See VERSIONING.
+
+**Made it an app rather than a website that resembles one.**
+- Service worker (`static/sw.js`), served from `/sw.js` — a worker under
+  `/static/` can only ever control `/static/` and would never see a page
+  navigation or an API call. Cache name keyed to VERSION, so every deploy
+  rotates it; without that, `update.sh` silently stops reaching phones.
+- The install shell moved into `templates/partials/app_shell.html` and is
+  included by ALL TEN templates. It was previously on two. The login page —
+  the first screen any family member sees — had no manifest at all, so the
+  install that mattered most produced a bare bookmark.
+- Manifest is now a route, generated per user so the icon choice applies.
+- `theme_color` corrected from `#1e3a8a` to `#0f1419`; it disagreed with the
+  background and flashed blue on launch.
+- Connection banner distinguishing offline / can't-reach-server / showing-
+  saved-data. Driven by actual poll outcomes, NOT `navigator.onLine`, which
+  reports true on captive portals and while the server is down — precisely
+  the airport-wifi case a family member hits.
+
+**New icon, and a picker.** Four plane silhouettes, generated by
+`make_icons.py` from one set of vector definitions and emitted into
+`static/planes.js`, so the map marker and the app icon are cut from the same
+shape and cannot drift. Selectable in settings. Caveat stated in the UI: a
+home-screen icon already installed does not change until reinstall, because
+both iOS and Android read the manifest once at install time.
+
+**Retention 30 → 365 days.** `flights.py` and `track.py` together — a track
+outliving its flight row, or the reverse, is how half-deleted legs happen.
+`PT_RETENTION_DAYS` overrides. **This is the release where the database
+stopped being disposable**, hence BACKUP.md.
+
+**Future-proofing for clients we cannot reach.** All of it cheap now and
+expensive-to-impossible later; none of it needed today:
+- `/api/v1/…` with the bare paths kept alive as aliases.
+- `/api/v1/meta` reporting build, API version and whether a caller is still
+  supported, so an old native client can say "please update" instead of
+  rendering blank.
+- `SCHEMA_VERSION` stamped into `app_meta`, with a hard refusal to start
+  against a database newer than the build. Rolling back to an older image is
+  the classic way to lose data quietly.
+- Carrier callsigns moved to `app/carriers.py` as configuration
+  (`PT_HOME_CALLSIGN`, `PT_CANDIDATE_CALLSIGNS`). They were NOT deleted with
+  the rest of the branding — deleting them breaks deadhead resolution
+  outright. The invariant that the home prefix leads the candidate list is
+  enforced in code, not assumed, because a typo in compose would otherwise
+  make every one of the pilot's own legs unresolvable and silently so.
+
+**Housekeeping.** `data/secret_key.txt` had been shipped inside the v7.4 zip
+despite this file forbidding it. The packaging step now checks the archive
+rather than the working tree, since a test run recreates both.
+
+Tests: 400 → **609**, six suites → seven (`tests_app_shell.py`). The 400
+figure in the old README was itself stale; the v7.4 tree already had 472.
+
+
+### v6.4 – v7.4 — NOT RECORDED
+
+Four versions shipped without entries. Reconstruct from `git log` and add
+them; until then this history is incomplete and the STATE warning applies.
+
+Known to have landed somewhere in this range, by inspection of the v7.4
+tree: the shared `static/app.css` palette (with the `data-theme` /
+`prefers-color-scheme` precedence rule), light theme on the auth pages,
+and the `<nav class="tabbar">` bottom bar on all four logged-in pages.
+Rationale for each is unrecorded — recover it before changing any of them.
 
 ### v6.3 - three separate reasons the phone looked broken
 

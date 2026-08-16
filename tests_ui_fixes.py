@@ -17,7 +17,7 @@ from app import tags                                      # noqa: E402
 from app.airports import enrich_leg                       # noqa: E402
 from app.auth import create_user                          # noqa: E402
 from app.db import get_connection, init_db                # noqa: E402
-from app.flights import get_flight, save_schedule, write  # noqa: E402
+from app.flights import get_flight, replace_schedule, write  # noqa: E402
 from app.models import FlightLeg                          # noqa: E402
 from app.parser import parse_schedule_text                # noqa: E402
 from app.schedule import get_current_info                 # noqa: E402
@@ -113,7 +113,7 @@ def test_untracked_phase(uid):
               "DFW", "CRP", _t(10, 41), _t(12, 7))
     soon = leg("future-leg", (now + timedelta(days=2)).date(), "3403",
                "DFW", "CRP", _t(10, 41), _t(12, 7))
-    save_schedule(uid, [old, soon])
+    replace_schedule(uid, [old, soon])
     idx = app_main.tag_index(uid)
 
     v_old = app_main.leg_view(old, now, "24", idx)
@@ -147,7 +147,7 @@ def test_sequencing(uid):
             _t(a_dep.hour, a_dep.minute), _t(a_arr.hour, a_arr.minute))
     B = leg("seq-B", b_dep.date(), "3501", "LBB", "DFW",
             _t(b_dep.hour, b_dep.minute), _t(b_arr.hour, b_arr.minute))
-    save_schedule(uid, [A, B])
+    replace_schedule(uid, [A, B])
 
     # 1. A is STILL AIRBORNE, four hours past its paper arrival.
     write(A.id, always={"airborne_seen": 1, "landed_seen": 0, "closed": 0})
@@ -214,7 +214,7 @@ def test_flight_list(uid):
     recent = mk("L-recent", -600, -520, "3002")   # earlier today
     live = mk("L-live", -40, 50, "3003")          # airborne now
     nxt = mk("L-next", 300, 380, "3004")          # later today
-    save_schedule(uid, [older, recent, live, nxt])
+    replace_schedule(uid, [older, recent, live, nxt])
     write("L-live", always={"airborne_seen": 1})
 
     info = get_current_info(uid, base)
@@ -276,7 +276,7 @@ def test_past_detail_available(uid2):
                   dep_time_local=_t(dl.hour, dl.minute),
                   arr_time_local=_t(al.hour, al.minute))
     enrich_leg(l)
-    save_schedule(uid2, [l])
+    replace_schedule(uid2, [l])
     write("P-detail", always={
         "phase_tag": "Arrived", "closed": 1, "closed_by": "airline",
         "arrival_source": "airline", "gate_destination": "2",
@@ -424,7 +424,12 @@ def test_one_palette_everywhere():
     here = os.path.dirname(os.path.abspath(__file__))
     tdir = os.path.join(here, "templates")
     names = sorted(n for n in os.listdir(tdir) if n.endswith(".html"))
-    check("all eleven templates collapsed to ten", len(names) == 10, str(len(names)))
+    # The point of this assertion was that viewer_settings.html got folded
+    # into settings.html -- NOT that the template count is frozen. Adding a
+    # page is allowed; carrying a private palette is not. Naming the file
+    # that must stay gone says what was actually meant.
+    check("viewer_settings.html stayed merged into settings.html",
+          "viewer_settings.html" not in names, str(names))
 
     for name in names:
         with open(os.path.join(tdir, name), encoding="utf-8") as fh:
@@ -482,10 +487,22 @@ def test_zone_never_wraps_a_time():
     # far right of the row, pushed there by margin-left:auto, stranded in
     # empty space away from the number it described.
     check("the zone is no longer flung to the row's edge", "row-tz-single" not in html)
-    check("same zone both ends states it once, on the arrival",
-          '{% if leg.arr_zone %}<span class="tz">{{ leg.arr_zone }}</span>{% endif %}' in html)
-    check("a crossing states it at the departure too",
-          "not leg.same_zone and leg.dep_zone" in html)
+    # v1.2.0 CHANGED THIS RULE DELIBERATELY. It used to be "state the zone
+    # once where you can": the arrival always carried its label, the
+    # departure only when the two differed, and the current-flight card
+    # showed neither when they matched. Three rules visible on one screen,
+    # which read as randomness rather than economy -- reported by the owner
+    # as "some after both times, some after just the second time".
+    #
+    # Now every time carries its own zone, everywhere. Longer, and
+    # predictable, which is worth more to a family member who does not know
+    # that a missing label is supposed to mean "same as the other one".
+    check("the arrival states its zone",
+          '{% if leg.arr_zone %}<span class="tz" aria-hidden="true">{{ leg.arr_zone }}</span>{% endif %}' in html)
+    check("the departure states its zone too, unconditionally",
+          '{% if leg.dep_zone %}<span class="tz" aria-hidden="true">{{ leg.dep_zone }}</span>{% endif %}' in html)
+    check("no surface suppresses a zone by comparing the two",
+          "not leg.same_zone" not in html and "not current.same_zone" not in html)
     check("the card no longer prints an 'All times' line", "All times" not in html)
     check("...and the style that positioned it is gone", ".route-tz" not in html)
 
@@ -673,6 +690,61 @@ def test_settings_budget_saves():
     # This is the bug: 4.90 is not a multiple of 0.25, so the browser
     # rejected the value the app itself had put in the box.
     check("...and would have failed a 0.25 step", cents % 25 != 0, str(default))
+
+
+def test_open_card_cannot_outgrow_the_screen():
+    """The Show/Hide row must stay reachable. An open card taller than the
+    room above the tab pills used to clamp to 0, get held at ~105px by the
+    title bar and safe area, and bury its own button under the menu."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    check("the old zero clamp is gone",
+          "desiredTop = Math.max(0, desiredTop);" not in html)
+    check("...replaced by the card's real minimum position",
+          "desiredTop = Math.max(minTop(), desiredTop);" in html)
+    # minTop must not depend on finding a .topbar: the fallback fired, and
+    # assumed ~100px more headroom than the card actually has.
+    check("minTop is derived from the card, not a topbar lookup",
+          "document.querySelector('.topbar')" not in html)
+    check("the panel is capped to the space available", "_ptCapPanel" in html)
+    check("...and scrolls inside itself once capped",
+          ".expand-details.open.capped {" in html and "overflow-y: auto;" in html)
+
+    # The card grows on its own when live data lands; nothing fired then.
+    check("card height changes trigger a relayout", "ResizeObserver" in html)
+
+
+def test_viewer_theme_is_consistent_across_pages():
+    """A viewer's theme lives in a cookie. The tracker applied it inline and
+    the calendar forgot to, so one person got a light tracker and a dark
+    calendar."""
+    from types import SimpleNamespace as _NS
+    from app.main import viewer_display_overrides as _vdo
+
+    class _Req:
+        def __init__(self, c): self.cookies = c
+
+    base = {"theme": "dark", "time_format": "24",
+            "show_flightaware": True, "show_fr24": True}
+    check("a viewer's cookie overrides the pilot's theme",
+          _vdo(_Req({"pt_viewer_theme": "light"}), None, base)["theme"] == "light")
+    check("...but never overrides the pilot's own",
+          _vdo(_Req({"pt_viewer_theme": "light"}), {"id": 1}, base)["theme"] == "dark")
+    check("...and falls back when unset",
+          _vdo(_Req({}), None, base)["theme"] == "dark")
+    check("the clock format follows the same path",
+          _vdo(_Req({"pt_viewer_tf": "12"}), None, base)["time_format"] == "12")
+
+    # Every page a viewer can reach must go through the one helper.
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "app", "main.py"), encoding="utf-8") as fh:
+        src = fh.read()
+    cal = src[src.index("calendar.html"):]
+    cal = cal[:cal.index(")))") + 3] if ")))" in cal[:800] else cal[:800]
+    check("the calendar applies viewer overrides",
+          "viewer_display_overrides" in cal)
 
 
 def test_expanding_does_not_disturb_map_or_schedule():
@@ -924,6 +996,101 @@ def test_html_is_never_cached():
     check("...leaving versioned assets alone", "static" not in mw.split('"""')[-1])
 
 
+def test_review_page_carries_removals_and_breaks():
+    """One page for every decision about a paste. (N1, 1.5.0)
+
+    The owner's instruction was that removals belong on the page that lets
+    you add trip separations, not a separate step. Two different removals
+    live here and they are NOT the same thing:
+
+      * dropping a leg OUT OF THE PASTE — it was in the FFDO but should not
+        be imported;
+      * removing a leg already on the ROSTER that this paste no longer
+        mentions.
+
+    Both are proposals. Nothing on this page writes anything until confirm.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "import_review.html"),
+              encoding="utf-8") as fh:
+        ir = fh.read()
+    check("legs in the paste can be dropped individually", "drop-leg-btn" in ir)
+    check("...on the same page as the trip breaks, not a separate step",
+          "drop-leg-btn" in ir and "add-break-btn" in ir)
+    check("...by disabling inputs, so the browser simply never posts them",
+          "i.disabled = off" in ir)
+    check("...leaving the row visible so the choice is reversible",
+          ".leg-item.dropped" in ir and "classList.toggle('dropped')" in ir)
+    check("a dropped leg does not consume a trip_start slot",
+          "classList.contains('dropped')) { return; }" in ir)
+    check("roster removals are proposed separately from the paste list",
+          'name="remove_id"' in ir and 'name="removable_id"' in ir)
+    check("...ticked by default, because a re-paste usually is the truth",
+          'name="remove_id"' in ir and "checked" in ir)
+    check("the page says which months it is allowed to touch",
+          "scope_label" in ir)
+    check("...and says outright that flown legs are safe, whether or not",
+          "already flown are never removed by an import" in ir)
+    check("...that reassurance showing even when nothing is being removed",
+          ir.find("already flown are never removed") < ir.find("{% if removed %}"))
+
+
+def test_flights_page_filters_by_month():
+    """N1 made the roster accumulate; this stops it becoming a scroll."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "admin.html"), encoding="utf-8") as fh:
+        ah = fh.read()
+    with open(os.path.join(here, "app", "main.py"), encoding="utf-8") as fh:
+        src = fh.read()
+    check("a month filter exists", 'name="month"' in ah and "month-filter" in ah)
+    check("...with an all-months escape hatch", "All months" in ah)
+    check("...and a count beside each month", "m.count" in ah)
+    check("...submitting on change, so it is one tap", "this.form.submit()" in ah)
+    check("...but still working with no JavaScript", "<noscript>" in ah)
+    check("it is a GET, so it survives a refresh and can be linked",
+          'method="get" action="/admin"' in ah)
+    check("the select is labelled for screen readers", 'for="month-select"' in ah)
+    check("filtering happens on the SERVER, not by hiding rows",
+          'l.date.strftime("%Y-%m") == active_month' in src)
+    check("an unknown month falls back to everything, never an empty page",
+          "month if month in months else None" in src)
+    check("the manual add form is on the flights page",
+          'action="/admin/add"' in ah)
+
+
+def test_calendar_shows_one_month():
+    """The calendar used to render EVERY month with data, stacked.
+
+    That was survivable at 30-day retention with a replacing import. With
+    365-day retention and N1's additive import it is a year of grids in
+    one document, on a phone.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "calendar.html"), encoding="utf-8") as fh:
+        ch = fh.read()
+    with open(os.path.join(here, "app", "main.py"), encoding="utf-8") as fh:
+        src = fh.read()
+    check("month navigation exists", "month-nav" in ch)
+    check("...with previous and next steps",
+          'rel="prev"' in ch and 'rel="next"' in ch)
+    check("...as plain links, so browsing needs no script",
+          "/calendar?month={{ prev_month }}" in ch)
+    check("...disabled rather than absent at either end",
+          "month-step disabled" in ch)
+    check("a picker allows jumping across a bid cycle",
+          "month_choices" in ch and 'id="cal-month"' in ch)
+    check("...and works without JavaScript", "<noscript>" in ch)
+    check("tap targets are at least 44px", "width: 44px; height: 44px" in ch)
+    check("only the viewed month is built",
+          "for year, month in [(int(active[:4]), int(active[5:7]))]" in src)
+    check("...defaulting to the month actually being lived in",
+          "this_month = _key(today.year, today.month)" in src)
+    check("...never landing on an empty month by sort order",
+          "future[0] if future else available[-1]" in src)
+    check("the month is in the URL, so Back steps through months",
+          'month: Optional[str] = None' in src)
+
+
 def main():
     init_db()
     uid = create_user("uitest", "pw-not-used")
@@ -937,6 +1104,8 @@ def main():
     test_bottom_tab_bar()
     test_full_bleed_map()
     test_two_letter_zones()
+    test_open_card_cannot_outgrow_the_screen()
+    test_viewer_theme_is_consistent_across_pages()
     test_expanding_does_not_disturb_map_or_schedule()
     test_card_grows_upward_from_a_fixed_bottom_edge()
     test_detail_panels_slide_rather_than_snap()
@@ -956,6 +1125,10 @@ def main():
     test_flight_list(create_user("listtest", "pw-not-used"))
     test_past_detail_available(create_user("detailtest", "pw-not-used"))
     test_time_lines()
+    test_review_page_carries_removals_and_breaks()
+    test_flights_page_filters_by_month()
+    test_calendar_shows_one_month()
+
     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
     return 1 if FAIL else 0
 

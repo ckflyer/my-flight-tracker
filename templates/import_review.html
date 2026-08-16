@@ -3,9 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Pilot Tracker · Review import</title>
-  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png?v={{ version }}">
-  <link rel="shortcut icon" href="/static/favicon.ico?v={{ version }}">
+  <title>MyPilot · Review import</title>
+  {% include "partials/app_shell.html" %}
   <link rel="stylesheet" href="/static/app.css?v={{ version }}">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -63,18 +62,142 @@
     }
     .btn-cancel { background: transparent; border: 1px solid var(--border) !important; color: var(--text); }
     .btn-confirm { background: var(--accent); color: white; }
+    /* ---- the import diff (N1, 1.5.0) ----------------------------------
+       Colour is NOT the only signal. Each section has a heading in words
+       and each row a sign character, because "the green ones are new" is
+       useless to anyone reading this on a phone in sunlight, and worse to
+       anyone who cannot distinguish the two greens. */
+    .diff-sec { margin-bottom: 1.1rem; }
+    .diff-head {
+      display: flex; align-items: baseline; gap: 0.4rem;
+      font-size: 0.9rem; font-weight: 700; margin-bottom: 0.4rem;
+    }
+    .diff-head .n { color: var(--muted); font-weight: 600; font-size: 0.8rem; }
+    .diff-row {
+      display: flex; gap: 0.6rem; align-items: flex-start;
+      background: var(--card); border-radius: 10px;
+      padding: 0.6rem 0.75rem; margin-bottom: 0.35rem;
+      border-left: 3px solid var(--border);
+    }
+    .diff-row .sign { font-weight: 700; flex-shrink: 0; width: 1ch; }
+    .diff-row .body { flex: 1; min-width: 0; }
+    .diff-row .meta { color: var(--muted); font-size: 0.78rem; margin-top: 0.15rem; }
+    .diff-row .was { color: var(--muted); font-size: 0.78rem; margin-top: 0.15rem; }
+    .diff-row .was s { opacity: 0.75; }
+    .sec-added .diff-row { border-left-color: var(--ok, #22c55e); }
+    .sec-added .sign { color: var(--ok, #22c55e); }
+    .sec-changed .diff-row { border-left-color: var(--warn, #f59e0b); }
+    .sec-changed .sign { color: var(--warn, #f59e0b); }
+    .sec-removed .diff-row { border-left-color: var(--danger, #ef4444); }
+    .sec-removed .sign { color: var(--danger, #ef4444); }
+    .diff-row label { display: flex; gap: 0.55rem; align-items: flex-start; cursor: pointer; width: 100%; }
+    .diff-row input[type="checkbox"] { margin-top: 0.2rem; flex-shrink: 0; width: 18px; height: 18px; }
+    .scope {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 10px; padding: 0.7rem 0.85rem; margin-bottom: 1rem;
+      font-size: 0.85rem; line-height: 1.5;
+    }
+    .scope strong { color: var(--text); }
+    .nothing { color: var(--muted); font-size: 0.85rem; }
+    .leg-tools { display: flex; gap: 0.35rem; flex-shrink: 0; }
+    .drop-leg-btn {
+      width: 30px; height: 30px; border-radius: 8px;
+      background: transparent; border: 1px solid var(--border);
+      color: var(--muted); font-size: 1.1rem; line-height: 1; cursor: pointer;
+    }
+    .drop-leg-btn:hover { color: var(--danger, #ef4444); border-color: var(--danger, #ef4444); }
+    /* A dropped leg stays ON THE PAGE, greyed and struck through, rather
+       than disappearing. Removing the row outright would leave the pilot
+       unable to tell "I dropped that" from "the parser never saw it",
+       which is exactly the ambiguity this whole page exists to remove. */
+    .leg-item.dropped { opacity: 0.5; }
+    .leg-item.dropped strong, .leg-item.dropped .meta { text-decoration: line-through; }
+    .leg-item.dropped .drop-leg-btn { color: var(--accent); border-color: var(--accent); text-decoration: none; }
+    details.legs > summary {
+      cursor: pointer; font-size: 0.9rem; font-weight: 700;
+      margin-bottom: 0.5rem; padding: 0.3rem 0;
+    }
+
   </style>
 </head>
 <body>
-  <div class="brand">Pilot Tracker</div>
+  <div class="brand">MyPilot</div>
   <h1>Review before importing</h1>
   <p class="sub">
-    Trip breaks 35+ hours apart were guessed and placed automatically.
-    Drag the <strong>☰</strong> handle to move one, tap <strong>×</strong> to remove one,
-    or tap <strong>+</strong> on any flight to add a break before it. Nothing is saved until you confirm.
+    This paste covers <strong>{{ scope_label }}</strong>. Nothing is saved until you confirm,
+    and nothing outside those months is touched.
+    <strong>Flights you have already flown are never removed by an import.</strong>
   </p>
 
   <form method="post" action="/admin/import/confirm" id="review-form">
+
+    {% if added %}
+    <div class="diff-sec sec-added">
+      <div class="diff-head">Being added <span class="n">{{ added|length }}</span></div>
+      {% for r in added %}
+      <div class="diff-row">
+        <span class="sign" aria-hidden="true">+</span>
+        <div class="body">
+          <strong>{{ r.callsign }}</strong>{% if r.is_deadhead %}<span class="dh">DH</span>{% endif %} {{ r.route }}
+          <div class="meta">{{ r.date_label }} · {{ r.dep }} – {{ r.arr }}{% if r.same_zone and r.dep_zone %} <span class="tz" aria-hidden="true">{{ r.dep_zone }}</span>{% elif r.dep_zone %} <span class="tz" aria-hidden="true">{{ r.dep_zone }}/{{ r.arr_zone }}</span>{% endif %}</div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if changed %}
+    <div class="diff-sec sec-changed">
+      <div class="diff-head">Times changed <span class="n">{{ changed|length }}</span></div>
+      {% for r in changed %}
+      <div class="diff-row">
+        <span class="sign" aria-hidden="true">~</span>
+        <div class="body">
+          <strong>{{ r.callsign }}</strong>{% if r.is_deadhead %}<span class="dh">DH</span>{% endif %} {{ r.route }}
+          <div class="meta">{{ r.date_label }} · {{ r.dep }} – {{ r.arr }}{% if r.same_zone and r.dep_zone %} <span class="tz" aria-hidden="true">{{ r.dep_zone }}</span>{% elif r.dep_zone %} <span class="tz" aria-hidden="true">{{ r.dep_zone }}/{{ r.arr_zone }}</span>{% endif %}</div>
+          {% if r.was %}<div class="was">was <s>{{ r.was.dep }} – {{ r.was.arr }}</s>{% if r.was.is_deadhead != r.is_deadhead %} · {% if r.is_deadhead %}now a deadhead{% else %}no longer a deadhead{% endif %}{% endif %}</div>{% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if removed %}
+    <div class="diff-sec sec-removed">
+      <div class="diff-head">No longer on the line <span class="n">{{ removed|length }}</span></div>
+      <p class="sub" style="margin-bottom:0.5rem">
+        These are upcoming {{ scope_label }} flights you already have that this paste
+        does not mention. Untick anything you want to keep.
+      </p>
+      {% for r in removed %}
+      <div class="diff-row">
+        <label>
+          <input type="checkbox" name="remove_id" value="{{ r.id }}" checked>
+          <span class="body">
+            <strong>{{ r.callsign }}</strong>{% if r.is_deadhead %}<span class="dh">DH</span>{% endif %} {{ r.route }}
+            <span class="meta" style="display:block">{{ r.date_label }} · {{ r.dep }} – {{ r.arr }}{% if r.same_zone and r.dep_zone %} <span class="tz" aria-hidden="true">{{ r.dep_zone }}</span>{% elif r.dep_zone %} <span class="tz" aria-hidden="true">{{ r.dep_zone }}/{{ r.arr_zone }}</span>{% endif %}</span>
+          </span>
+        </label>
+        <input type="hidden" name="removable_id" value="{{ r.id }}">
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if not added and not changed and not removed %}
+    <p class="nothing">Nothing would change — every flight in this paste is already on your schedule exactly as pasted.</p>
+    {% endif %}
+    {% if unchanged_count %}
+    <p class="nothing">{{ unchanged_count }} flight{{ "s" if unchanged_count != 1 }} already on your schedule and unchanged.</p>
+    {% endif %}
+
+    <details class="legs">
+      <summary>Trip breaks &amp; full list ({{ legs|length }} flight{{ "s" if legs|length != 1 }} in this paste)</summary>
+      <p class="sub">
+        Trip breaks 35+ hours apart were guessed and placed automatically.
+        Drag the <strong>☰</strong> handle to move one, tap <strong>×</strong> to remove one,
+        or tap <strong>+</strong> on any flight to add a break before it.
+      </p>
     <div id="break-list">
       {% for leg in legs %}
         {% if leg.suggested_break_before %}
@@ -95,11 +218,14 @@
             <div>
               <strong>{{ leg.callsign }}</strong>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
               {{ leg.route }}
-              <div class="meta">{{ leg.date_label }} · {{ leg.dep }} – {{ leg.arr }}{% if leg.same_zone and leg.dep_zone %} <span class="tz">{{ leg.dep_zone }}</span>{% elif leg.dep_zone %} <span class="tz">{{ leg.dep_zone }}/{{ leg.arr_zone }}</span>{% endif %}</div>
+              <div class="meta">{{ leg.date_label }} · {{ leg.dep }} – {{ leg.arr }}{% if leg.same_zone and leg.dep_zone %} <span class="tz" aria-hidden="true">{{ leg.dep_zone }}</span>{% elif leg.dep_zone %} <span class="tz" aria-hidden="true">{{ leg.dep_zone }}/{{ leg.arr_zone }}</span>{% endif %}</div>
             </div>
-            {% if not loop.first %}
-            <button type="button" class="add-break-btn" title="Add trip break before this flight">+</button>
-            {% endif %}
+            <div class="leg-tools">
+              {% if not loop.first %}
+              <button type="button" class="add-break-btn" title="Add trip break before this flight">+</button>
+              {% endif %}
+              <button type="button" class="drop-leg-btn" title="Do not import this flight" aria-label="Do not import this flight">&times;</button>
+            </div>
           </div>
           <input type="hidden" name="leg_date" value="{{ leg.raw_date }}">
           <input type="hidden" name="leg_flight" value="{{ leg.raw_flight }}">
@@ -111,6 +237,7 @@
         </div>
       {% endfor %}
     </div>
+    </details>
 
     <div class="actions">
       <a href="/admin" class="btn-cancel">Cancel</a>
@@ -146,6 +273,20 @@
         e.target.closest('.break-marker').remove();
         return;
       }
+      if (e.target.classList.contains('drop-leg-btn')) {
+        // Toggle rather than remove: a dropped leg stays visible so the
+        // choice is reversible without re-pasting. Disabled inputs are not
+        // submitted by the browser, so the confirm step simply never sees
+        // it — no server change and nothing to keep in sync.
+        var item = e.target.closest('.leg-item');
+        var off = item.classList.toggle('dropped');
+        item.querySelectorAll('input[type=hidden]').forEach(function (i) {
+          i.disabled = off;
+        });
+        e.target.innerHTML = off ? '&#8635;' : '&times;';
+        e.target.title = off ? 'Import this flight after all' : 'Do not import this flight';
+        return;
+      }
       if (e.target.classList.contains('add-break-btn')) {
         const legItem = e.target.closest('.leg-item');
         const prev = legItem.previousElementSibling;
@@ -164,6 +305,10 @@
         if (child.classList.contains('break-marker')) {
           precededByBreak = true;
         } else if (child.classList.contains('leg-item')) {
+          // A dropped leg is not submitted, so it must not consume a
+          // trip_start slot either — the server pairs these up by
+          // position, and a mismatch would put every break one leg out.
+          if (child.classList.contains('dropped')) { return; }
           tripStarts.push(precededByBreak ? '1' : '0');
           precededByBreak = false;
         }
@@ -177,5 +322,6 @@
       });
     });
   </script>
+{% include "partials/sw_register.html" %}
 </body>
 </html>

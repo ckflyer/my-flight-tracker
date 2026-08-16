@@ -1,11 +1,11 @@
 """Who actually operates this flight?
 
-An FFDO line gives a bare flight number and, for a deadhead, a "(D)".
-It never says which airline. For the pilot's own legs that's fine — they're
-Envoy. For a deadhead it usually isn't: those are typically mainline
-American or another wholly-owned regional, each of which broadcasts its
-own callsign on ADS-B. Looking up ENY4110 when the aircraft is squawking
-AAL4110 means the leg simply never tracks.
+A bid line gives a bare flight number and, for a deadhead, a "(D)". It
+never says which airline. For the pilot's own legs that's fine — they are
+the home carrier. For a deadhead it usually isn't: those are typically on
+the mainline this operator feeds, or a sibling regional, each broadcasting
+its own callsign on ADS-B. Looking up the home prefix when the aircraft is
+squawking a different one means the leg simply never tracks.
 
 Flight number alone can't answer it. Flight number CROSSED WITH THE ROUTE
 can: only one carrier operates 4110 DFW-LFT on a given day.
@@ -13,27 +13,25 @@ can: only one carrier operates 4110 DFW-LFT on a given day.
 Two ways to get there, both resolving once per leg and then stored:
 
   1. AeroAPI /schedules — definitive, one query, needs a key.
-  2. ADS-B probing — free. Try the handful of callsigns American's family
-     actually uses and see which one has an aircraft at the origin around
-     departure. Worse, but it means deadheads aren't dark without a key.
+  2. ADS-B probing — free. Try each configured candidate callsign and see
+     which one has an aircraft at the origin around departure. Worse, but
+     it means deadheads aren't dark without a key.
+
+Which prefixes get tried is CONFIGURATION, not branding — see carriers.py.
 """
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
+from .carriers import CANDIDATE_PREFIXES  # noqa: F401  (re-exported)
 from .geo import haversine_nm
 from .schedule import set_operator_callsign
 
-# American's mainline plus the wholly-owned regionals a deadhead realistically
-# lands on. Envoy first, since that's the common case and usually ends the
-# search on the first try.
-CANDIDATE_PREFIXES: List[str] = [
-    "ENY",   # Envoy Air
-    "AAL",   # American mainline
-    "JIA",   # PSA Airlines
-    "PDT",   # Piedmont Airlines
-]
+# CANDIDATE_PREFIXES is imported above rather than defined here. It is
+# operator configuration (PT_CANDIDATE_CALLSIGNS) and lives in carriers.py.
+# Re-exported so every existing `from .carrier import CANDIDATE_PREFIXES`
+# keeps working.
 
 # How close to the origin an aircraft must be for a candidate callsign to
 # count as "this is the flight". Same radius the acquisition logic uses.
@@ -55,7 +53,7 @@ SCHEDULES_COST_UNITS = 4
 
 
 def needs_resolution(leg) -> bool:
-    """Only deadheads are ambiguous — the pilot's own legs are Envoy."""
+    """Only deadheads are ambiguous — the pilot's own legs are the home carrier."""
     return bool(leg.is_deadhead) and not leg.operator_callsign
 
 

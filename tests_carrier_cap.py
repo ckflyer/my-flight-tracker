@@ -26,7 +26,7 @@ from app import carrier                                  # noqa: E402
 from app.airports import enrich_leg                      # noqa: E402
 from app.auth import create_user                         # noqa: E402
 from app.db import init_db                               # noqa: E402
-from app.flights import get_flight, save_schedule        # noqa: E402
+from app.flights import get_flight, replace_schedule        # noqa: E402
 from app.models import FlightLeg                         # noqa: E402
 from app.parser import parse_schedule_text               # noqa: E402
 from app.settings import AppSettings, save_settings      # noqa: E402
@@ -49,7 +49,7 @@ def a_deadhead(uid, leg_id="dh-1"):
                     arr_time_local=_t((dep_local.hour + 2) % 24, dep_local.minute),
                     is_deadhead=True)
     enrich_leg(leg)
-    save_schedule(uid, [leg])
+    replace_schedule(uid, [leg])
     return leg
 
 

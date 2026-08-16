@@ -24,7 +24,7 @@ from app.auth import create_user                     # noqa: E402
 from app.models import FlightLeg                     # noqa: E402
 from app.airports import enrich_leg                  # noqa: E402
 from app import closure                              # noqa: E402
-from app.flights import get_flight, save_schedule, write  # noqa: E402
+from app.flights import get_flight, replace_schedule, write  # noqa: E402
 from app.main import compute_live_payload            # noqa: E402
 
 PASS, FAIL = [], []
@@ -51,7 +51,7 @@ LEGS = []
 def insert_leg(uid, leg, sort_index):
     """Legs live in `flights` now — one row carrying everything."""
     LEGS.append(leg)
-    save_schedule(uid, LEGS)
+    replace_schedule(uid, LEGS)
 
 
 def seed_airline(user_id, leg_id, fields, fetched_at):

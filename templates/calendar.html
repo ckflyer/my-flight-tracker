@@ -3,12 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Pilot Tracker · Calendar</title>
-  <link rel="manifest" href="/static/manifest.json?v={{ version }}">
-  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png?v={{ version }}">
-  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png?v={{ version }}">
-  <link rel="shortcut icon" href="/static/favicon.ico?v={{ version }}">
-  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png?v={{ version }}">
+  <title>MyPilot · Calendar</title>
+  {% include "partials/app_shell.html" %}
   <link rel="stylesheet" href="/static/app.css?v={{ version }}">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -35,6 +31,28 @@
 
     .month-label { font-size: 1.1rem; font-weight: 700; margin: 1.25rem 0 0.75rem; }
     .month-label:first-of-type { margin-top: 0; }
+
+    /* Month navigation (1.5.0). 44px tap targets: these are the two
+       controls most likely to be used one-handed on a jetway. */
+    .month-nav { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
+    .month-step {
+      display: flex; align-items: center; justify-content: center;
+      width: 44px; height: 44px; flex-shrink: 0;
+      border: 1px solid var(--border); border-radius: 10px;
+      color: var(--text); text-decoration: none; font-size: 1.3rem; line-height: 1;
+    }
+    .month-step:hover { border-color: var(--accent); color: var(--accent); }
+    .month-step.disabled { opacity: 0.3; }
+    .month-pick { flex: 1; margin: 0; min-width: 0; }
+    .month-pick select {
+      width: 100%; background: var(--input-bg); color: var(--text);
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 0.6rem; font-size: 0.9rem; font-weight: 600; text-align: center;
+    }
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+    }
 
     .grid-card { background: var(--card); border-radius: 16px; padding: 1rem; margin-bottom: 1.5rem; box-shadow: 0 4px 20px rgba(0,0,0,0.12); }
     .weekday-row { display: grid; grid-template-columns: repeat(7, 1fr); margin-bottom: 0.4rem; }
@@ -116,10 +134,36 @@
 </head>
 <body>
   <div class="topbar">
-    <div class="brand">Pilot Tracker</div>
+    <div class="brand">MyPilot</div>
   </div>
 
   {% for block in month_blocks %}
+  <!-- Month navigation (1.5.0). Arrows are the primary control because
+       stepping to the month either side is what a crew member almost
+       always wants; the select is there for the occasional jump back
+       across a bid cycle. Both are plain links/forms, so the page works
+       with no JavaScript at all. -->
+  <nav class="month-nav" aria-label="Choose month">
+    {% if prev_month %}
+    <a class="month-step" href="/calendar?month={{ prev_month }}" rel="prev" aria-label="Previous month">&#8249;</a>
+    {% else %}
+    <span class="month-step disabled" aria-hidden="true">&#8249;</span>
+    {% endif %}
+    <form method="get" action="/calendar" class="month-pick">
+      <label class="sr-only" for="cal-month">Month</label>
+      <select id="cal-month" name="month" onchange="this.form.submit()">
+        {% for m in month_choices %}
+        <option value="{{ m.value }}"{% if m.value == active_month %} selected{% endif %}>{{ m.label }}</option>
+        {% endfor %}
+      </select>
+      <noscript><button type="submit">Go</button></noscript>
+    </form>
+    {% if next_month %}
+    <a class="month-step" href="/calendar?month={{ next_month }}" rel="next" aria-label="Next month">&#8250;</a>
+    {% else %}
+    <span class="month-step disabled" aria-hidden="true">&#8250;</span>
+    {% endif %}
+  </nav>
   <div class="month-label">{{ block.label }}</div>
   <div class="grid-card">
     <div class="weekday-row">
@@ -163,7 +207,7 @@
           <strong>{{ leg.callsign }}</strong>
           <span class="agenda-route">{{ leg.origin }} &rarr; {{ leg.destination }}</span>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
         </div>
-        <div class="meta agenda-leg-times">{{ leg.dep_short or leg.dep }}&ndash;{{ leg.arr_short or leg.arr }}{% if leg.same_zone and leg.dep_zone %} <span class="tz">{{ leg.dep_zone }}</span>{% elif leg.dep_zone %} <span class="tz">{{ leg.dep_zone }}/{{ leg.arr_zone }}</span>{% endif %}</div>
+        <div class="meta agenda-leg-times">{{ leg.dep_short or leg.dep }}&ndash;{{ leg.arr_short or leg.arr }}{% if leg.same_zone and leg.dep_zone %} <span class="tz" aria-hidden="true">{{ leg.dep_zone }}</span>{% elif leg.dep_zone %} <span class="tz" aria-hidden="true">{{ leg.dep_zone }}/{{ leg.arr_zone }}</span>{% endif %}</div>
       </div>
       {% endfor %}
     {% else %}
@@ -180,5 +224,6 @@
     {% if is_pilot %}<a href="/admin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="9" y1="6.5" x2="20" y2="6.5"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="17.5" x2="20" y2="17.5"/><circle cx="4.5" cy="6.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="4.5" cy="17.5" r="1.4" fill="currentColor" stroke="none"/></svg><span>Flights</span></a>{% endif %}
     {% if is_pilot %}<a href="/settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 14.5a1.6 1.6 0 0 0 .32 1.77l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.6 1.6 0 0 0-1.77-.32 1.6 1.6 0 0 0-.97 1.47V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9.1 19.4a1.6 1.6 0 0 0-1.77.32l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.6 1.6 0 0 0 .32-1.77 1.6 1.6 0 0 0-1.47-.97H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.47-1.05 1.6 1.6 0 0 0-.32-1.77l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.6 1.6 0 0 0 1.77.32H9.1A1.6 1.6 0 0 0 10.15 3.1V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 .97 1.47 1.6 1.6 0 0 0 1.77-.32l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.6 1.6 0 0 0-.32 1.77V9.1a1.6 1.6 0 0 0 1.47.97H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5.43z"/></svg><span>Settings</span></a>{% else %}<a href="/viewer-settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 14.5a1.6 1.6 0 0 0 .32 1.77l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.6 1.6 0 0 0-1.77-.32 1.6 1.6 0 0 0-.97 1.47V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9.1 19.4a1.6 1.6 0 0 0-1.77.32l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.6 1.6 0 0 0 .32-1.77 1.6 1.6 0 0 0-1.47-.97H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.47-1.05 1.6 1.6 0 0 0-.32-1.77l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.6 1.6 0 0 0 1.77.32H9.1A1.6 1.6 0 0 0 10.15 3.1V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 .97 1.47 1.6 1.6 0 0 0 1.77-.32l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.6 1.6 0 0 0-.32 1.77V9.1a1.6 1.6 0 0 0 1.47.97H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5.43z"/></svg><span>Settings</span></a>{% endif %}
   </nav>
+{% include "partials/sw_register.html" %}
 </body>
 </html>

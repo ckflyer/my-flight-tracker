@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>MyPilot · Debug log</title>
+  {% include "partials/app_shell.html" %}
+  <link rel="stylesheet" href="/static/app.css?v={{ version }}">
+  <style>
+    /* Dense on purpose. This is read while a flight is misbehaving, on a
+       phone, looking for one row among hundreds. Comfort loses to density. */
+    .dbg-wrap { padding: 0.75rem 0.75rem 5rem; max-width: 900px; margin: 0 auto; }
+    .dbg-filters { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
+    .dbg-filters input {
+      flex: 1 1 8rem; min-width: 0; padding: 0.45rem 0.6rem;
+      border-radius: 8px; border: 1px solid var(--border);
+      background: var(--card); color: var(--text); font-size: 0.85rem;
+    }
+    .dbg-filters button {
+      padding: 0.45rem 0.9rem; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--card); color: var(--text); font-size: 0.85rem; cursor: pointer;
+    }
+    .dbg-off {
+      padding: 0.7rem 0.85rem; border-radius: 10px; margin-bottom: 0.9rem;
+      background: var(--card); border: 1px solid var(--warn);
+      color: var(--text); font-size: 0.85rem; line-height: 1.5;
+    }
+    .dbg-row {
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 0.55rem 0.7rem; margin-bottom: 0.45rem; background: var(--card);
+    }
+    .dbg-head { display: flex; gap: 0.5rem; align-items: baseline; flex-wrap: wrap; }
+    .dbg-event { font-weight: 700; font-size: 0.82rem; color: var(--text); }
+    .dbg-at { font-size: 0.7rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .dbg-subject { font-size: 0.7rem; color: var(--muted); }
+    .dbg-detail {
+      margin-top: 0.4rem; font-size: 0.72rem; line-height: 1.55;
+      color: var(--muted); word-break: break-word;
+    }
+    .dbg-detail b { color: var(--text); font-weight: 600; }
+    .dbg-empty { color: var(--muted); text-align: center; padding: 2.5rem 1rem; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+<div class="dbg-wrap">
+  <h1 style="font-size:1.1rem;margin:0 0 0.7rem;">Debug log</h1>
+
+  {% if not enabled %}
+  <div class="dbg-off">
+    <b>Logging is off.</b> Nothing new is being recorded. Turn it on by
+    setting <code>PT_DEBUG_LOG=1</code> in <code>docker-compose.yml</code>
+    and restarting the container. Leave it off day to day &mdash; it writes a
+    row on every poll, and it is only worth the writes while chasing
+    something.
+  </div>
+  {% endif %}
+
+  <form class="dbg-filters" method="get" action="/admin/debug">
+    <input type="text" name="subject" value="{{ subject }}" placeholder="Flight id">
+    <input type="text" name="event" value="{{ event }}" placeholder="Event prefix, e.g. closure">
+    <button type="submit">Filter</button>
+  </form>
+
+  {% if events %}
+    {% for e in events %}
+    <div class="dbg-row">
+      <div class="dbg-head">
+        <span class="dbg-event">{{ e.event }}</span>
+        <span class="dbg-at">{{ e.at }}</span>
+        {% if e.subject %}<span class="dbg-subject">· {{ e.subject }}</span>{% endif %}
+      </div>
+      {% if e.detail %}
+      <div class="dbg-detail">
+        {% for k, v in e.detail.items() %}<b>{{ k }}</b>={{ v }}{% if not loop.last %} · {% endif %}{% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+    <form method="post" action="/admin/debug/clear" style="margin-top:1rem;"
+          onsubmit="return confirm('Delete all debug events? Flight data is not affected.');">
+      <button type="submit" class="dbg-filters" style="padding:0.5rem 1rem;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text);">Clear log</button>
+    </form>
+  {% else %}
+    <div class="dbg-empty">
+      No events{% if subject or event %} match that filter{% endif %}.
+    </div>
+  {% endif %}
+</div>
+{% include "partials/sw_register.html" %}
+</body>
+</html>

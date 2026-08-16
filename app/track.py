@@ -12,6 +12,7 @@ always kept, because takeoff and landing are read off them.
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -34,7 +35,9 @@ MAX_TRACK_POINTS = 3000
 # would otherwise render as a blob at the gate.
 MIN_POINT_SEPARATION_NM = 0.12
 
-TRACK_RETENTION_DAYS = 30
+# Kept in step with flights.RETENTION_DAYS (v7.5). A track outliving its
+# flight row, or vice versa, is how half-deleted legs happen.
+TRACK_RETENTION_DAYS = int(os.environ.get("PT_RETENTION_DAYS") or 365)
 MIN_SPEED_KTS_FOR_ETA = 20  # ignore near-zero groundspeed so ETE can't spike
 
 _prune_lock = threading.Lock()

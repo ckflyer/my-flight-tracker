@@ -3,9 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Pilot Tracker · Save your recovery code</title>
-  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png?v={{ version }}">
-  <link rel="shortcut icon" href="/static/favicon.ico?v={{ version }}">
+  <title>MyPilot · Save your recovery code</title>
+  {% include "partials/app_shell.html" %}
   <link rel="stylesheet" href="/static/app.css?v={{ version }}">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -54,7 +53,7 @@
 </head>
 <body>
   <div class="wrap">
-    <div class="brand">Pilot Tracker</div>
+    <div class="brand">MyPilot</div>
     <div class="card">
       <div class="warning">⚠️ Save this now. Do not lose it.</div>
       <div class="code">{{ recovery_code }}</div>
@@ -69,5 +68,6 @@
       <a href="{{ next_url }}" class="btn-link">I've saved it — continue</a>
     </div>
   </div>
+{% include "partials/sw_register.html" %}
 </body>
 </html>

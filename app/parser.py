@@ -1,4 +1,4 @@
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timezone
 from typing import List
 import re
 from .models import FlightLeg
@@ -100,8 +100,16 @@ def parse_schedule_text(text: str) -> List[FlightLeg]:
             continue
 
     def sort_key(leg: FlightLeg):
+        # The fallback must be AWARE. Python refuses to compare offset-naive
+        # against offset-aware datetimes, so a paste where some airports
+        # resolve and others do not would raise here and lose the whole
+        # import. Treating an unresolved leg's local time as UTC puts it
+        # roughly in the right place instead of crashing; it will sort
+        # exactly once the airport is known.
         utc = leg.dep_datetime_utc()
-        return utc or datetime.combine(leg.date, leg.dep_time_local)
+        if utc is not None:
+            return utc
+        return datetime.combine(leg.date, leg.dep_time_local, tzinfo=timezone.utc)
 
     legs.sort(key=sort_key)
     return legs

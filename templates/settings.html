@@ -3,9 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Pilot Tracker · Settings</title>
-  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png?v={{ version }}">
-  <link rel="shortcut icon" href="/static/favicon.ico?v={{ version }}">
+  <title>MyPilot · Settings</title>
+  {% include "partials/app_shell.html" %}
   <link rel="stylesheet" href="/static/app.css?v={{ version }}">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -149,7 +148,7 @@
 </head>
 <body>
   <div class="topbar">
-    <div class="brand">Pilot Tracker</div>
+    <div class="brand">MyPilot</div>
     <div class="topbar-right">
       <form method="post" action="/logout" style="margin:0;">
         <button type="submit" class="logout-btn" title="Log out" aria-label="Log out"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg></button>
@@ -245,6 +244,23 @@
           </select>
         </div>
       </div>
+
+      {% if is_pilot %}
+      <label>Plane icon</label>
+      <div class="icon-picker">
+        {% for key, label in (icon_styles or {'modern':'Modern','sharp':'Sharp','rounded':'Rounded','delta':'Delta'}).items() %}
+        <label class="icon-opt">
+          <input type="radio" name="icon_style" value="{{ key }}"
+                 {% if s.icon_style == key %}checked{% endif %}>
+          <span>
+            <img src="/static/icon-{{ key }}-192.png?v={{ version }}" alt="{{ label }} plane icon">
+            {{ label }}
+          </span>
+        </label>
+        {% endfor %}
+      </div>
+      <p class="hint">Sets the plane on the map and the app icon. The map changes as soon as you save. An icon already on your home screen won't change until you remove the app and add it again &mdash; iPhone and Android both read the icon once, when you install, and keep it.</p>
+      {% endif %}
       {% if is_pilot %}
       <label>Live poll interval (seconds)</label>
       <input type="number" name="poll_seconds" value="{{ s.poll_seconds }}" min="10" max="300">
@@ -282,52 +298,18 @@
 
   {% if is_pilot and is_admin %}
   <div class="card">
-    <h2>Admin · Live tracking</h2>
+    <h2>Admin</h2>
     <p style="color:var(--muted); font-size:0.85rem; margin:0 0 0.75rem;">
-      Check whether ADS-B is actually reaching the app, and manage which
-      feeds it uses. Worth opening first whenever a flight shows no live
-      position — it names the failing step instead of leaving you guessing.
+      Registered pilots, live-tracking diagnostics, the decision log and
+      test mode all moved to the Flights page in 1.6.0. Settings is for how
+      the app behaves for <em>you</em>; that page is for running the install.
     </p>
-    <a href="/admin/diagnostics"
+    <a href="/admin"
        style="display:inline-block; padding:0.5rem 0.9rem; border-radius:8px;
               border:1px solid var(--border); color:var(--accent);
               text-decoration:none; font-size:0.875rem; font-weight:600;">
-      Open diagnostics &rarr;
+      Open admin &rarr;
     </a>
-  </div>
-
-  <div class="card">
-    <h2>Admin · Registered pilots</h2>
-    <div class="table-scroll">
-    <table style="width:100%; border-collapse:collapse; font-size:0.85rem;">
-      <thead>
-        <tr style="color:var(--muted); text-align:left; font-size:0.75rem; text-transform:uppercase;">
-          <th style="padding:0.4rem 0.3rem;">Username</th>
-          <th style="padding:0.4rem 0.3rem;">Email</th>
-          <th style="padding:0.4rem 0.3rem;">Created</th>
-          <th style="padding:0.4rem 0.3rem;"></th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for u in all_users %}
-        <tr style="border-top:1px solid var(--border);">
-          <td style="padding:0.5rem 0.3rem;">{{ u.username }}{% if u.is_admin %} <span style="color:var(--accent); font-size:0.75rem;">(admin)</span>{% endif %}</td>
-          <td style="padding:0.5rem 0.3rem; color:var(--muted);">{{ u.email or '—' }}</td>
-          <td style="padding:0.5rem 0.3rem; color:var(--muted); white-space:nowrap;">{{ u.created_at[:10] if u.created_at else '—' }}</td>
-          <td style="padding:0.5rem 0.3rem; text-align:right;">
-            {% if u.id != pilot_id %}
-            <form method="post" action="/settings/users/delete/{{ u.id }}" onsubmit="return confirm('Delete {{ u.username }}\'s account and all their flight data? This can\'t be undone.');" style="margin:0;">
-              <button type="submit" style="margin:0; padding:0.35rem 0.7rem; font-size:0.8rem; background:transparent; border:1px solid var(--border); color:#ef4444;">Delete</button>
-            </form>
-            {% else %}
-            <span style="color:var(--muted); font-size:0.75rem;">you</span>
-            {% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    </div>
   </div>
   {% endif %}
   <div style="text-align:center; color:var(--muted); font-size:0.75rem; margin-top:2rem;">v{{ version }}</div>
@@ -346,5 +328,6 @@
     {% if is_pilot %}<a href="/admin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="9" y1="6.5" x2="20" y2="6.5"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="17.5" x2="20" y2="17.5"/><circle cx="4.5" cy="6.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="4.5" cy="17.5" r="1.4" fill="currentColor" stroke="none"/></svg><span>Flights</span></a>{% endif %}
     <a href="{{ post_to }}" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 14.5a1.6 1.6 0 0 0 .32 1.77l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.6 1.6 0 0 0-1.77-.32 1.6 1.6 0 0 0-.97 1.47V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9.1 19.4a1.6 1.6 0 0 0-1.77.32l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.6 1.6 0 0 0 .32-1.77 1.6 1.6 0 0 0-1.47-.97H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.47-1.05 1.6 1.6 0 0 0-.32-1.77l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.6 1.6 0 0 0 1.77.32H9.1A1.6 1.6 0 0 0 10.15 3.1V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 .97 1.47 1.6 1.6 0 0 0 1.77-.32l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.6 1.6 0 0 0-.32 1.77V9.1a1.6 1.6 0 0 0 1.47.97H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5.43z"/></svg><span>Settings</span></a>
   </nav>
+{% include "partials/sw_register.html" %}
 </body>
 </html>

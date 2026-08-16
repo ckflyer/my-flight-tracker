@@ -73,16 +73,38 @@
 /* Zone labels sit beside a time and must never be the reason a row wraps.
    Kept here rather than in one template because the tracker, the calendar
    agenda and the flight list all show times and all used to disagree. */
+/* ---------------------------------------------------------------- ZONES
+   The zone rides as a SUPERSCRIPT on the time it belongs to.
+
+   This is what let every time keep its own label. The rule used to be
+   "state it once where you can" — arrival always, departure only when the
+   two differed — because a full-size "CDT" beside every time was wide
+   enough to wrap a row on a phone. That economy was the problem: three
+   surfaces implemented it three different ways, and a missing label reads
+   as a gap rather than as "same as the other one".
+
+   Superscripting removes the reason for the compromise. At this size two
+   letters cost a couple of millimetres, so the label can appear on EVERY
+   time and the layout stops caring. Consistent and compact, rather than a
+   choice between them.
+
+   `vertical-align: super` alone would push the line box taller and space
+   out the rows, so the lift is done with a transform, which does not
+   affect layout at all.
+--------------------------------------------------------------------- */
 .tz {
-  font-size: 0.6875rem;
-  font-weight: 600;
+  font-size: 0.5625rem;
+  font-weight: 700;
   color: var(--muted);
-  letter-spacing: 0.03em;
+  letter-spacing: 0.02em;
   white-space: nowrap;
+  display: inline-block;
+  transform: translateY(-0.42em);
+  margin-left: 0.12rem;
 }
 /* The card lays these out inline rather than in a flex row, so they need
    their own gap; .row-chip and the agenda supply their own. */
-.route-time-wrap .tz { margin-left: 0.28rem; }
+.route-time-wrap .tz { margin-left: 0.16rem; }
 
 /* ---------------------------------------------------------------- TAB BAR
    A floating pill, offset to the left rather than a full-width bar. Left
@@ -126,3 +148,69 @@
 
 /* Room for the pill so it covers nothing at the end of a page. */
 body { padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important; }
+
+/* ---------------------------------------------------------------------------
+   Connection banner (v7.5)
+
+   Three DIFFERENT failures used to look identical — a blank or frozen page:
+
+     offline  the phone has no network at all
+     unreachable  the phone has network but the server did not answer
+     stale  server answered, but from the service worker's cache
+
+   They are shown separately on purpose. A banner that said "offline" when it
+   really meant "no ADS-B coverage over Arkansas" would teach people to ignore
+   it, and then it would be worthless on the day it mattered. Loss of ADS-B
+   coverage is NOT a connection problem and keeps its own existing note on the
+   card — this bar is strictly about reaching the server.
+
+   Pinned under the notch rather than to the top edge: on an installed PWA the
+   status bar is translucent and content slides beneath it.
+--------------------------------------------------------------------------- */
+.conn-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: calc(env(safe-area-inset-top, 0px) + 0.42rem) 0.75rem 0.42rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-align: center;
+  border-bottom: 1px solid transparent;
+}
+.conn-bar.show { display: flex; }
+.conn-bar[data-state="offline"],
+.conn-bar[data-state="unreachable"] {
+  background: var(--bad);
+  color: #1a0d0d;
+  border-bottom-color: var(--bad);
+}
+.conn-bar[data-state="stale"] {
+  background: var(--warn);
+  color: #201400;
+  border-bottom-color: var(--warn);
+}
+.conn-bar .conn-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: currentColor; flex: 0 0 auto; opacity: .75;
+}
+
+/* ---------------------------------------------------------------------------
+   Icon style picker (v7.5, settings)
+--------------------------------------------------------------------------- */
+.icon-picker { display: flex; flex-wrap: wrap; gap: 0.7rem; margin-top: 0.5rem; }
+.icon-opt { position: relative; }
+.icon-opt input { position: absolute; opacity: 0; width: 0; height: 0; }
+.icon-opt span {
+  display: flex; flex-direction: column; align-items: center; gap: 0.35rem;
+  padding: 0.55rem 0.5rem 0.45rem; border-radius: 10px; cursor: pointer;
+  border: 2px solid var(--border); background: var(--card);
+  font-size: 0.74rem; color: var(--muted); min-width: 76px;
+}
+.icon-opt img { width: 46px; height: 46px; border-radius: 10px; display: block; }
+.icon-opt input:checked + span { border-color: var(--accent); color: var(--text); }
+.icon-opt input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }

@@ -1,0 +1,21 @@
+{# Everything a page needs to be installable and to survive a lost network.
+
+   THIS EXISTS BECAUSE IT WAS MISSING FROM EIGHT OF TEN PAGES. Before v7.5
+   the manifest was linked from viewer.html and calendar.html only, and the
+   theme-color from viewer.html alone. The page a family member sees FIRST is
+   login.html, which had neither — so the one install that mattered most
+   produced a bare bookmark with no icon and no full-screen. Include this in
+   the <head> of every page. There is a test for it in tests_ui_fixes.py.
+
+   The manifest is a ROUTE, not a static file: /manifest.webmanifest is
+   generated per user so the chosen icon style applies. See main.py.
+#}
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="MyPilot">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0f1419">
+<link rel="manifest" href="/manifest.webmanifest?v={{ version }}">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png?v={{ version }}">
+<link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png?v={{ version }}">
+<link rel="shortcut icon" href="/static/favicon.ico?v={{ version }}">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon-{{ (s.icon_style if s is defined and s else (settings.icon_style if settings is defined and settings else 'modern')) }}.png?v={{ version }}">

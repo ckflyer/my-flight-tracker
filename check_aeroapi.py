@@ -6,7 +6,7 @@ Run this ON THE SERVER, before trusting the toggle:
     docker compose exec flight-tracker python3 check_aeroapi.py YOUR_KEY ENY3729 DFW OKC
 
 It answers the two things that can't be checked from a development machine:
-whether the data is actually any good for Envoy flights, and what a query
+whether the data is actually any good for the flights you fly, and what a query
 really costs. It makes exactly ONE query.
 
 Pick a flight that is operating today. The route arguments matter — they

@@ -26,6 +26,32 @@ services:
       #
       # Check which feeds are answering at /admin/diagnostics.
       - TZ=${TZ:-America/Chicago}
+      #
+      # OPTIONAL. How long flights, tracks and closeouts are kept, in days.
+      # Default 365 (was 30 before v1.0.0). Set 0 to keep everything forever
+      # — storage is not the constraint, a growing archive of where crew have
+      # been is. Whatever you choose, read BACKUP.md: past 30 days this file
+      # stops being disposable.
+      # - PT_RETENTION_DAYS=365
+      #
+      # OPTIONAL. Carrier callsigns. This is CONFIGURATION, not branding:
+      # a bid line gives a bare flight number, and the app has to know which
+      # ICAO prefix it broadcasts under or nothing tracks. Change these and
+      # the app works for a crew member at any airline.
+      #
+      #   PT_HOME_CALLSIGN        the prefix YOUR own legs fly under
+      #   PT_CANDIDATE_CALLSIGNS  prefixes a DEADHEAD might be on, in order,
+      #                           cheapest guess first
+      #
+      # OPTIONAL. Decision logging, for chasing a bug. Records WHY the app
+      # closed (or did not close) a leg, with the exact inputs. Off by
+      # default: it writes a row on every poll and is only worth the writes
+      # while you are actually chasing something. Read it at /admin/debug.
+      # - PT_DEBUG_LOG=1
+      # - PT_DEBUG_MAX_EVENTS=20000
+      #
+      # - PT_HOME_CALLSIGN=ENY
+      # - PT_CANDIDATE_CALLSIGNS=ENY,AAL,JIA,PDT
       # OPTIONAL. Pins the session-signing key so logins survive absolutely
       # anything, including the database being rebuilt from scratch. Leave
       # it commented out and the key is kept in the database automatically.

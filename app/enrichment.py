@@ -379,6 +379,106 @@ def should_query(row, leg, now: datetime, has_adsb: bool = False,
     return f"{phase} check ({spent} of {TICKETS_PER_LEG}, {int(gap.total_seconds() // 60)}m spacing)"
 
 
+# ------------------------------------------------- the late gate-in chase
+# How long after CLOSING to ask again for an airline gate-in that never
+# arrived, and how many times. Attempt 1 goes at +90 minutes, 2 at +6h,
+# 3 at +18h, each measured from the previous attempt.
+#
+# WHY THESE NUMBERS. The owner's report: usually the airline's gate-in is
+# quick, but a leg that blocked in at 07:00 still had nothing by 11:30.
+# So "quick" is already covered by the leg's own live tickets and needs
+# nothing here; what needs covering is the several-hour tail and the
+# occasional overnight. Three attempts reach ~24 hours past block-in,
+# which covers both without the schedule ever becoming open-ended.
+#
+# WHY IT IS BOUNDED AT ALL. `carrier.py` learned this the expensive way: a
+# lookup that records nothing on failure gets asked again on the next
+# sweep, forever. Every attempt here is written to the row BEFORE the call
+# goes out, so a timeout or a crash mid-request still counts.
+GATEIN_BACKFILL_GAPS = [timedelta(minutes=90), timedelta(hours=6),
+                        timedelta(hours=18)]
+GATEIN_BACKFILL_TRIES = len(GATEIN_BACKFILL_GAPS)
+
+
+def should_backfill_gate_in(row, now: datetime) -> Optional[str]:
+    """Is it time to go back and ask for this closed leg's gate-in?
+
+    Deliberately NOT part of `should_query`. That function refuses to spend
+    anything on a closed leg, which is right for the live ticket allowance
+    — there is nothing left to watch. But it also made
+    `closure.maybe_close`'s upgrade path unreachable: the one value that
+    could upgrade a provisional close was the one value nothing would ever
+    fetch again. Two different questions, so two functions.
+    """
+    if row is None:
+        return None
+    if not _col(row, "closed") or _col(row, "cancelled"):
+        return None
+    if _col(row, "in_actual_api"):
+        return None                    # already have it; nothing to chase
+    if _col(row, "closed_by") == "airline":
+        return None                    # closed ON gate-in; cannot be missing
+
+    tries = int(_col(row, "gatein_tries") or 0)
+    if tries >= GATEIN_BACKFILL_TRIES:
+        return None
+
+    since = _parse(_col(row, "gatein_tried_at")) or _parse(_col(row, "closed_at"))
+    if since is None:
+        return None
+    if now - since < GATEIN_BACKFILL_GAPS[tries]:
+        return None
+    return f"late gate-in check ({tries + 1} of {GATEIN_BACKFILL_TRIES})"
+
+
+def backfill_gate_in(user_id: int, leg, now: datetime) -> Optional[str]:
+    """One late attempt at the airline's gate-in for an already-closed leg.
+
+    Returns the reason a query was spent, or None. Obeys the same monthly
+    cap as everything else — this is real money, just a very small amount
+    of it: at most three queries on only those legs that finished without
+    an airline gate-in.
+    """
+    row = get_flight(leg.id)
+    if row is not None and _col(row, "simulated"):
+        return None                    # see the guard in refresh()
+
+    api_key = credentials(user_id)
+    if not api_key:
+        return None
+    if budget_state(user_id)["exhausted"]:
+        return None
+
+    reason = should_backfill_gate_in(row, now)
+    if not reason:
+        return None
+
+    # Recorded BEFORE the call. See the comment on GATEIN_BACKFILL_GAPS.
+    write(leg.id, always={
+        "gatein_tries": int(_col(row, "gatein_tries") or 0) + 1,
+        "gatein_tried_at": now.isoformat(),
+    })
+
+    try:
+        data, raw, billed = fetch_leg(api_key, leg.callsign, leg.origin,
+                                      leg.destination, leg.dep_datetime_utc(),
+                                      want_raw=True)
+    except AeroApiError as e:
+        print(f"[enrichment] {leg.id}: late gate-in check failed: {e}")
+        _count_query(user_id, now, 1)
+        return None
+    except Exception as e:
+        print(f"[enrichment] {leg.id}: late gate-in check errored: {e}")
+        return None
+
+    _count_query(user_id, now, billed)
+    if data is None:
+        return reason
+    _apply(user_id, leg.id, data, raw, now, reason, get_flight(leg.id))
+    print(f"[enrichment] {leg.id}: {reason}")
+    return reason
+
+
 # --------------------------------------------------------------- spending
 def _apply(user_id: int, leg_id: str, data: Dict[str, Any], raw, now: datetime,
            reason: str, row) -> None:
@@ -459,6 +559,16 @@ def refresh(user_id: int, leg, now: datetime, has_adsb: bool = False,
     unreachable or rejected API must not disturb tracking, which works
     perfectly well without it.
     """
+    # THE TEST-MODE GUARD. First, before the key is even read, and
+    # repeated in backfill_gate_in below. A simulated leg is an invention;
+    # asking FlightAware about it would spend real money on a flight that
+    # does not exist, and could return a REAL flight that happens to share
+    # the callsign, quietly mixing invented and genuine data in one row.
+    # This is the single most important line in test mode.
+    row = get_flight(leg.id)
+    if row is not None and _col(row, "simulated"):
+        return None
+
     api_key = credentials(user_id)
     if not api_key:
         return None

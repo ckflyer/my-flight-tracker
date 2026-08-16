@@ -55,6 +55,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
 
+from . import debuglog
 from .flights import get_flight, write
 from .tags import PHASE_ARRIVED, STATUS_CANCELLED, STATUS_DIVERTED
 
@@ -64,6 +65,12 @@ from .tags import PHASE_ARRIVED, STATUS_CANCELLED, STATUS_DIVERTED
 # stop only counts as arrival when the signal has ALSO gone away.
 STOPPED_MIN = timedelta(minutes=5)
 SIGNAL_GONE_MIN = timedelta(minutes=8)
+
+# A stop this long after landing closes the leg REGARDLESS of whether the
+# transponder is still transmitting. See the LONG STOP branch in decide()
+# for why: without it, an aircraft parked at the gate with its transponder
+# on can never close, and blocks every leg behind it.
+STOPPED_LONG = timedelta(minutes=30)
 
 # Last resort. Deliberately hard to reach — see the module docstring.
 BACKSTOP_AFTER_ARRIVAL = timedelta(hours=3)
@@ -183,6 +190,33 @@ def decide(row, leg, now: datetime,
     if blocked_in:
         return (SOURCE_OBSERVED, observed_in)
 
+    # LONG STOP (v1.4.0). The route above requires the transponder to go
+    # QUIET, and so does the backstop below. That left a hole with no exit:
+    #
+    #   land -> taxi in -> park at the gate -> KEEP TRANSMITTING
+    #
+    # which is ordinary behaviour, especially with the APU running or on a
+    # quick turn. `signal_gap` never reaches SIGNAL_GONE_MIN, so `observed`
+    # cannot fire; `quiet` is false, so the backstop cannot fire either. The
+    # only remaining exits were an airline gate-in — the OOOI field most
+    # often missing — and `relaunch`, which on the last leg of a day does not
+    # happen until the following morning.
+    #
+    # Result: the leg sat in taxi-in indefinitely and, because it never
+    # closed, the next leg never became current. The whole app appeared
+    # frozen on a flight that had plainly finished.
+    #
+    # A stop this long IS the evidence. The five-minute rule was paired with
+    # silence to tell "parked" from "holding for a gate", which is fair at
+    # five minutes and no longer fair at thirty — a hold that long while
+    # perfectly stationary is rare, and when it does happen, closing early
+    # is much the smaller error. The alternative is what was actually
+    # happening: a finished leg blocking every leg behind it.
+    if (is_down(row) and observed_in is not None
+            and stopped_for is not None
+            and stopped_for >= STOPPED_LONG.total_seconds()):
+        return (SOURCE_OBSERVED, observed_in)
+
     # Backstop. Only when there is nothing left to learn — no live signal,
     # no fresh airline data — and well past the REVISED arrival.
     ref = reference_arrival(row, leg)
@@ -260,12 +294,28 @@ def maybe_close(leg, row, now: datetime,
             return SOURCE_AIRLINE
         return None
 
+    debuglog.log(
+        "closure.inputs", subject=getattr(leg, "id", None),
+        flight=getattr(leg, "flight_number", None),
+        departed=has_departed(row), down=is_down(row),
+        relaunched=bool(_col(row, "relaunched")),
+        actual_in=_col(row, "in_actual_api"),
+        stopped_for_s=stopped_for, signal_gap_s=signal_gap,
+        enrichment_fresh=enrichment_fresh,
+        # The three thresholds, logged alongside the values they are
+        # compared against, so a near-miss is visible without opening code.
+        need_stopped_s=STOPPED_MIN.total_seconds(),
+        need_silent_s=SIGNAL_GONE_MIN.total_seconds(),
+        need_long_stop_s=STOPPED_LONG.total_seconds(),
+    )
     verdict = decide(row, leg, now, observed_in=observed_in,
                      stopped_for=stopped_for, signal_gap=signal_gap,
                      enrichment_fresh=enrichment_fresh)
     if not verdict:
         return None
     closed_by, closed_at = verdict
+    debuglog.log("closure.decided", subject=getattr(leg, "id", None),
+                 closed_by=closed_by, closed_at=closed_at)
     close(leg, row, closed_by, closed_at, observed_in)
     return closed_by
 
