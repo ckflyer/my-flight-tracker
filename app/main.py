@@ -31,6 +31,17 @@ from .auth import (
     reset_password_with_recovery_code,
 )
 from . import simulator
+from markupsafe import Markup
+
+# One-word codes in the URL rather than the message itself, so a redirect
+# cannot be used to put arbitrary text on an admin's screen.
+FLASHES = {
+    "badpw": "That password was not correct. Nothing was changed.",
+    "promoted": "Done — they are now an admin.",
+    "demoted": "Done — admin removed.",
+    "lastadmin": "Refused: that is the last admin on this install.",
+}
+FLASH_KIND = {"promoted": "good", "demoted": "good"}
 from .ratelimit import check_rate_limit
 from . import debuglog
 from .version import VERSION, API_VERSION, MIN_CLIENT_VERSION, client_is_supported
@@ -956,6 +967,7 @@ async def viewer(request: Request, leg: Optional[str] = None):
         "settings": settings_dict,
         "poll_ms": max(10, settings.poll_seconds) * 1000,
         "is_pilot": pilot is not None,
+        "active_tab": "tracker",
     }
     template = jinja_env.get_template("viewer.html")
     return HTMLResponse(template.render(**ctx))
@@ -996,7 +1008,8 @@ async def viewer_settings_get(request: Request):
     template = jinja_env.get_template("settings.html")
     return HTMLResponse(template.render(
         request=request, s=view_settings, saved=False,
-        is_pilot=False, is_admin=False, post_to="/viewer-settings",
+        is_pilot=False, is_admin=False, active_tab="settings",
+        post_to="/viewer-settings",
     ))
 
 
@@ -1154,6 +1167,7 @@ async def calendar_page(request: Request, month: Optional[str] = None):
         active_month=active,
         prev_month=prev_month,
         next_month=next_month,
+        active_tab="calendar",
         month_choices=[{"value": k,
                         "label": datetime.strptime(k, "%Y-%m").strftime("%B %Y")}
                        for k in reversed(available)],
@@ -1196,9 +1210,11 @@ async def admin_diagnostics_save(request: Request):
     return RedirectResponse(url="/admin/diagnostics", status_code=303)
 
 
-@app.get("/admin/diagnostics", response_class=HTMLResponse)
-async def admin_diagnostics(request: Request):
-    """Why is there no ADS-B? Answers it on one page instead of in the logs.
+def build_diagnostics_html(request: Request) -> str:
+    """Why is there no ADS-B? Answers it in one block instead of in the logs.
+
+    Was a standalone page at /admin/diagnostics through 1.6.0. It is now a
+    SECTION of /admin, so this returns the markup rather than a response.
 
     Every step of the live path is shown separately, because "no tracking"
     has half a dozen possible causes that look identical from the outside:
@@ -1206,10 +1222,6 @@ async def admin_diagnostics(request: Request):
     returning nothing, or the match logic refusing what it returned. Each
     one is reported on its own line with the actual values involved.
     """
-    pilot = require_pilot(request)
-    if isinstance(pilot, RedirectResponse):
-        return pilot
-
     import html as _html
     import time as _time
     from . import airplaneslive as _al
@@ -1380,41 +1392,87 @@ async def admin_diagnostics(request: Request):
                     row("reason refused", verdict.reason, False)
         out.append("</table>")
 
-    page = ("<html><head><title>Diagnostics</title><meta name='viewport' "
-            "content='width=device-width,initial-scale=1'></head>"
-            "<body style='font:14px/1.5 -apple-system,BlinkMacSystemFont,"
-            "system-ui,sans-serif;margin:20px;max-width:760px'>"
-            "<h1>Live tracking diagnostics</h1>"
-            "<p style='color:#5f6368'>Read top to bottom. The first red line "
-            "is the problem.</p>" + "".join(out) +
-            "<p style='margin-top:28px'><a href='/admin'>&larr; back</a></p>"
-            "</body></html>")
-    return HTMLResponse(page)
+    # Hardcoded light-theme greys were fine on a standalone page; embedded
+    # in the themed admin page they were grey-on-black. Swapped for the
+    # palette variables so this section follows the theme like everything
+    # else. Kept as a string substitution rather than rewriting every row()
+    # call, because the generator above is long and entirely mechanical.
+    html = "".join(out)
+    for dead, live in (("#5f6368", "var(--muted)"),
+                       ("#137333", "#22c55e"),
+                       ("#c5221f", "#ef4444"),
+                       ("#e8eaed", "var(--border)")):
+        html = html.replace(dead, live)
+    return html
+
+
+@app.get("/admin/diagnostics")
+async def admin_diagnostics_moved(request: Request):
+    """Merged into /admin in 1.7.0. Kept so old links and bookmarks land."""
+    return RedirectResponse(url="/admin#diagnostics", status_code=301)
 
 
 
-@app.get("/admin/debug", response_class=HTMLResponse)
-async def admin_debug(request: Request, subject: Optional[str] = None,
-                      event: Optional[str] = None, limit: int = 200):
-    """The decision log, rendered for reading on a phone.
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(request: Request, subject: Optional[str] = None,
+                     event: Optional[str] = None, limit: int = 200,
+                     flash: Optional[str] = None):
+    """Running the install: people, test mode, diagnostics, decision log.
 
-    Admin-only. It records what the app DECIDED and why, so a question like
-    "why is this leg still showing taxi-in" is answered by reading rather
-    than by reasoning about code. Off unless PT_DEBUG_LOG=1.
+    ONE PAGE, four stacked sections, deliberately plain. Through 1.6.0
+    these were spread across three places — the people table inside
+    Settings, diagnostics on its own unstyled page, and the decision log
+    reachable only by typing its URL — and /admin itself was the schedule.
+    You come here when something is wrong, and hunting for the right page
+    is the last thing that should stand in the way.
     """
     pilot = require_pilot(request)
     if isinstance(pilot, RedirectResponse):
         return pilot
     if not pilot["is_admin"]:
-        return RedirectResponse("/", status_code=303)
-    events = debuglog.recent(limit=min(int(limit), 1000),
-                             subject=subject, event=event)
-    template = jinja_env.get_template("debug.html")
+        return RedirectResponse(url="/flights", status_code=303)
+
+    settings = load_settings(pilot["id"])
+    sim_scenarios = [{"key": sc.key, "title": sc.title,
+                      "description": sc.description,
+                      "route": f"{sc.origin}–{sc.destination}",
+                      "legs": sc.legs, "block_min": sc.block_min}
+                     for sc in simulator.SCENARIOS]
+    sim_rows = []
+    for r in simulator.active_sim_rows():
+        sc = simulator.SCENARIOS_BY_KEY.get(r["sim_scenario"] or "")
+        sim_rows.append({
+            "id": r["id"],
+            "callsign": f"{r['flight_number']} {r['origin']}→{r['destination']}",
+            "scenario": sc.title if sc else (r["sim_scenario"] or "—"),
+            "phase": r["phase_tag"] or "—", "closed": bool(r["closed"]),
+            "closed_by": r["closed_by"] or "—",
+            "airborne": bool(r["airborne_seen"]), "landed": bool(r["landed_seen"]),
+            "stopped_since": r["stopped_since"],
+        })
+
+    log_events = []
+    if debuglog.ENABLED:
+        log_events = debuglog.recent(limit=min(int(limit), 1000),
+                                     subject=subject, event=event)
+
+    template = jinja_env.get_template("admin.html")
     return HTMLResponse(template.render(
-        request=request, events=events, subject=subject or "",
-        event=event or "", enabled=debuglog.ENABLED,
-        is_admin=True, is_pilot=True,
+        request=request, settings=settings.model_dump(),
+        people=list_all_users(), pilot_id=pilot["id"],
+        sim_rows=sim_rows, sim_scenarios=sim_scenarios,
+        diagnostics_html=Markup(build_diagnostics_html(request)),
+        log_enabled=debuglog.ENABLED, log_events=log_events,
+        log_subject=subject or "", log_event=event or "",
+        flash=FLASHES.get(flash or ""), flash_kind=FLASH_KIND.get(flash or "", "err"),
+        active_tab=None, is_admin=True, is_pilot=True,
     ))
+
+
+@app.get("/admin/debug")
+async def admin_debug_moved(request: Request):
+    """Merged into /admin in 1.7.0."""
+    return RedirectResponse(url="/admin#log", status_code=301)
 
 
 @app.post("/admin/debug/clear")
@@ -1425,11 +1483,18 @@ async def admin_debug_clear(request: Request):
     if not pilot["is_admin"]:
         return RedirectResponse("/", status_code=303)
     debuglog.clear()
-    return RedirectResponse("/admin/debug", status_code=303)
+    return RedirectResponse("/admin#log", status_code=303)
 
 
-@app.get("/admin", response_class=HTMLResponse)
-async def admin(request: Request, month: Optional[str] = None):
+@app.get("/flights", response_class=HTMLResponse)
+async def flights_page(request: Request, month: Optional[str] = None):
+    """One pilot's SCHEDULE. Renamed from /admin in 1.7.0.
+
+    The tab bar had called this page "Flights" since v7.5 while its URL
+    said /admin, and 1.6.0 then stacked the install's administration on
+    top of it. Two scopes on one page under a name that matched neither.
+    Administration is now at /admin, which is what that word means.
+    """
     pilot = require_pilot(request)
     if isinstance(pilot, RedirectResponse):
         return pilot
@@ -1490,36 +1555,7 @@ async def admin(request: Request, month: Optional[str] = None):
     upcoming_rows = build_rows(upcoming_legs)
     past_rows = build_rows(past_legs)
 
-    # Admin-only panels (1.6.0). Everything that administers the INSTALL
-    # now lives here rather than being split between here and Settings.
-    # Settings is where a pilot changes how the app behaves for them;
-    # /admin is where whoever runs the box operates it. Two different jobs
-    # and, on a shared install, two different people.
-    is_admin = bool(pilot["is_admin"])
-    people, sim_rows, sim_scenarios = [], [], []
-    if is_admin:
-        people = list_all_users()
-        sim_scenarios = [{"key": sc.key, "title": sc.title,
-                          "description": sc.description,
-                          "route": f"{sc.origin}–{sc.destination}",
-                          "legs": sc.legs, "block_min": sc.block_min}
-                         for sc in simulator.SCENARIOS]
-        for r in simulator.active_sim_rows():
-            sc = simulator.SCENARIOS_BY_KEY.get(r["sim_scenario"] or "")
-            sim_rows.append({
-                "id": r["id"],
-                "callsign": f"{r['flight_number']} {r['origin']}→{r['destination']}",
-                "scenario": sc.title if sc else (r["sim_scenario"] or "—"),
-                "phase": r["phase_tag"] or "—",
-                "status": r["status_tag"] or "—",
-                "closed": bool(r["closed"]),
-                "closed_by": r["closed_by"] or "—",
-                "airborne": bool(r["airborne_seen"]),
-                "landed": bool(r["landed_seen"]),
-                "stopped_since": r["stopped_since"],
-            })
-
-    template = jinja_env.get_template("admin.html")
+    template = jinja_env.get_template("flights.html")
     return HTMLResponse(template.render(
         request=request, upcoming_rows=upcoming_rows, past_rows=past_rows,
         past_count=len(past_legs),
@@ -1528,13 +1564,18 @@ async def admin(request: Request, month: Optional[str] = None):
         month_options=month_options, active_month=active_month,
         active_month_label=(datetime.strptime(active_month, "%Y-%m").strftime("%B %Y")
                             if active_month else None),
-        is_admin=is_admin, people=people, pilot_id=pilot["id"],
-        sim_rows=sim_rows, sim_scenarios=sim_scenarios,
+        active_tab="flights", is_admin=bool(pilot["is_admin"]), is_pilot=True,
         settings=settings.model_dump(), share_code=pilot["share_code"],
     ))
 
 
-@app.post("/admin/import")
+@app.get("/admin/legacy-schedule")
+async def admin_legacy_schedule(request: Request):
+    """/admin used to be the schedule. Anything bookmarked lands here."""
+    return RedirectResponse(url="/flights", status_code=301)
+
+
+@app.post("/flights/import")
 async def admin_import(request: Request, text: str = Form(...)):
     """Show what this paste would change. Applies NOTHING. (N1, 1.5.0)
 
@@ -1550,7 +1591,7 @@ async def admin_import(request: Request, text: str = Form(...)):
     legs = parse_schedule_text(text)
     if not legs:
         # Nothing valid parsed — nothing to review, just go back.
-        return RedirectResponse(url="/admin?err=parse", status_code=303)
+        return RedirectResponse(url="/flights?err=parse", status_code=303)
     apply_gap_trip_starts(legs)
     settings = load_settings(pilot["id"])
 
@@ -1568,7 +1609,7 @@ async def admin_import(request: Request, text: str = Form(...)):
     ))
 
 
-@app.post("/admin/import/confirm")
+@app.post("/flights/import/confirm")
 async def admin_import_confirm(request: Request):
     pilot = require_pilot(request)
     if isinstance(pilot, RedirectResponse):
@@ -1620,53 +1661,16 @@ async def admin_import_confirm(request: Request):
         # ones, which is the exact class of silent history edit N1 exists
         # to prevent.
         remove_legs(pilot["id"], [r for r in removals if r in offered])
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url="/flights", status_code=303)
 
 
-@app.post("/admin/add")
-async def admin_add(request: Request,
-                    leg_date: str = Form(...), flight: str = Form(...),
-                    origin: str = Form(...), dep: str = Form(...),
-                    destination: str = Form(...), arr: str = Form(...),
-                    deadhead: str = Form("0")):
-    """Add one leg by hand. (N1, 1.5.0)
-
-    The case this exists for is a diversion that then continued to the
-    original destination: a leg that was flown, is not in any bid line,
-    and never will be. Without a manual add there is no way to record it,
-    and the logbook would be permanently short a leg. Same path as an
-    import — merge, never replace.
-    """
-    pilot = require_pilot(request)
-    if isinstance(pilot, RedirectResponse):
-        return pilot
-    try:
-        d = date.fromisoformat(leg_date.strip())
-        num = flight.strip().lstrip("0") or flight.strip()
-        o, dst = origin.strip().upper(), destination.strip().upper()
-        dep_t, arr_t = dtime.fromisoformat(dep), dtime.fromisoformat(arr)
-        if not num or len(o) != 3 or len(dst) != 3 or o == dst:
-            raise ValueError("bad leg")
-    except Exception:
-        return RedirectResponse(url="/admin?err=add", status_code=303)
-
-    is_dh = deadhead == "1"
-    leg = FlightLeg(id=f"{d.isoformat()}-{num}-{o}-{dst}", date=d,
-                    flight_number=num, origin=o, destination=dst,
-                    dep_time_local=dep_t, arr_time_local=arr_t,
-                    is_deadhead=is_dh, trip_start=False)
-    enrich_leg(leg)
-    merge_schedule(pilot["id"], [leg])
-    return RedirectResponse(url="/admin?added=1", status_code=303)
-
-
-@app.post("/admin/delete/{leg_id}")
+@app.post("/flights/delete/{leg_id}")
 async def admin_delete(request: Request, leg_id: str):
     pilot = require_pilot(request)
     if isinstance(pilot, RedirectResponse):
         return pilot
     delete_leg(pilot["id"], leg_id)
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url="/flights", status_code=303)
 
 
 # ---------------------------------------------------------------------------
@@ -1680,7 +1684,7 @@ async def admin_test_start(request: Request, scenario: str = Form(...)):
     if isinstance(pilot, RedirectResponse):
         return pilot
     if not pilot["is_admin"]:
-        return RedirectResponse(url="/admin", status_code=303)
+        return RedirectResponse(url="/flights", status_code=303)
     simulator.start(pilot["id"], scenario)
     return RedirectResponse(url="/admin#test-mode", status_code=303)
 
@@ -1691,7 +1695,7 @@ async def admin_test_stop(request: Request):
     if isinstance(pilot, RedirectResponse):
         return pilot
     if not pilot["is_admin"]:
-        return RedirectResponse(url="/admin", status_code=303)
+        return RedirectResponse(url="/flights", status_code=303)
     simulator.stop(pilot["id"])
     return RedirectResponse(url="/admin#test-mode", status_code=303)
 
@@ -1708,7 +1712,7 @@ async def admin_test_age(request: Request, leg_id: str = Form(...),
     if isinstance(pilot, RedirectResponse):
         return pilot
     if not pilot["is_admin"]:
-        return RedirectResponse(url="/admin", status_code=303)
+        return RedirectResponse(url="/flights", status_code=303)
     # Bounded, and only ever backwards. Ageing FORWARD would put stored
     # events in the future, which nothing downstream is written to expect.
     simulator.age(leg_id, max(1, min(int(minutes), 720)))
@@ -1716,7 +1720,8 @@ async def admin_test_age(request: Request, leg_id: str = Form(...),
 
 
 @app.post("/admin/users/promote/{user_id}")
-async def admin_promote_user(request: Request, user_id: int):
+async def admin_promote_user(request: Request, user_id: int,
+                             password: str = Form(...)):
     """Make another account an admin. (1.6.0)
 
     Until now the ONLY admin was whoever registered first — `create_user`
@@ -1731,26 +1736,38 @@ async def admin_promote_user(request: Request, user_id: int):
     if isinstance(pilot, RedirectResponse):
         return pilot
     if not pilot["is_admin"]:
-        return RedirectResponse(url="/admin", status_code=303)
+        return RedirectResponse(url="/flights", status_code=303)
+    # THE PASSWORD GATE (1.7.0). A single tap was too little friction for
+    # an irreversible grant: an admin can then see and delete every account
+    # on the install, including the one that promoted them. Re-entering the
+    # password also means an unlocked phone left on a crew room table is
+    # not enough on its own.
+    if not verify_password(password, pilot["password_hash"]):
+        return RedirectResponse(url="/admin?flash=badpw#people", status_code=303)
     set_admin(user_id, True)
-    return RedirectResponse(url="/admin#people", status_code=303)
+    return RedirectResponse(url="/admin?flash=promoted#people", status_code=303)
 
 
 @app.post("/admin/users/demote/{user_id}")
-async def admin_demote_user(request: Request, user_id: int):
+async def admin_demote_user(request: Request, user_id: int,
+                            password: str = Form(...)):
     pilot = require_pilot(request)
     if isinstance(pilot, RedirectResponse):
         return pilot
     if not pilot["is_admin"]:
-        return RedirectResponse(url="/admin", status_code=303)
+        return RedirectResponse(url="/flights", status_code=303)
+    if not verify_password(password, pilot["password_hash"]):
+        return RedirectResponse(url="/admin?flash=badpw#people", status_code=303)
     if user_id == pilot["id"]:
         # An admin may not demote themselves. Combined with the last-admin
         # guard in set_admin, this makes it impossible to end up with a
         # database that has data in it and nobody able to administer it —
         # a state with no recovery path short of editing SQLite by hand.
         return RedirectResponse(url="/admin#people", status_code=303)
-    set_admin(user_id, False)
-    return RedirectResponse(url="/admin#people", status_code=303)
+    ok = set_admin(user_id, False)
+    return RedirectResponse(
+        url=f"/admin?flash={'demoted' if ok else 'lastadmin'}#people",
+        status_code=303)
 
 
 @app.post("/admin/users/delete/{user_id}")
@@ -1759,20 +1776,20 @@ async def admin_delete_user(request: Request, user_id: int):
     if isinstance(pilot, RedirectResponse):
         return pilot
     if not pilot["is_admin"]:
-        return RedirectResponse(url="/admin", status_code=303)
+        return RedirectResponse(url="/flights", status_code=303)
     if user_id == pilot["id"]:
         return RedirectResponse(url="/admin#people", status_code=303)
     delete_user(user_id)
     return RedirectResponse(url="/admin#people", status_code=303)
 
 
-@app.post("/admin/regenerate-code")
+@app.post("/flights/regenerate-code")
 async def admin_regenerate_code(request: Request):
     pilot = require_pilot(request)
     if isinstance(pilot, RedirectResponse):
         return pilot
     regenerate_share_code(pilot["id"])
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url="/flights", status_code=303)
 
 
 # ---------------------------------------------------------------------------
@@ -1816,7 +1833,7 @@ async def settings_page(request: Request):
     ctx = {"request": request, "s": s, "saved": False, "is_admin": bool(pilot["is_admin"]),
            "is_pilot": True, "post_to": "/settings", "icon_styles": ICON_STYLES,
            "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"]),
-           "poller": poller_status(s.time_format)}
+           "poller": poller_status(s.time_format), "active_tab": "settings"}
     # NO all_users here any more (1.6.0). Administering the install moved
     # to /admin in one piece; leaving a second copy of the people table
     # behind would mean two places to keep in step and two places to check
@@ -1886,7 +1903,7 @@ async def settings_save(
     ctx = {"request": request, "s": s, "saved": True, "is_admin": bool(pilot["is_admin"]),
            "is_pilot": True, "post_to": "/settings", "icon_styles": ICON_STYLES,
            "pilot_id": pilot["id"], "aeroapi_stats": budget_state(pilot["id"]),
-           "poller": poller_status(s.time_format)}
+           "poller": poller_status(s.time_format), "active_tab": "settings"}
     # NO all_users here any more (1.6.0). Administering the install moved
     # to /admin in one piece; leaving a second copy of the people table
     # behind would mean two places to keep in step and two places to check
