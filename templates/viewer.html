@@ -148,9 +148,23 @@
       transition: width 0.6s ease;
     }
     .route-plane {
-      position: absolute; top: 0; left: 0; margin-left: -11px;
-      color: var(--accent); line-height: 0;
+      position: absolute; top: 0; left: 0; margin-left: -10px;
+      line-height: 0;
       transition: left 0.6s ease;
+    }
+    /* The plane was `color: var(--accent)` sitting on a `.route-fill` that
+       is ALSO var(--accent) — the same colour as the bar it rides on, so it
+       vanished into the flown portion and only appeared once it had moved
+       past the fill. It needs its own paint that works against BOTH halves
+       of the track at once: a filled body in the card colour with an accent
+       outline reads against the fill on its left and the empty track on its
+       right, in either theme. */
+    .route-plane svg path {
+      fill: var(--card);
+      stroke: var(--accent);
+      stroke-width: 4;
+      stroke-linejoin: round;
+      paint-order: stroke fill;
     }
     .route-plane svg { display: block; }
     .route-stats {
@@ -735,7 +749,7 @@
              style="{{ '' if (current.progress_pct is not none or current.phase_tag == 'Arrived') else 'display:none' }}">
           <div class="route-track"><div class="route-fill" id="progress-fill-el" style="width: {{ fill_pct }}%"></div></div>
           <div class="route-plane" id="route-plane-el"
-               style="left: {{ fill_pct }}%;{{ '' if current.progress_pct is not none else ' display:none' }}"><svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true" style="transform: rotate(90deg);"><path d="M12 2c.9 0 1.6 1.3 1.6 2.9v4.4l7.4 4.3v2l-7.4-2.3v4.6l2.4 1.8v1.7L12 20.3l-4 1.1v-1.7l2.4-1.8v-4.6L3 15.6v-2l7.4-4.3V4.9C10.4 3.3 11.1 2 12 2z"/></svg></div>
+               style="left: {{ fill_pct }}%;{{ '' if current.progress_pct is not none else ' display:none' }}"><svg viewBox="0 0 64 64" width="20" height="20" aria-hidden="true" style="transform: rotate(90deg);"><path d="M32 4c2.6 0 4.4 3.4 4.7 8.6l.5 7.8 23 17.4c.5.4.7 1 .7 1.7v3.3L37.4 36.4l.9 11.9 6.6 5.4c.5.4.6 1 .6 1.6v2L32 53.6l-13.5 3.7v-2c0-.6.1-1.2.6-1.6l6.6-5.4.9-11.9L3.1 42.8v-3.3c0-.7.2-1.3.7-1.7l23-17.4.5-7.8C27.6 7.4 29.4 4 32 4z"/></svg></div>
         </div>
         <div class="route-stats" id="progress-label-el">
           {%- if current.progress_pct is not none %}
@@ -1781,8 +1795,15 @@
                              html: '<svg width="14" height="14"><circle cx="7" cy="7" r="5" fill="#fff" stroke="#0f172a" stroke-width="1.5"/></svg>' });
         }
         const vb = st.vb;
-        const body = st.body.replace(/<(path|rect)/g,
-          '<$1 fill="#ffffff" stroke="#0f172a" stroke-width="1.4" stroke-linejoin="round"');
+        // ONE path, so ONE outline — see make_icons.py. When this was three
+        // overlapping shapes each got its own dark outline and you saw them
+        // crossing through the middle of the aeroplane; at 40px on a busy
+        // map tile it read as a smudge rather than a plane.
+        // paint-order puts the stroke UNDER the fill, so the outline reads
+        // as a halo round the silhouette instead of eating into it.
+        const body = st.body.replace(/<path/g,
+          '<path fill="#ffffff" stroke="#0f172a" stroke-width="3" '
+          + 'stroke-linejoin="round" paint-order="stroke"');
         const svg = `
           <svg width="40" height="40" viewBox="0 0 ${vb} ${vb}" xmlns="http://www.w3.org/2000/svg"
                style="transform: rotate(${track}deg); transform-origin: ${vb / 2}px ${vb / 2}px; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.55));">
@@ -2406,12 +2427,7 @@
       setInterval(refreshLiveData, {{ poll_ms }});
     })();
   </script>
-  <nav class="tabbar" aria-label="Main">
-    <a href="/" class="active"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2c.9 0 1.6 1.3 1.6 2.9v4.4l7.4 4.3v2l-7.4-2.3v4.6l2.4 1.8v1.7L12 20.3l-4 1.1v-1.7l2.4-1.8v-4.6L3 15.6v-2l7.4-4.3V4.9C10.4 3.3 11.1 2 12 2z"/></svg><span>Tracker</span></a>
-    <a href="/calendar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16" rx="2.5"/><line x1="3" y1="9.5" x2="21" y2="9.5"/><line x1="8" y1="2.5" x2="8" y2="6"/><line x1="16" y1="2.5" x2="16" y2="6"/></svg><span>Calendar</span></a>
-    {% if is_pilot %}<a href="/admin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="9" y1="6.5" x2="20" y2="6.5"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="17.5" x2="20" y2="17.5"/><circle cx="4.5" cy="6.5" r="1.4" fill="currentColor" stroke="none"/><circle cx="4.5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="4.5" cy="17.5" r="1.4" fill="currentColor" stroke="none"/></svg><span>Flights</span></a>{% endif %}
-    {% if is_pilot %}<a href="/settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 14.5a1.6 1.6 0 0 0 .32 1.77l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.6 1.6 0 0 0-1.77-.32 1.6 1.6 0 0 0-.97 1.47V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9.1 19.4a1.6 1.6 0 0 0-1.77.32l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.6 1.6 0 0 0 .32-1.77 1.6 1.6 0 0 0-1.47-.97H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.47-1.05 1.6 1.6 0 0 0-.32-1.77l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.6 1.6 0 0 0 1.77.32H9.1A1.6 1.6 0 0 0 10.15 3.1V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 .97 1.47 1.6 1.6 0 0 0 1.77-.32l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.6 1.6 0 0 0-.32 1.77V9.1a1.6 1.6 0 0 0 1.47.97H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5.43z"/></svg><span>Settings</span></a>{% else %}<a href="/viewer-settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 14.5a1.6 1.6 0 0 0 .32 1.77l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.6 1.6 0 0 0-1.77-.32 1.6 1.6 0 0 0-.97 1.47V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9.1 19.4a1.6 1.6 0 0 0-1.77.32l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.6 1.6 0 0 0 .32-1.77 1.6 1.6 0 0 0-1.47-.97H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.47-1.05 1.6 1.6 0 0 0-.32-1.77l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.6 1.6 0 0 0 1.77.32H9.1A1.6 1.6 0 0 0 10.15 3.1V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 .97 1.47 1.6 1.6 0 0 0 1.77-.32l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.6 1.6 0 0 0-.32 1.77V9.1a1.6 1.6 0 0 0 1.47.97H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5.43z"/></svg><span>Settings</span></a>{% endif %}
-  </nav>
+  {% include "partials/tabbar.html" %}
 {% include "partials/sw_register.html" %}
 </body>
 </html>

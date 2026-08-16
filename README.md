@@ -45,7 +45,7 @@ seriously.
 
 ## STATE
 
-**v1.6.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+**v1.7.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
 owner plus several FOs, who fly the same legs — hence shared flight rows
 (v5.1, retained).
 
@@ -56,9 +56,17 @@ if you are about to change the shared stylesheet, the tab bar, or the light
 theme, read the code, because this file cannot tell you why they are the way
 they are.
 
-**Current work: see `## NEXT UP`.** N1 is DONE (1.5.0). N2 is next.
+**Current work: see `## NEXT UP`.** N1 is DONE (1.5.0). N2 (logbook) is
+next and is now unblocked: flights accumulate, the roster is month-filtered
+and chronologically ordered, `in_actual_api` is chased rather than lost, and
+simulated legs are flagged so the logbook has something to exclude.
 
-Tests: **889**, eleven suites, all passing.
+Not on any list, done along the way: test mode, a second admin, and the
+page split (1.6.0–1.7.0). All three came out of the same problem — the app
+could not be OPERATED without SSH, and bugs could not be reproduced without
+flying a trip.
+
+Tests: **948**, eleven suites, all passing.
 
 | Suite | N | Covers |
 |---|---|---|
@@ -67,12 +75,12 @@ Tests: **889**, eleven suites, all passing.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, placeholder filter |
-| `tests_ui_fixes.py` | 355 | layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
-| `tests_app_shell.py` | 158 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
+| `tests_ui_fixes.py` | 376 | layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
+| `tests_app_shell.py` | 165 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
 | `tests_timezones.py` | 68 | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
 | `tests_closeout_sweep.py` | 42 | the abandonment cliff, the on-ground handover, the late gate-in chase and its cap |
 | `tests_import_merge.py` | 39 | additive import, month scoping, future-only reconciliation, the diff, manual add |
-| `tests_test_mode.py` | 63 | simulator isolation (no spend, no ADS-B, no logbook), each scenario, admin promotion, the last-admin guard |
+| `tests_test_mode.py` | 94 | simulator isolation (no spend, no ADS-B, no logbook), each scenario, admin promotion + password gate, the one-aeroplane rule |
 
 ## OPEN
 
@@ -234,6 +242,11 @@ five years. A flat list dies well before that. The tracker must stay small
 FOREVER — its whole job is a family member opening it and instantly seeing
 where the pilot is. It shows current trip and next trip, and never becomes
 a history browser.
+
+**Blocked on nothing as of 1.7.0.** N1 gave it accumulation; the closeout
+sweep and gate-in chase gave it actual times worth exporting; `simulated`
+gives it the one flag it must filter on. See invariant 20 — a rehearsal in
+a logbook would be a fiction in a legal record.
 
 **Three views, ONE database.** (An earlier version of this discussion said
 "separate databases" — that was a misreading and would break the shared
@@ -784,6 +797,16 @@ Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
     admin cannot demote themselves. An install with flight data and no
     administrator has no recovery path short of editing SQLite on the NAS
     by hand. (1.6.0)
+22. **One aeroplane, from one source.** `make_icons.py` generates the PNGs
+    AND `static/planes.js`; the tab bar reads
+    `partials/plane_glyph.html`; the progress bar uses the same path. Every
+    style is a SINGLE closed path, because the map strokes an outline round
+    every shape it is given. Adding a second shape "just for the map" is
+    what produced three different aeroplanes. (1.7.0)
+23. **Nothing rides on a background of its own colour.** The progress-bar
+    plane was `var(--accent)` on a `var(--accent)` fill and was invisible
+    until it moved past it. Anything drawn ON a themed surface needs paint
+    that reads against every state that surface has. (1.7.0)
 
 ## MODULE MAP
 
@@ -979,6 +1002,75 @@ properly.
 cannot own the card indefinitely. A candidate that loses is appended to
 `past`, not dropped — it is behind the leg now flying.
 
+## PAGES
+
+| URL | What it is | Who |
+|---|---|---|
+| `/` | the tracker card and map | pilot + viewers |
+| `/calendar` | one month at a time | pilot + viewers |
+| `/flights` | ONE PILOT'S SCHEDULE — paste, leg list, month filter | pilot |
+| `/admin` | THE INSTALL — people, test mode, diagnostics, decision log | admins |
+| `/settings` | how the app behaves for you | pilot + viewers |
+
+**The `/flights` and `/admin` split is 1.7.0 and it was a real confusion,
+not a tidy-up.** The tab bar had labelled the schedule page "Flights" since
+v7.5 while its URL said `/admin`; 1.6.0 then piled the install's
+administration onto that same page, so somebody's trip list and the control
+that deletes every account were in one scroll under a name that matched
+neither. Now the word means what it says.
+
+Redirects are kept for every moved URL — `/admin/diagnostics` →
+`/admin#diagnostics`, `/admin/debug` → `/admin#log`,
+`/settings/users/delete/{id}` → `/admin#people`. A phone with a page still
+open from before the update posts to the old path, and a 404 on a Delete
+button is the worst possible way to learn a route moved.
+
+## ONE AEROPLANE
+
+**There were three.** The app icon cut one silhouette, the map marker cut a
+second (the same shape with its engines deleted), and the tab bar and
+progress bar had a third hardcoded inline that the icon system never
+touched. Changing the icon style in Settings moved two of the four.
+
+Now: `make_icons.py` is the single source. It generates the PNGs *and*
+`static/planes.js`, which the map reads; `templates/partials/plane_glyph.html`
+carries the same path for the tab bar; the progress bar uses it inline. A
+path edit in `make_icons.py` changes all four or none.
+
+**Every style is a SINGLE CLOSED PATH, and that is load-bearing.** "Modern"
+used to be three overlapping shapes plus two nacelle rectangles. Filled
+flat on a tile that is fine. On the map it is not: the marker strokes a
+dark outline round *every* shape, so outlines ran through the middle of the
+aeroplane and at 40px over a busy tile the whole thing read as a smudge.
+One closed path strokes once, on its own edge. `paint-order="stroke"` puts
+that outline *under* the fill so it reads as a halo rather than eating into
+the silhouette.
+
+**The progress-bar plane was invisible.** It was `color: var(--accent)`
+riding on a `.route-fill` that is also `var(--accent)` — the same colour as
+the bar it sits on, so it only appeared once it had moved past the fill. It
+now has its own paint: card-coloured body, accent outline, which reads
+against the flown half on its left and the empty track on its right, in
+either theme.
+
+**The tile has artwork now.** Night-sky gradient, the earth's limb across
+the bottom, a great-circle arc, three stars, and the plane banked along the
+arc at its apex rather than sitting nose-up in the middle of a square.
+
+**The arc is split, and that is the point:** solid behind the plane, dashed
+ahead of it. Same flown/remaining reading as the route strip on the tracker
+card, so the icon says what the app *does* rather than just being a plane
+in a box.
+
+Everything in `_backdrop()` is a fraction of the icon size, so the 16px
+favicon is the same picture as the 512px tile and not the same picture with
+a giant arc across it. Below 64px the fine detail is dropped rather than
+shrunk — a 3-unit dash pattern and a 1-unit star are mush at favicon size,
+and mush reads as a smeared icon, not as detail. Maskable icons skip the
+artwork entirely: Android crops them to whatever shape the launcher wants
+and only the inner 80% is guaranteed, so an arc drawn to the edges would be
+sliced at an arbitrary radius.
+
 ## TEST MODE
 
 **Admin page → Admin · Test mode.** Rehearse a flight without waiting for a
@@ -1052,11 +1144,8 @@ Settings is where a pilot changes how the app behaves for *them*; /admin is
 where whoever runs the box runs it. On a shared install those are two
 different people, and only one of them sees the admin panels.
 
-Moved there from Settings: the registered-pilots table, the live-tracking
-diagnostics link, and the decision log. The old
-`/settings/users/delete/{id}` route is kept as a 307 redirect, because a
-phone with Settings still open from before the update would post to it, and
-a 404 on a Delete button is the worst possible way to learn a route moved.
+See PAGES above for the full split and the redirects that keep old links
+working.
 
 ### Adding a second admin
 
@@ -1067,7 +1156,13 @@ administration of the install permanently, with the data still sitting
 there.
 
 1. Send them this server's `/register` page. They create their own account.
-2. Admin page → **Admin · Registered pilots** → **Make admin**.
+2. `/admin` → **People** → **Make admin…** → **re-enter your own password**.
+
+The password gate is 1.7.0. A single tap was too little friction for an
+irreversible grant — the person you promote can then see and delete every
+account on the install, including the one that promoted them. Re-entering
+the password also means an unlocked phone left on a crew room table is not
+enough on its own. Demotion is gated the same way.
 
 **The last admin cannot be demoted or deleted**, including by themselves.
 Removing the final admin leaves a database with real flight data that
@@ -1424,13 +1519,13 @@ python tests_poller_end_to_end.py   #  47
 python tests_past_leg_detail.py     #  19
 python tests_budget_limit.py        #  17
 python tests_carrier_cap.py         #  13
-python tests_ui_fixes.py            # 355
-python tests_app_shell.py           # 158
+python tests_ui_fixes.py            # 376
+python tests_app_shell.py           # 165
 python tests_timezones.py           #  68
 python tests_closeout_sweep.py      #  42
 python tests_import_merge.py        #  39
-python tests_test_mode.py           #  63
-```                                  # 889
+python tests_test_mode.py           #  94
+```                                  # 948
 
 Each uses its own scratch DB via `PT_DB_FILE`. Read
 `tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
@@ -1460,6 +1555,41 @@ invariant 1.
   exactly this reason.
 
 ## VERSION HISTORY
+
+### 1.7.0 — saying what things are
+
+Mostly correcting things 1.6.0 got wrong, which is worth recording as such.
+
+**`/admin` is the install; `/flights` is your schedule.** The tab bar had
+called the schedule page "Flights" since v7.5 while its URL said `/admin`,
+and 1.6.0 then stacked the install's administration on top of it. Two
+scopes, one page, a name matching neither. The schedule moved to
+`/flights`; `/admin` is now people, test mode, diagnostics and the decision
+log on one plain page. Diagnostics and the log were separate pages (one of
+them unstyled and light-only, one reachable only by typing its URL) and are
+now sections. Every moved URL keeps a redirect.
+
+**Promotion needs your password.** A one-tap Make admin button was too
+little friction for a grant that cannot be undone by the person who made
+it.
+
+**One aeroplane instead of three.** See ONE AEROPLANE. The map marker
+looked bad for a specific reason — three overlapping shapes, each stroked
+separately — and the progress-bar plane was painted the same colour as the
+bar it rode on. New tile artwork: night sky, a great-circle arc split
+solid-behind / dashed-ahead, and the plane banked along it.
+
+**The hand-add flight form is gone.** It was never asked for: it was
+inferred from a line in N1's own spec about a diversion that continued to
+the original destination. Inventing UI from an inference is how a page
+fills with things nobody wanted, and the parser plus a re-paste already
+cover the real case.
+
+**Timezone superscript down to 8px** from 9px.
+
+Tests: 889 → 948. The tab bar is now one shared partial rather than four
+copies, and its test asserts the partial and the routes that drive it
+instead of scanning each template for markup.
 
 ### 1.6.0 — test mode, and a second admin
 

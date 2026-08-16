@@ -38,6 +38,22 @@ UTC = timezone.utc
 PASS, FAIL = [], []
 
 
+def _style_bodies(icons_src):
+    """Each style's `icon` string out of make_icons.py, crudely but reliably.
+
+    Parsed rather than imported because make_icons.py WRITES FILES at import
+    time — running it from a test suite would rewrite static/ as a side
+    effect of asserting something about it.
+    """
+    out, rest = [], icons_src
+    while '"icon": (' in rest or '"icon": \'' in rest:
+        i = rest.find('"icon":')
+        j = rest.find('},', i)
+        out.append(rest[i:j])
+        rest = rest[j:]
+    return out
+
+
 def check(name, cond, detail=""):
     (PASS if cond else FAIL).append(name)
     print(("  ok   " if cond else "  FAIL ") + name +
@@ -276,18 +292,32 @@ print("\n-- everything that runs the install is on one page --")
 here = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(here, "templates", "admin.html"), encoding="utf-8") as fh:
     ah = fh.read()
+with open(os.path.join(here, "templates", "flights.html"), encoding="utf-8") as fh:
+    fh_src = fh.read()
 with open(os.path.join(here, "templates", "settings.html"), encoding="utf-8") as fh:
     sh = fh.read()
 with open(os.path.join(here, "app", "main.py"), encoding="utf-8") as fh:
     src = fh.read()
 
-check("the people table is on /admin", "people-table" in ah)
+check("the people table is on /admin", 'id="people"' in ah)
 check("...with a Make admin control", "/admin/users/promote/" in ah)
-check("...and it is gone from Settings", "people-table" not in sh)
+check("...and it is gone from Settings", "/settings/users/delete/" not in sh)
 check("Settings points at /admin instead", 'href="/admin"' in sh)
 check("test mode is on /admin", "/admin/test/start" in ah)
-check("diagnostics and the decision log are linked from /admin",
-      "/admin/diagnostics" in ah and "/admin/debug" in ah)
+check("diagnostics are a SECTION of /admin, not a separate page",
+      'id="diagnostics"' in ah and "diagnostics_html" in ah)
+check("...and so is the decision log", 'id="log"' in ah and "log_events" in ah)
+check("the old diagnostics URL still lands somewhere useful",
+      'RedirectResponse(url="/admin#diagnostics"' in src)
+check("...as does the old decision-log URL",
+      'RedirectResponse(url="/admin#log"' in src)
+
+# The schedule page must be free of all of it.
+check("none of this is on the Flights page",
+      "people-table" not in fh_src and "/admin/test/" not in fh_src)
+check("the Flights page is at /flights now", '@app.get("/flights"' in src)
+check("...and the old /admin schedule URL redirects rather than 404s",
+      'RedirectResponse(url="/flights", status_code=301)' in src)
 check("the old Settings delete route still redirects rather than 404ing",
       'return RedirectResponse(url="/admin#people", status_code=307)' in src)
 check("every admin route checks is_admin",
@@ -295,9 +325,92 @@ check("every admin route checks is_admin",
       str(src.count('if not pilot["is_admin"]:')))
 check("an admin cannot demote themselves",
       'if user_id == pilot["id"]:' in src)
-check("admin panels render only for admins", "{% if is_admin %}" in ah)
+check("the whole page is admin-gated at the route",
+      'if not pilot["is_admin"]:\n        return RedirectResponse(url="/flights"' in src)
 check("ageing is bounded and only ever backwards",
       "max(1, min(int(minutes), 720))" in src)
+
+
+# ---------------------------------------------------------------------------
+print("\n-- promotion is not a single tap --")
+
+from app.auth import verify_password                      # noqa: E402
+
+check("promotion requires a password field", "password: str = Form(...)" in src)
+check("...checked against the PROMOTER's own hash",
+      'verify_password(password, pilot["password_hash"])' in src)
+check("...and demotion is gated the same way",
+      src.count('verify_password(password, pilot["password_hash"])') >= 2)
+check("a wrong password changes nothing and says so",
+      'url="/admin?flash=badpw#people"' in src)
+check("the confirm panel is hidden until asked for", "confirm-row" in ah)
+check("...and states what an admin can do before you type anything",
+      "delete every account" in ah)
+check("the flash message is a CODE in the URL, never free text",
+      "FLASHES = {" in src and "FLASHES.get(flash" in src)
+
+
+print("\n-- one aeroplane, everywhere --")
+
+with open(os.path.join(here, "templates", "partials", "plane_glyph.html"),
+          encoding="utf-8") as fh:
+    glyph = fh.read()
+with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+    viewer = fh.read()
+with open(os.path.join(here, "make_icons.py"), encoding="utf-8") as fh:
+    icons = fh.read()
+
+# The signature of the shared silhouette. If any surface is drawing a
+# different aeroplane, this substring will be missing from it.
+NOSE = "M32 4c2.6 0 4.4 3.4 4.7 8.6l.5 7.8"
+check("the app icon uses the shared silhouette", NOSE in icons)
+check("...so does the tab bar glyph", NOSE in glyph)
+check("...and so does the progress bar", NOSE in viewer)
+check("the map marker reads its shape from the generated file",
+      "window.PLANE_STYLES" in viewer)
+check("there is no second 'marker' shape any more",
+      's["marker"] = s["icon"]' in icons)
+check("every style is a SINGLE path, so the map outline is one clean edge",
+      all(v.count("<path") == 1 for v in _style_bodies(icons)),
+      str([v.count("<path") for v in _style_bodies(icons)]))
+check("the marker strokes only <path>, not <rect>",
+      "st.body.replace(/<path/g" in viewer)
+check("...with the outline painted under the fill, not over it",
+      'paint-order="stroke"' in viewer)
+
+# The progress-bar plane was `color: var(--accent)` on a fill that is ALSO
+# var(--accent) — invisible until it moved past the fill.
+with open(os.path.join(here, "static", "app.css"), encoding="utf-8") as fh:
+    css = fh.read()
+check("the progress plane no longer inherits the bar's own colour",
+      "color: var(--accent); line-height: 0;" not in viewer)
+check("...it has its own paint that reads against both halves of the track",
+      "stroke: var(--accent);" in viewer and "fill: var(--card);" in viewer)
+
+# The tile artwork. Each of these guards a size where it could go wrong.
+check("the arc is split: solid behind the plane, dashed ahead",
+      'stroke-dasharray' in icons and 'stroke="#7fb0ea"' in icons)
+check("...and the fine detail is dropped at favicon size, not shrunk to mush",
+      "fine = px >= 64" in icons)
+# Asserted on the OUTPUT, not on where a substring sits in the source —
+# the first version of this test checked that "_backdrop" appeared before
+# "if maskable:" in the file, which is a fact about formatting rather than
+# about what gets drawn, and it failed while the code was correct.
+_ns = {"__file__": os.path.join(here, "make_icons.py")}
+exec(compile(icons.split("written = []")[0], "make_icons.py", "exec"), _ns)
+check("maskable icons carry NO artwork, since Android crops them",
+      "stroke-dasharray" not in _ns["icon_svg"]("modern", 512, maskable=True))
+check("...while the ordinary tile does have it",
+      "stroke-dasharray" in _ns["icon_svg"]("modern", 512))
+check("the backdrop scales with the icon rather than being fixed",
+      icons.count("u = px / 64.0") >= 1 and "{32*u:" in icons)
+check("the plane sits on the arc apex, not centred in the square",
+      "translate({32*u:.2f} {28*u:.2f}) rotate(55)" in icons)
+
+check("the timezone superscript is one step smaller",
+      "font-size: 0.5rem;" in css)
+check("...and not smaller than iOS will reliably render",
+      "0.4375rem" not in css and "0.375rem" not in css)
 
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")

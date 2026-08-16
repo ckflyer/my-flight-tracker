@@ -93,13 +93,21 @@
    affect layout at all.
 --------------------------------------------------------------------- */
 .tz {
-  font-size: 0.5625rem;
+  /* 1.7.0: 0.5625rem -> 0.5rem (9px -> 8px). Owner's call, and it holds
+     up: at 700 weight these are two or three upper-case letters, which
+     stay legible a step smaller while reading more clearly as an
+     annotation on the time rather than a second value competing with it.
+     The lift is nudged with it so the cap height still sits where it did
+     against the digits. Do not go below 0.5rem — iOS starts declining to
+     render below 8px in some conditions, and a zone that silently
+     disappears is worse than one that is small. */
+  font-size: 0.5rem;
   font-weight: 700;
   color: var(--muted);
   letter-spacing: 0.02em;
   white-space: nowrap;
   display: inline-block;
-  transform: translateY(-0.42em);
+  transform: translateY(-0.46em);
   margin-left: 0.12rem;
 }
 /* The card lays these out inline rather than in a flex row, so they need

@@ -231,7 +231,10 @@ check("main.py never calls replace_schedule",
 check("the import confirm route merges", "merge_schedule(pilot" in src)
 check("...and removes only what the page offered",
       'form.getlist("removable_id")' in src)
-check("a manual add route exists", '"/admin/add"' in src)
+# 1.7.0: the hand-add route is GONE. It was inferred from N1's spec line
+# about a diversion that continued on, not asked for; inventing UI from an
+# inference is how a page fills up with things nobody wanted.
+check("there is no hand-add route", '"/admin/add"' not in src)
 
 check("parse still drops FFDO placeholder lines",
       parse_schedule_text("07/05/2026 0 DFW 1946 DFW 1946") == [])

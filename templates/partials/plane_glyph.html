@@ -1,0 +1,13 @@
+{#- THE aeroplane. One shape, everywhere.
+
+    Before 1.7.0 there were three: the app icon cut one silhouette, the map
+    marker cut a second (the same shape with its engines deleted), and the
+    tab bar and progress bar had a third hardcoded inline that the icon
+    system never touched at all. Changing the icon style in Settings moved
+    two of the four.
+
+    The path itself is generated into static/planes.js by make_icons.py and
+    is the SAME `d` used for the home-screen icon and the map marker. This
+    partial only exists so a template can drop it in without repeating it.
+    Nose-up in a 64 viewBox; rotate at the call site if you need heading. -#}
+<svg viewBox="0 0 64 64" fill="currentColor" aria-hidden="true"><path d="M32 4c2.6 0 4.4 3.4 4.7 8.6l.5 7.8 23 17.4c.5.4.7 1 .7 1.7v3.3L37.4 36.4l.9 11.9 6.6 5.4c.5.4.6 1 .6 1.6v2L32 53.6l-13.5 3.7v-2c0-.6.1-1.2.6-1.6l6.6-5.4.9-11.9L3.1 42.8v-3.3c0-.7.2-1.3.7-1.7l23-17.4.5-7.8C27.6 7.4 29.4 4 32 4z"/></svg>

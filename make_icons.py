@@ -17,60 +17,69 @@ import cairosvg
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
-# Icon ground and paint. Dark plane on a light ground reads better as a
-# home-screen tile than the reverse; the MAP marker inverts this (white fill,
-# dark outline) because it has to stay visible over arbitrary map tiles.
+# Icon ground and paint. The MAP marker inverts this (white fill, dark
+# outline) because it has to stay visible over arbitrary map tiles.
 GROUND = "#dbe4f3"
 PAINT = "#16243d"
 
-# Each style: the viewBox size its paths are drawn in, the icon body (filled),
-# and the marker body (a simplified silhouette that survives a 1px outline at
-# 40px). Modern drops its engine nacelles on the map for exactly that reason.
+# ---------------------------------------------------------------------------
+# ONE SILHOUETTE PER STYLE, AND IT IS A SINGLE CLOSED PATH. (1.7.0)
+#
+# Two rules, both learned the hard way.
+#
+# SINGLE PATH. "Modern" used to be three overlapping shapes — fuselage,
+# wing, tailplane — plus two nacelle rects. That is fine filled flat on a
+# tile, and it is a mess on the map: the marker strokes a dark outline
+# round EVERY shape, so you saw outlines crossing through the middle of the
+# aeroplane and the whole thing read as a smudge. One closed path strokes
+# once, on its own edge, which is what a marker needs.
+#
+# NO SEPARATE MARKER BODY. Each style used to carry a second, simplified
+# `marker` path so the outline survived at 40px. A single path survives
+# fine, and having two meant the map and the home screen were drawing
+# genuinely different aeroplanes.
+#
+# All drawn nose-up in a 64 viewBox so they are interchangeable.
 STYLES = {
     "modern": {
         "label": "Modern",
         "vb": 64,
         "icon": (
-            '<path d="M32 5c2.2 0 3.6 2.6 3.7 5.6l.5 38c.1 3.6-1.4 6.4-4.2 6.4'
-            's-4.3-2.8-4.2-6.4l.5-38C28.4 7.6 29.8 5 32 5z"/>'
-            '<path d="M32 18l29 19v4.2L32 34.5 3 41.2V37z"/>'
-            '<path d="M32 45.5l14.5 7.8v2.4L32 51.4l-14.5 4.4v-2.4z"/>'
-            '<rect x="17.8" y="31.5" width="5" height="11.5" rx="2.5"/>'
-            '<rect x="41.2" y="31.5" width="5" height="11.5" rx="2.5"/>'
-        ),
-        "marker": (
-            '<path d="M32 5c2.2 0 3.6 2.6 3.7 5.6l.5 38c.1 3.6-1.4 6.4-4.2 6.4'
-            's-4.3-2.8-4.2-6.4l.5-38C28.4 7.6 29.8 5 32 5z"/>'
-            '<path d="M32 18l29 19v4.2L32 34.5 3 41.2V37z"/>'
-            '<path d="M32 45.5l14.5 7.8v2.4L32 51.4l-14.5 4.4v-2.4z"/>'
+            '<path d="M32 4c2.6 0 4.4 3.4 4.7 8.6l.5 7.8 23 17.4c.5.4.7 1 .7 1.7'
+            'v3.3L37.4 36.4l.9 11.9 6.6 5.4c.5.4.6 1 .6 1.6v2L32 53.6l-13.5 3.7'
+            'v-2c0-.6.1-1.2.6-1.6l6.6-5.4.9-11.9L3.1 42.8v-3.3c0-.7.2-1.3.7-1.7'
+            'l23-17.4.5-7.8C27.6 7.4 29.4 4 32 4z"/>'
         ),
     },
     "sharp": {
         "label": "Sharp",
-        "vb": 40,
+        "vb": 64,
         "icon": (
-            '<path d="M20 2.5l1.6 10.5L35.5 25v2.6l-13.6-4.8.6 7.8 3.9 3.3v2'
-            'L20 33.8 12.6 36v-2l3.9-3.3.6-7.8L3.5 27.6V25L17.4 13z"/>'
+            '<path d="M32 4l2.6 16.8L60 40v4.2l-21.8-7.7 1 12.5 6.2 5.3v3.2'
+            'L32 54l-13.4 3.5v-3.2l6.2-5.3 1-12.5L4 44.2V40l25.4-19.2z"/>'
         ),
     },
     "rounded": {
         "label": "Rounded",
-        "vb": 40,
+        "vb": 64,
         "icon": (
-            '<path d="M20 4.5c2.1 0 3.2 2.2 3.35 5.2l.25 4.6 10.6 5.3c1.3.65 1.3 2.9 0 3.2'
-            'l-10.85-2 .35 7.6 3.4 3c.9.8.5 2.6-.6 2.3L20 31.6l-6.5 1.6c-1.1.3-1.5-1.5-.6-2.3'
-            'l3.4-3 .35-7.6-10.85 2c-1.3-.3-1.3-2.55 0-3.2l10.6-5.3.25-4.6C16.8 6.7 17.9 4.5 20 4.5z"/>'
+            '<path d="M32 5.5c3.4 0 5.1 3.5 5.4 8.3l.4 7.4 17 8.5c2.1 1 2.1 4.6 0 5.1'
+            'l-17.4-3.2.6 12.2 5.4 4.8c1.4 1.3.8 4.2-1 3.7L32 50.9l-10.4 1.9'
+            'c-1.8.5-2.4-2.4-1-3.7l5.4-4.8.6-12.2-17.4 3.2c-2.1-.5-2.1-4.1 0-5.1'
+            'l17-8.5.4-7.4C26.9 9 28.6 5.5 32 5.5z"/>'
         ),
     },
     "delta": {
         "label": "Delta",
-        "vb": 40,
-        "icon": '<path d="M20 3.5l14 28-14-6.2-14 6.2z"/>',
+        "vb": 64,
+        "icon": '<path d="M32 5l22.5 45L32 40 9.5 50z"/>',
     },
 }
 
 for s in STYLES.values():
-    s.setdefault("marker", s["icon"])
+    # Same path on the map as on the home screen. Kept as a key so callers
+    # that ask for `marker` keep working, but it is never a DIFFERENT shape.
+    s["marker"] = s["icon"]
 
 
 def icon_svg(style, px, maskable=False):
@@ -82,17 +91,86 @@ def icon_svg(style, px, maskable=False):
     """
     st = STYLES[style]
     vb = st["vb"]
-    fill = 0.52 if maskable else 0.72
-    scale = px * fill / vb
-    off = (px - vb * scale) / 2
-    radius = 0 if maskable else px * 0.225
+    u = px / 64.0                      # everything below is in 64-unit space
+
+    # MASKABLE ICONS GET NO ARTWORK. Android crops them to whatever shape
+    # the launcher wants and only the inner 80% is guaranteed to survive,
+    # so an arc drawn to the edges would be sliced at an arbitrary radius.
+    # A plain ground and a smaller plane is the honest answer there.
+    if maskable:
+        scale = px * 0.52 / vb
+        off = (px - vb * scale) / 2
+        return (
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{px}" height="{px}" '
+            f'viewBox="0 0 {px} {px}">{_defs()}'
+            f'<rect width="{px}" height="{px}" fill="url(#sky)"/>'
+            f'<g transform="translate({off:.2f},{off:.2f}) scale({scale:.5f})" '
+            f'fill="#ffffff">{st["icon"]}</g></svg>'
+        )
+
+    # The plane sits ON the arc, at its apex (32, 28 in 64-space), banked so
+    # it follows the curve. Nose-up in the middle of a square looks like a
+    # logo; on the arc it looks like a flight in progress, which is what the
+    # app is for.
+    scale = px * 0.42 / vb
+    radius = px * 0.225
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{px}" height="{px}" '
-        f'viewBox="0 0 {px} {px}">'
-        f'<rect width="{px}" height="{px}" rx="{radius:.1f}" fill="{GROUND}"/>'
-        f'<g transform="translate({off:.2f},{off:.2f}) scale({scale:.5f})" '
-        f'fill="{PAINT}">{st["icon"]}</g></svg>'
+        f'viewBox="0 0 {px} {px}">{_defs()}'
+        f'<rect width="{px}" height="{px}" rx="{radius:.1f}" fill="url(#sky)"/>'
+        f'{_backdrop(px)}'
+        f'<g transform="translate({32*u:.2f} {28*u:.2f}) rotate(55) '
+        f'scale({scale:.5f}) translate({-vb/2:.1f} {-vb/2:.1f})" '
+        f'fill="#ffffff">{st["icon"]}</g></svg>'
     )
+
+
+def _defs():
+    """The night sky the whole thing sits on."""
+    return (
+        '<defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">'
+        '<stop offset="0" stop-color="#12213c"/>'
+        '<stop offset="1" stop-color="#0a1526"/></linearGradient></defs>'
+    )
+
+
+def _backdrop(px):
+    """The great-circle arc, the earth's limb, and a few stars.
+
+    THE ARC IS SPLIT, and the split is the point: solid behind the plane,
+    dashed ahead of it. That is the same flown/remaining reading as the
+    route strip on the tracker card, so the icon says what the app does
+    rather than just being a plane in a box.
+
+    Everything is a fraction of px rather than a fixed unit, so the 16px
+    favicon is the SAME PICTURE as the 512px tile and not the same picture
+    with a giant arc across it. Below 64px the fine detail is dropped
+    entirely — a 3-unit dash pattern and a 1-unit star are mush at favicon
+    size, and mush reads as a smeared icon rather than as detail.
+    """
+    u = px / 64.0
+    fine = px >= 64
+    limb = (f'<circle cx="{32*u:.1f}" cy="{72*u:.1f}" r="{34*u:.1f}" '
+            f'fill="#1d3a63" opacity="0.55"/>')
+    flown = (f'<path d="M{-4*u:.1f} {46*u:.1f} Q{14*u:.1f} {22.5*u:.1f} '
+             f'{32*u:.1f} {28*u:.1f}" fill="none" stroke="#7fb0ea" '
+             f'stroke-width="{1.8*u:.2f}" opacity="0.9" stroke-linecap="round"/>')
+    if not fine:
+        # One continuous arc at favicon size. Same shape, no dashes.
+        ahead = (f'<path d="M{32*u:.1f} {28*u:.1f} Q{50*u:.1f} {35.5*u:.1f} '
+                 f'{68*u:.1f} {46*u:.1f}" fill="none" stroke="#5a8fd6" '
+                 f'stroke-width="{1.6*u:.2f}" opacity="0.7"/>')
+        return limb + flown + ahead
+    ahead = (f'<path d="M{32*u:.1f} {28*u:.1f} Q{50*u:.1f} {35.5*u:.1f} '
+             f'{68*u:.1f} {46*u:.1f}" fill="none" stroke="#5a8fd6" '
+             f'stroke-width="{1.6*u:.2f}" stroke-dasharray="{3*u:.1f} {3*u:.1f}" '
+             f'opacity="0.7"/>')
+    stars = (
+        f'<circle cx="{47*u:.1f}" cy="{14*u:.1f}" r="{1.3*u:.2f}" fill="#fff" opacity="0.5"/>'
+        f'<circle cx="{53*u:.1f}" cy="{22*u:.1f}" r="{0.9*u:.2f}" fill="#fff" opacity="0.35"/>'
+        f'<circle cx="{13*u:.1f}" cy="{16*u:.1f}" r="{1.0*u:.2f}" fill="#fff" opacity="0.4"/>'
+    )
+    return limb + flown + ahead + stars
 
 
 def write_png(svg, name, px):

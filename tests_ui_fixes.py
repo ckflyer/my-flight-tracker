@@ -530,7 +530,7 @@ def test_zone_rule_reaches_every_page():
     check("...keeping the ISO one only for the delete confirmation",
           '"date_iso": str(leg.date)' in admin_rows)
 
-    with open(os.path.join(here, "templates", "admin.html"), encoding="utf-8") as fh:
+    with open(os.path.join(here, "templates", "flights.html"), encoding="utf-8") as fh:
         html = fh.read()
     check("zone gets its own column", 'class="zone-cell"' in html)
     check("...and the divider spans all seven", 'colspan="7"' in html)
@@ -565,15 +565,48 @@ def test_nothing_render_blocking_is_remote():
 
 
 def test_bottom_tab_bar():
+    """One tab bar, in one file. (1.7.0)
+
+    It used to be copy-pasted into four templates. That is how /admin came
+    to be labelled "Flights" in every copy while its URL said otherwise,
+    and how the Tracker glyph drifted into being a different aeroplane from
+    the app icon. The active item is now driven by `active_tab` from the
+    route rather than by hand-editing one copy.
+    """
     here = os.path.dirname(os.path.abspath(__file__))
     tdir = os.path.join(here, "templates")
-    for name in ("viewer.html", "calendar.html", "admin.html", "settings.html"):
+    for name in ("viewer.html", "calendar.html", "flights.html",
+                 "admin.html", "settings.html"):
         with open(os.path.join(tdir, name), encoding="utf-8") as fh:
             html = fh.read()
-        check(f"{name} has a tab bar", '<nav class="tabbar"' in html)
+        check(f"{name} includes the shared tab bar",
+              'partials/tabbar.html' in html)
+        check(f"{name} has no tab bar of its own",
+              '<nav class="tabbar"' not in html)
         check(f"{name} dropped the old top nav", "topnav" not in html)
-        check(f"{name} marks exactly one tab active", html.count('class="active"') == 1,
-              str(html.count('class="active"')))
+
+    with open(os.path.join(tdir, "partials", "tabbar.html"), encoding="utf-8") as fh:
+        bar = fh.read()
+    check("the bar itself has exactly one nav", bar.count('<nav class="tabbar"') == 1)
+    check("...with four destinations",
+          all(f'href="{h}"' in bar for h in ("/", "/calendar", "/flights", "/settings")))
+    check("...pointing at /flights, not the old /admin",
+          'href="/admin"' not in bar)
+    check("active comes from the route, not from editing a copy",
+          bar.count("active_tab ==") == 4)
+    check("Flights is pilot-only in the bar", "{% if is_pilot %}" in bar)
+    check("the Tracker glyph is the shared plane, not a fourth aeroplane",
+          'partials/plane_glyph.html' in bar)
+
+    # Every page that renders the bar must say which tab it is on, or the
+    # bar silently shows nothing selected. The admin page is the deliberate
+    # exception: it is not one of the four.
+    with open(os.path.join(here, "app", "main.py"), encoding="utf-8") as fh:
+        src = fh.read()
+    for tab in ("tracker", "calendar", "flights", "settings"):
+        check(f"the route for {tab} sets active_tab", f'"{tab}"' in src)
+    check("the admin page deliberately has no active tab",
+          "active_tab=None" in src)
 
     with open(os.path.join(here, "static", "app.css"), encoding="utf-8") as fh:
         css = fh.read()
@@ -582,12 +615,6 @@ def test_bottom_tab_bar():
           "padding-bottom: calc(72px" in css)
     check("the pill is offset to the left, not full width",
           "border-radius: 999px" in css and "display: inline-flex" in css)
-
-    # Viewers have no Flights page to reach.
-    with open(os.path.join(tdir, "viewer.html"), encoding="utf-8") as fh:
-        v = fh.read()
-    i = v.find('<nav class="tabbar"')
-    check("Flights is pilot-only in the bar", "{% if is_pilot %}" in v[i:i + 2000])
 
 
 def test_full_bleed_map():
@@ -798,8 +825,11 @@ def test_card_grows_upward_from_a_fixed_bottom_edge():
     # hardcoded guess. It has to be looked up on demand.
     check("the tab bar is looked up lazily, not at parse time",
           "if (!tabbar) tabbar = document.querySelector('.tabbar');" in html)
+    # 1.7.0: the nav is a shared include now, so look for the include
+    # rather than the markup. The ORDER is the thing being asserted, and
+    # that is unchanged.
     check("...because the nav really does come after the script",
-          html.index("<script>") < html.index('<nav class="tabbar"'))
+          html.index("<script>") < html.index('partials/tabbar.html'))
 
 
 def test_detail_panels_slide_rather_than_snap():
@@ -1038,7 +1068,7 @@ def test_review_page_carries_removals_and_breaks():
 def test_flights_page_filters_by_month():
     """N1 made the roster accumulate; this stops it becoming a scroll."""
     here = os.path.dirname(os.path.abspath(__file__))
-    with open(os.path.join(here, "templates", "admin.html"), encoding="utf-8") as fh:
+    with open(os.path.join(here, "templates", "flights.html"), encoding="utf-8") as fh:
         ah = fh.read()
     with open(os.path.join(here, "app", "main.py"), encoding="utf-8") as fh:
         src = fh.read()
@@ -1048,14 +1078,18 @@ def test_flights_page_filters_by_month():
     check("...submitting on change, so it is one tap", "this.form.submit()" in ah)
     check("...but still working with no JavaScript", "<noscript>" in ah)
     check("it is a GET, so it survives a refresh and can be linked",
-          'method="get" action="/admin"' in ah)
+          'method="get" action="/flights"' in ah)
     check("the select is labelled for screen readers", 'for="month-select"' in ah)
     check("filtering happens on the SERVER, not by hiding rows",
           'l.date.strftime("%Y-%m") == active_month' in src)
     check("an unknown month falls back to everything, never an empty page",
           "month if month in months else None" in src)
-    check("the manual add form is on the flights page",
-          'action="/admin/add"' in ah)
+    # 1.7.0: the hand-add form is GONE. The owner never asked for it; it
+    # was inferred from N1's spec line about a diversion that continued on,
+    # and inventing UI from an inference is how a page fills with things
+    # nobody wanted. The parser and a re-paste already cover the real case.
+    check("there is no hand-add form", 'action="/admin/add"' not in ah
+          and "add-grid" not in ah)
 
 
 def test_calendar_shows_one_month():
