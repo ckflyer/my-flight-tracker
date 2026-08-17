@@ -1,8 +1,10 @@
 from fastapi import FastAPI, Request, Form
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, Response
+from fastapi.responses import (HTMLResponse, RedirectResponse, JSONResponse,
+                               PlainTextResponse, Response)
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from pathlib import Path
+import json
 from datetime import datetime, date, timedelta, timezone, time as dtime
 from zoneinfo import ZoneInfo
 from typing import Optional
@@ -1234,10 +1236,16 @@ def build_diagnostics_html(request: Request) -> str:
     def row(label, value, ok=None):
         colour = "" if ok is None else (
             "color:#137333" if ok else "color:#c5221f;font-weight:600")
+        # NO nowrap, and the value is allowed to break mid-token. Values
+        # here are raw API output — a 180-character error body, a URL, a
+        # refusal reason — and on a phone any one of them used to push the
+        # whole page sideways. Breaking an ugly string across two lines is
+        # strictly better than a page that scrolls horizontally.
         out.append(
-            "<tr><td style='padding:4px 14px 4px 0;color:#5f6368;"
-            "white-space:nowrap;vertical-align:top'>%s</td>"
-            "<td style='padding:4px 0;%s'><code>%s</code></td></tr>"
+            "<tr><td style='padding:4px 12px 4px 0;color:var(--muted);"
+            "vertical-align:top;word-break:break-word'>%s</td>"
+            "<td style='padding:4px 0;word-break:break-word;%s'>"
+            "<code>%s</code></td></tr>"
             % (_html.escape(str(label)), colour, _html.escape(str(value)))
         )
 
@@ -1273,8 +1281,13 @@ def build_diagnostics_html(request: Request) -> str:
     working = 0
     for i, e in enumerate(eps):
         status, count, msg = _al.probe(e["url"], api_key=e.get("api_key") or "")
+        # 429 means the feed ANSWERED and asked us to slow down. That is
+        # proof it is alive, so it counts as working and is coloured amber
+        # rather than red. Reporting it as a failure is what made this page
+        # show every feed dead while flights were tracking normally.
         ok = (status == 200 and count is not None)
-        if ok and e.get("enabled", True):
+        limited = (status == 429)
+        if (ok or limited) and e.get("enabled", True):
             working += 1
         label = ("HTTP %s" % status) if status else "no response"
         detail = "%s — %s" % (label, ("%d aircraft" % count)
@@ -1294,7 +1307,8 @@ def build_diagnostics_html(request: Request) -> str:
             "<td style='padding:8px 0;font-size:12px;%s'>%s</td></tr>"
             % (i, checked, i, _html.escape(e["url"]), i,
                _html.escape(e.get("api_key") or ""),
-               "color:#137333" if ok else "color:#c5221f;font-weight:600",
+               "color:#137333" if ok else
+               ("color:#b8860b" if limited else "color:#c5221f;font-weight:600"),
                _html.escape(detail))
         )
     # One always-blank row, so adding a feed needs no separate button.
@@ -1318,8 +1332,39 @@ def build_diagnostics_html(request: Request) -> str:
                "<span style='color:#5f6368;font-size:12px'>"
                "Clear a URL to delete that row. Untick to keep it but skip it."
                "</span></p></form>")
+    out.append(
+        "<p style='font-size:12px'>Feeds are tried in order until one "
+        "answers. Data from <a href='https://adsb.lol'>adsb.lol</a> (ODbL "
+        "1.0) and <a href='https://adsb.fi'>adsb.fi</a> (personal, "
+        "non-commercial). <a href='https://airplanes.live'>airplanes.live</a> "
+        "withdrew its free API in 2026 and is now feeder- or sponsor-only "
+        "\u2014 enable it above if you run a receiver or sponsor them, and "
+        "put it first.</p>")
+    out.append(
+        "<form method='post' action='/admin/diagnostics/endpoints/reset' "
+        "style='margin-top:8px'><button type='submit' style='padding:6px 12px;"
+        "font-size:12px'>Reset feeds to current defaults</button>"
+        "<span style='font-size:12px;color:var(--muted);margin-left:8px'>"
+        "Use this if the list above still names a feed that shut down "
+        "\u2014 a saved list overrides the built-in one.</span></form>")
+
     out.append("<table>")
-    row("feeds working", "%d enabled and answering" % working, working > 0)
+    # The probe says whether a feed answers ONE uncached request right now.
+    # Recent real lookups say whether tracking is actually working, and
+    # that is the question being asked. When they disagree the history
+    # wins, so the summary is built from both rather than the probe alone.
+    _hist = _al.recent_results()
+    _recent_ok = sum(1 for h in _hist[:15] if h.get("ok"))
+    if working > 0:
+        row("feeds working", "%d enabled and answering" % working, True)
+    elif _recent_ok:
+        row("feeds working",
+            "probe says no, but %d of the last %d REAL lookups succeeded "
+            "\u2014 tracking is working and the probe is being rate limited"
+            % (_recent_ok, min(len(_hist), 15)), True)
+    else:
+        row("feeds working", "none answering, and no recent lookup succeeded",
+            False)
     out.append("</table>")
     if not working:
         out.append("<p style='color:#c5221f'><b>No enabled feed is answering.</b> "
@@ -1359,12 +1404,37 @@ def build_diagnostics_html(request: Request) -> str:
             )
         out.append("</table>")
 
+    # WHAT THIS SECTION IS FOR, because it was misleading before 1.8.0.
+    # `active_flights()` returns whatever is inside the tracking WINDOW,
+    # and a leg stays inside that window until 3 hours past its scheduled
+    # arrival whether it has closed or not. So a leg that finished cleanly
+    # on the airline's own gate-in an hour ago still appeared here, under a
+    # heading saying "active", with a live uncached lookup fired against it
+    # — which both looked like the app had failed to let go and spent real
+    # ADS-B requests on a finished flight.
+    #
+    # The poller was always right: `poll_once` skips closed legs. Only this
+    # page was wrong. Closed legs are now listed separately and are NOT
+    # probed.
     out.append("<h2>Your active flights</h2>")
     active = _poller.active_flights()
+    _open, _done = {}, {}
+    for _lid, _leg in active.items():
+        _r = get_flight(_lid)
+        (_done if (_r is not None and _r["closed"]) else _open)[_lid] = (_leg, _r)
+    if _done:
+        out.append("<p style='color:#5f6368'>Not queried, because they are "
+                   "finished — still listed only because they are inside the "
+                   "3-hour window: " + ", ".join(
+                       "%s (closed by %s)" % (_html.escape(l.flight_number or i),
+                                              _html.escape((r["closed_by"] or "?")))
+                       for i, (l, r) in _done.items()) + "</p>")
+    active = {k: v[0] for k, v in _open.items()}
     if not active:
-        out.append("<p>Nothing in the tracking window right now. The poller "
-                   "only looks at flights from T-%s minutes until 3 hours "
-                   "past scheduled arrival.</p>"
+        out.append("<p>Nothing OPEN in the tracking window right now. The "
+                   "poller looks at flights from T-%s minutes until 3 hours "
+                   "past scheduled arrival, and stops the moment a leg "
+                   "closes.</p>"
                    % (_poller.PREVIEW_WINDOW.total_seconds() / 60))
     for leg_id, leg in active.items():
         out.append("<h3>%s &mdash; %s to %s</h3><table>"
@@ -1406,6 +1476,19 @@ def build_diagnostics_html(request: Request) -> str:
     return html
 
 
+@app.post("/admin/diagnostics/endpoints/reset")
+async def admin_reset_endpoints(request: Request):
+    """Drop a saved feed list so the built-in defaults apply again."""
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    if not pilot["is_admin"]:
+        return RedirectResponse(url="/flights", status_code=303)
+    from . import airplaneslive as _al
+    _al.reset_endpoints()
+    return RedirectResponse(url="/admin#diagnostics", status_code=303)
+
+
 @app.get("/admin/diagnostics")
 async def admin_diagnostics_moved(request: Request):
     """Merged into /admin in 1.7.0. Kept so old links and bookmarks land."""
@@ -1415,8 +1498,8 @@ async def admin_diagnostics_moved(request: Request):
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request, subject: Optional[str] = None,
-                     event: Optional[str] = None, limit: int = 200,
-                     flash: Optional[str] = None):
+                     event: Optional[str] = None, q: Optional[str] = None,
+                     limit: int = 100, flash: Optional[str] = None):
     """Running the install: people, test mode, diagnostics, decision log.
 
     ONE PAGE, four stacked sections, deliberately plain. Through 1.6.0
@@ -1451,10 +1534,16 @@ async def admin_page(request: Request, subject: Optional[str] = None,
             "stopped_since": r["stopped_since"],
         })
 
-    log_events = []
+    # 100 by default (1.8.0, was 200). A phone rendering 200 monospace
+    # lines of JSON is slow to open and slower to scroll, and the reason to
+    # open this page is almost always the last handful of decisions.
+    limit = max(10, min(int(limit), 2000))
+    log_events, log_names, log_max_id = [], [], 0
     if debuglog.ENABLED:
-        log_events = debuglog.recent(limit=min(int(limit), 1000),
-                                     subject=subject, event=event)
+        log_events = debuglog.recent(limit=limit, subject=subject,
+                                     event=event, q=q)
+        log_names = debuglog.event_names()
+        log_max_id = max((e["id"] for e in log_events), default=0)
 
     template = jinja_env.get_template("admin.html")
     return HTMLResponse(template.render(
@@ -1463,10 +1552,75 @@ async def admin_page(request: Request, subject: Optional[str] = None,
         sim_rows=sim_rows, sim_scenarios=sim_scenarios,
         diagnostics_html=Markup(build_diagnostics_html(request)),
         log_enabled=debuglog.ENABLED, log_events=log_events,
-        log_subject=subject or "", log_event=event or "",
+        log_subject=subject or "", log_event=event or "", log_q=q or "",
+        log_limit=limit, log_names=log_names, log_max_id=log_max_id,
+        log_limits=[50, 100, 250, 500, 1000],
         flash=FLASHES.get(flash or ""), flash_kind=FLASH_KIND.get(flash or "", "err"),
         active_tab=None, is_admin=True, is_pilot=True,
     ))
+
+
+@app.get("/admin/log/tail")
+async def admin_log_tail(request: Request, after_id: int = 0,
+                         subject: Optional[str] = None,
+                         event: Optional[str] = None,
+                         q: Optional[str] = None):
+    """JSON feed of log lines NEWER than after_id. Drives the live tail.
+
+    Polled rather than streamed. A WebSocket or SSE would be tidier, but
+    this app is deployed behind whatever reverse proxy the owner happens to
+    be running on a NAS, and a long-lived connection is the first thing
+    such a proxy drops. A 2-second poll for "anything newer than id N"
+    returns an empty list almost every time and costs nothing.
+    """
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return JSONResponse({"events": [], "max_id": after_id}, status_code=403)
+    if not pilot["is_admin"] or not debuglog.ENABLED:
+        return JSONResponse({"events": [], "max_id": after_id})
+    rows = debuglog.recent(limit=200, subject=subject, event=event, q=q,
+                           after_id=after_id or None)
+    rows.reverse()                      # oldest first, so the tail appends
+    return JSONResponse({
+        "events": [{"id": r["id"], "at": r["at"], "event": r["event"],
+                    "subject": r["subject"],
+                    "detail": json.dumps(r["detail"], default=str)}
+                   for r in rows],
+        "max_id": max([r["id"] for r in rows] + [after_id or 0]),
+    })
+
+
+@app.get("/admin/log/download")
+async def admin_log_download(request: Request, limit: int = 500,
+                             subject: Optional[str] = None,
+                             event: Optional[str] = None,
+                             q: Optional[str] = None):
+    """The current view, as a text file, for pasting into a conversation.
+
+    Plain text rather than JSON: the point is to be readable by a person
+    who has been handed it, and the same filters that are on screen apply,
+    so what downloads is what you were looking at.
+    """
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    if not pilot["is_admin"]:
+        return RedirectResponse(url="/flights", status_code=303)
+    rows = debuglog.recent(limit=max(10, min(int(limit), 5000)),
+                           subject=subject, event=event, q=q)
+    rows.reverse()
+    lines = [f"MyPilot decision log — {len(rows)} events",
+             f"exported {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
+             f"filters: subject={subject or '-'} event={event or '-'} search={q or '-'}",
+             "-" * 72]
+    for r in rows:
+        lines.append(f"{r['at']}  {r['event']}  {r['subject'] or ''}")
+        for k, v in (r["detail"] or {}).items():
+            lines.append(f"    {k}: {v}")
+    body = "\n".join(lines) + "\n"
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+    return PlainTextResponse(body, headers={
+        "Content-Disposition": f'attachment; filename="mypilot-log-{stamp}.txt"'})
 
 
 @app.get("/admin/debug")

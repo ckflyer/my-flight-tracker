@@ -50,6 +50,28 @@ MIN_UPSTREAM_INTERVAL_S = 1.2
 DEFAULT_CACHE_TTL_S = 8.0
 
 _lock = threading.Lock()
+
+
+def throttle():
+    """Wait out the global floor, then claim the slot. Call before ANY
+    upstream request that does not go through live_state.
+
+    THE DIAGNOSTICS PROBE DID NOT DO THIS (fixed 1.8.0). It called
+    requests.get directly, so loading the admin page fired one request per
+    configured feed back to back with no spacing. adsb.fi allows 1 request
+    per second and adsb.lol throttles dynamically, so the second and third
+    feeds came back 429 every time — and the page reported all feeds RED
+    while the poller, which does respect this floor, was tracking flights
+    perfectly well. The diagnostics were the only thing broken, which is
+    the worst place for a bug to be: it is where you look to find out
+    whether anything else is.
+    """
+    global _last_upstream_at
+    with _lock:
+        since = time.monotonic() - _last_upstream_at
+        if since < MIN_UPSTREAM_INTERVAL_S:
+            time.sleep(MIN_UPSTREAM_INTERVAL_S - since)
+        _last_upstream_at = time.monotonic()
 _cache: Dict[str, Dict[str, Any]] = {}   # callsign -> {"at": float, "state": dict|None}
 _last_upstream_at: float = 0.0
 

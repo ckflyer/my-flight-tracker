@@ -155,19 +155,40 @@ def log(event: str, subject: Optional[str] = None, **detail: Any) -> None:
 
 
 def recent(limit: int = 100, subject: Optional[str] = None,
-           event: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Most recent events first. Returns [] rather than raising."""
+           event: Optional[str] = None, q: Optional[str] = None,
+           after_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Most recent events first. Returns [] rather than raising.
+
+    `subject` is now a CONTAINS match, not an equality one (1.8.0). It held
+    a full flight id — "2026-08-04-3729-DFW-OKC" — and the filter box asked
+    you to type all of it exactly right to see anything, which meant the
+    filter went unused. Typing "3729" now works.
+
+    `q` searches subject, event and the raw detail JSON together, so a tail
+    number or a threshold value finds the lines that mention it without
+    needing to know which column it lives in.
+
+    `after_id` returns only rows NEWER than an id, which is what the live
+    tail polls with — it asks for what it has not seen rather than
+    re-fetching the last 100 lines every two seconds.
+    """
     try:
         conn = get_connection()
         try:
             sql = "SELECT id, at, event, subject, detail FROM debug_events"
             where, args = [], []
             if subject:
-                where.append("subject = ?")
-                args.append(str(subject))
+                where.append("subject LIKE ?")
+                args.append(f"%{subject}%")
             if event:
                 where.append("event LIKE ?")
                 args.append(f"{event}%")
+            if q:
+                where.append("(subject LIKE ? OR event LIKE ? OR detail LIKE ?)")
+                args += [f"%{q}%"] * 3
+            if after_id:
+                where.append("id > ?")
+                args.append(int(after_id))
             if where:
                 sql += " WHERE " + " AND ".join(where)
             sql += " ORDER BY id DESC LIMIT ?"
@@ -184,6 +205,27 @@ def recent(limit: int = 100, subject: Optional[str] = None,
             out.append({"id": r["id"], "at": r["at"], "event": r["event"],
                         "subject": r["subject"], "detail": detail})
         return out
+    except Exception:
+        return []
+
+
+def event_names(limit: int = 40) -> List[str]:
+    """Distinct event names, most recent first. Populates the filter menu.
+
+    Typing an event prefix meant knowing the names — `closure.inputs`,
+    `enrichment.spend` — which are only discoverable by reading the source.
+    A menu built from what is actually in the log needs no such knowledge.
+    """
+    try:
+        conn = get_connection()
+        try:
+            rows = conn.execute(
+                "SELECT event, MAX(id) AS last FROM debug_events "
+                "GROUP BY event ORDER BY last DESC LIMIT ?", (int(limit),)
+            ).fetchall()
+        finally:
+            conn.close()
+        return [r["event"] for r in rows]
     except Exception:
         return []
 

@@ -47,7 +47,21 @@ from .db import get_connection
 DEFAULT_ENDPOINTS = [
     {"url": "https://api.adsb.lol/v2", "enabled": True, "api_key": ""},
     {"url": "https://opendata.adsb.fi/api/v2", "enabled": True, "api_key": ""},
+    # Off by default since 1.8.0. airplanes.live withdrew its free API to
+    # stay solvent — their words: 2 billion requests a week, monthly egress
+    # burned through in four days, hosting up ~300% in 18 months. It is now
+    # $25/mo sponsorship, OR FREE FROM A FEEDER'S OWN IP. If you run a
+    # receiver or sponsor them, enable this and put it first: it is the
+    # best-coverage unfiltered feed of the three.
     {"url": "https://api.airplanes.live/v2", "enabled": False, "api_key": ""},
+]
+
+# Attribution required by adsb.fi's terms, and only fair to the others.
+# Surfaced on the diagnostics panel rather than buried in a licence file.
+FEED_CREDITS = [
+    ("adsb.lol", "https://adsb.lol", "ODbL 1.0, open to everyone"),
+    ("adsb.fi", "https://adsb.fi", "personal, non-commercial use only"),
+    ("airplanes.live", "https://airplanes.live", "feeders and sponsors only"),
 ]
 
 _META_KEY = "adsb_endpoints"
@@ -101,6 +115,31 @@ def load_endpoints():
     except Exception as e:
         print(f"[adsb] could not read endpoint list: {e}")
     return [dict(e) for e in DEFAULT_ENDPOINTS]
+
+
+def reset_endpoints() -> None:
+    """Forget any saved feed list and fall back to DEFAULT_ENDPOINTS.
+
+    Needed because `load_endpoints` prefers whatever is stored in the
+    database, so an install that saved a list back when airplanes.live was
+    the default stays pinned to a feed that now returns 403 — while a fresh
+    install of the same version works perfectly. That is a difference no
+    amount of reading the code explains, so there is a button for it.
+    """
+    # app_meta, not meta — the table this module already READS from three
+    # lines up. Getting it wrong meant the button crashed with a 500 on
+    # exactly the installs that most needed it, since a table only exists
+    # once something has been written to it.
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM app_meta WHERE key = ?", (_META_KEY,))
+        conn.commit()
+    except Exception as e:
+        # Nothing was ever saved, so there is nothing to forget and the
+        # defaults are already in force. That is a success, not an error.
+        print(f"[adsb] nothing to reset: {e}")
+    finally:
+        conn.close()
 
 
 def save_endpoints(endpoints) -> None:
@@ -310,12 +349,25 @@ def normalize(ac: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def probe(base: str, callsign: str = "AAL100", api_key: str = ""):
-    """One raw request, for the diagnostics page. Returns
-    (status_code|None, aircraft_count|None, short_message)."""
+    """One raw request, for the diagnostics page.
+
+    Returns (status_code|None, aircraft_count|None, short_message).
+
+    Goes through the SAME global throttle the poller uses. It did not
+    before 1.8.0, so opening the admin page fired one request per feed with
+    no spacing between them, and every feed after the first came back 429.
+    The page then reported all feeds dead while tracking was working fine.
+    """
+    from .livesource import throttle
     try:
+        throttle()
         r = _get(base, callsign, api_key)
     except Exception as e:
         return None, None, f"unreachable: {e}"
+    if r.status_code == 429:
+        # NOT a failure, and must not be reported as one. It means the feed
+        # answered and told us to slow down, which is proof it is alive.
+        return 429, None, "rate limited (feed is up; probe asked too fast)"
     if r.status_code != 200:
         body = (r.text or "").strip().replace("\n", " ")
         return r.status_code, None, body[:180] or "(empty response)"
