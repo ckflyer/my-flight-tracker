@@ -1,0 +1,12 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+.venv
+venv
+data/*.db
+data/*.db-*
+data/settings.json
+data/schedule.json
+data/secret_key.txt
+README.md

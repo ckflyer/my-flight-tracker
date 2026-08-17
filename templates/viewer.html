@@ -371,16 +371,11 @@
          so nothing inside can paint over the page above it. */
       isolation: isolate;
     }
-    /* Fades in as you scroll, so the map recedes and the schedule takes
-       over. Sits between the map and the page. */
-    .scroll-scrim {
-      position: fixed;
-      inset: 0;
-      z-index: 1;
-      background: var(--bg);
-      opacity: 0;
-      pointer-events: none;
-    }
+    /* The scroll scrim is GONE (1.12.0). It faded the map out as the page
+       scrolled, which was the mechanism by which the schedule appeared. The
+       schedule now lives in a sheet that is always on screen, so there is
+       nothing to fade and nothing to reveal. Its removal takes the whole
+       scroll-position-drives-everything design with it — see .sheet. */
     /* Empty space that lets the fixed map show through above the card. This
        is what pushes the card down the screen. The script overwrites the
        height with a measured pixel value on load and on resize; the calc is
@@ -617,20 +612,71 @@
        is the part of the map you can actually see, and panning it is the
        point. --card-top moves with the card, so opening the details grows
        the shield to match without anything having to be told. */
-    .map-shield {
+    /* THE FLIGHT SHEET.
+
+       The schedule used to be a normal part of the page, below the card,
+       revealed by scrolling: the page's scroll position drove the scrim's
+       opacity, the schedule's opacity, the card's height, the map's
+       framing and the heads-up controls, all at once. Every one of those
+       had to agree about a single number, and the last three releases were
+       largely spent on what happened when they did not — the creeping
+       bottom edge, the map re-fitting twice, the map swallowing scrolls
+       meant for the schedule.
+
+       The sheet is fixed furniture with its OWN scrollbar, so none of that
+       couples any more. It rests PEEKING — showing a couple of flights, so
+       the schedule is never hidden behind a control, which was the mistake
+       corrected once already when "Flight details" hid the whole list
+       behind a grey line of text. Drag it, or tap the handle, for the rest.
+
+       Heights are viewport-relative because the content is a list of
+       unknown length; the peek shows about two rows on a phone. */
+    :root { --sheet-peek: 34vh; --sheet-full: 82vh; }
+    .sheet {
       position: fixed;
-      top: var(--card-top); left: 0; right: 0; bottom: 0;
-      z-index: 2;
-      touch-action: pan-y;
+      left: 0; right: 0; bottom: 0;
+      z-index: 30;
+      height: var(--sheet-peek);
+      background: var(--card);
+      border-radius: 18px 18px 0 0;
+      box-shadow: 0 -8px 28px rgba(0,0,0,0.28);
+      display: flex; flex-direction: column;
+      transition: height 280ms cubic-bezier(0.4, 0, 0.2, 1);
+      /* Above the tab pills, which stay reachable below it. */
+      padding-bottom: calc(46px + env(safe-area-inset-bottom, 0px));
     }
-    .reveal {
-      position: relative; z-index: 20;
-      min-height: 72vh;
-      /* Deliberately NOT opacity:0 here. If the script dies the schedule
-         still has to be readable — hiding it in CSS and relying on JS to
-         bring it back means one broken file costs the whole page. The
-         script sets the starting opacity itself once it is running. */
+    .sheet.open { height: var(--sheet-full); }
+    .sheet.dragging { transition: none; }
+    @media (prefers-reduced-motion: reduce) { .sheet { transition: none; } }
+    /* The grab area. Generous, because it is the one control here and a
+       12px bar is not a touch target. */
+    .sheet-grip {
+      flex-shrink: 0; padding: 0.55rem 0 0.45rem;
+      display: flex; flex-direction: column; align-items: center; gap: 0.3rem;
+      cursor: grab; touch-action: none;
     }
+    .sheet-grip:active { cursor: grabbing; }
+    .sheet-grip-bar {
+      width: 38px; height: 4px; border-radius: 999px; background: var(--border);
+    }
+    .sheet-title {
+      font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em;
+      text-transform: uppercase; color: var(--muted);
+    }
+    /* The ONLY scrolling region on this page. `overscroll-behavior:
+       contain` stops a flick at the end of the list turning into a pull on
+       the document behind it. */
+    .sheet-body {
+      flex: 1; min-height: 0;
+      overflow-y: auto; -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+      padding: 0 0.9rem 1rem;
+    }
+    /* The document itself no longer scrolls: everything is fixed furniture
+       and the sheet owns the only scrollbar. This is also what makes the
+       map unable to steal a scroll — there is no page scroll to steal, so
+       .map-shield went with it. */
+    body.has-sheet { overflow: hidden; }
     .map-missing {
       position: absolute; top: 42%; left: 0; right: 0;
       text-align: center; color: var(--muted); font-size: 0.8125rem;
@@ -689,11 +735,6 @@
     </div>
     </div>
   </div>
-  <div class="scroll-scrim" id="scroll-scrim"></div>
-  {# Catches drags that would otherwise fall through the page and pan the
-     map. See .map-shield. Rendered inside the same {% if current %} as the
-     map itself — no map, nothing to shield. #}
-  <div class="map-shield" id="map-shield" aria-hidden="true"></div>
   {% endif %}
 
   <div class="topbar">
@@ -933,7 +974,14 @@
     </div>
   </div>
 
-  <div class="reveal" id="reveal">
+  <div class="sheet" id="sheet">
+    <div class="sheet-grip" id="sheet-grip" role="button" tabindex="0"
+         aria-expanded="false" aria-controls="sheet-body"
+         aria-label="Show more flights">
+      <span class="sheet-grip-bar" aria-hidden="true"></span>
+      <span class="sheet-title" id="sheet-title">My flights</span>
+    </div>
+    <div class="sheet-body" id="sheet-body">
   <div class="expand-wrap" id="expand-wrap">
     {# ONE list: this trip and the next, in order, with NOTHING HIDDEN.
        The Show-past-flights button is gone (1.11.0) and so is the whole
@@ -1017,7 +1065,8 @@
     {% endif %}
     {% endfor %}
   </div>
-  </div>{# /.reveal — opened inside this same {% if current %}, so it has to
+    </div>{# /.sheet-body #}
+  </div>{# /.sheet — opened inside this same {% if current %}, so it has to
            close inside it too. It used to close after the {% endif %}, which
            left a stray </div> on the empty-schedule page; the browser then
            silently closed something else early and the tab bar and footer
@@ -1340,7 +1389,22 @@
       // Where the top of the tab pills sits. The pills are a fixed element,
       // so this is already in screen coordinates and does not move when the
       // page scrolls. The fallback is only for a page with no tab bar.
+      // WHAT THE CARD'S BOTTOM EDGE IS PARKED AGAINST.
+      //
+      // It used to be the tab pills. It is now the top of the flight sheet,
+      // which sits above them — and that one substitution is most of what
+      // made the sheet possible. The card was ALREADY bottom-anchored and
+      // already grew upward into the map; it simply had the wrong thing to
+      // measure against. Nothing else in layout() or capPanel() changed.
+      //
+      // The sheet moves when it opens, so this is read live rather than
+      // cached, and layout() is called again when the sheet settles.
       function tabTop() {
+        var sheet = document.getElementById('sheet');
+        if (sheet) {
+          var sr = sheet.getBoundingClientRect();
+          if (sr.height) return sr.top;
+        }
         if (!tabbar) tabbar = document.querySelector('.tabbar');
         if (!tabbar) return window.innerHeight - 92;
         var r = tabbar.getBoundingClientRect();
@@ -1739,78 +1803,144 @@
       window._ptTimeLineHTML = timeLineHTML;
     })();
 
+    // ---- THE FLIGHT SHEET: peek, open, and where it starts.
+    (function() {
+      const sheet = document.getElementById('sheet');
+      const grip = document.getElementById('sheet-grip');
+      const body = document.getElementById('sheet-body');
+      if (!sheet || !grip || !body) return;
+
+      // Only now that the script is alive. If it dies, the page keeps its
+      // normal scrolling and the schedule stays reachable — hiding the
+      // document's scrollbar from CSS and relying on JS to provide the
+      // replacement means one broken file costs the whole schedule.
+      document.body.classList.add('has-sheet');
+
+      let open = false;
+
+      function setOpen(next, instant) {
+        open = next;
+        if (instant) sheet.classList.add('dragging');
+        sheet.classList.toggle('open', open);
+        grip.setAttribute('aria-expanded', open ? 'true' : 'false');
+        grip.setAttribute('aria-label', open ? 'Show less' : 'Show more flights');
+        if (window._ptHudForSheet) window._ptHudForSheet(open);
+        if (instant) { void sheet.offsetHeight; sheet.classList.remove('dragging'); }
+        // The card is parked against the sheet's TOP edge, which has just
+        // moved. Re-run once it has finished moving, not now — mid-transition
+        // the sheet measures somewhere between the two heights.
+        window.setTimeout(function() {
+          if (window._ptLayoutHero) window._ptLayoutHero();
+        }, instant ? 0 : 300);
+      }
+
+      grip.addEventListener('click', function() { setOpen(!open); });
+      grip.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open); }
+      });
+
+      // DRAG. Tracked on the grip only — dragging inside the list is
+      // scrolling the list, which is a different gesture and must not be
+      // stolen. Committing on distance rather than on velocity keeps a slow
+      // deliberate pull working the same as a flick.
+      let startY = null, startH = 0;
+      grip.addEventListener('touchstart', function(e) {
+        if (!e.touches || e.touches.length !== 1) return;
+        startY = e.touches[0].clientY;
+        startH = sheet.getBoundingClientRect().height;
+        sheet.classList.add('dragging');
+      }, { passive: true });
+
+      grip.addEventListener('touchmove', function(e) {
+        if (startY === null) return;
+        const dy = startY - e.touches[0].clientY;
+        const vh = window.innerHeight;
+        const h = Math.min(vh * 0.86, Math.max(vh * 0.14, startH + dy));
+        sheet.style.height = h + 'px';
+      }, { passive: true });
+
+      function endDrag() {
+        if (startY === null) return;
+        const h = sheet.getBoundingClientRect().height;
+        startY = null;
+        // Inline height must go before the class decides it, or it wins
+        // over both --sheet-peek and --sheet-full and the sheet freezes
+        // wherever the finger left it.
+        sheet.style.height = '';
+        sheet.classList.remove('dragging');
+        setOpen(h > window.innerHeight * 0.5);
+      }
+      grip.addEventListener('touchend', endDrag);
+      grip.addEventListener('touchcancel', endDrag);
+
+      // WHERE THE LIST STARTS: on the current flight.
+      //
+      // This is the whole reason the sheet is worth building. In the old
+      // page-scrolled layout it could not be done at all without moving
+      // flown legs above the card and re-deriving the card's position, the
+      // map's framing and the reveal fade with it. Here it is one
+      // assignment, because the sheet owns its own scrollbar and nothing
+      // else is measured against it.
+      //
+      // The live row if there is one; otherwise the landmark that sits
+      // where the flown part of this trip ends, which is the next flight.
+      // Aligned a little below the top so the flown leg above stays
+      // half-visible — a list that starts hard against its first row looks
+      // like a list with nothing above it.
+      function startAtCurrent() {
+        const target = body.querySelector('.live-row')
+                    || document.getElementById('past-anchor');
+        if (!target) return;
+        const top = target.getBoundingClientRect().top
+                  - body.getBoundingClientRect().top
+                  + body.scrollTop;
+        body.scrollTop = Math.max(0, top - 28);
+      }
+      // After layout has settled. Two passes: the first catches the common
+      // case, the second covers fonts and the map arriving late and
+      // changing row heights underneath it.
+      window.requestAnimationFrame(startAtCurrent);
+      window.setTimeout(startAtCurrent, 400);
+      window._ptSheetToCurrent = startAtCurrent;
+      // "Show on map" needs to get the sheet out of the way. Exposed rather
+      // than duplicated so there is one place that knows how to close it.
+      window._ptSheetClose = function() { if (open) setOpen(false); };
+    })();
+
     // ---- Scroll reveal. At rest the map is the background of the app,
     // with only the live flight card over it. Scrolling fades the map back
     // and the schedule forward. Driven by scroll position rather than a
     // transition so it tracks the finger instead of lagging behind it.
     (function() {
-      const scrim = document.getElementById('scroll-scrim');
-      const reveal = document.getElementById('reveal');
+      // THE SCROLL-DRIVEN REVEAL IS GONE (1.12.0).
+      //
+      // What stood here read window.scrollY and drove the scrim's opacity,
+      // the schedule's opacity, the schedule's pointer-events and the
+      // heads-up controls' opacity from it. The schedule is in a fixed
+      // sheet now and is never hidden, so there is nothing to fade in and
+      // no scroll position to fade it from — the document does not scroll
+      // at all any more.
+      //
+      // The heads-up controls kept their fade, because that part was never
+      // about revealing the schedule: the map buttons genuinely should
+      // recede when the sheet is opened over them. It is driven by the
+      // sheet's state now instead of by a scroll offset.
       const hud = document.querySelector('.map-hud');
-      if (!reveal) return;
-      // No map on this page (no flights at all) means nothing to reveal
-      // from behind — show the schedule outright.
-      if (!scrim) { reveal.style.opacity = '1'; return; }
-      // No reduced-motion bail-out. The old one set scrim opacity to 1 and
-      // returned, which hid the map behind a solid panel for the whole
-      // session on any device with Reduce Motion on.
-      // Opt in only now that we know the script is alive.
-      reveal.style.opacity = '0';
-      const RANGE = 190;
-      let queued = false;
-      let disabled = false;
-      function paint() {
-        queued = false;
-        // Turned off for good when the map failed to load. Without this,
-        // opening and closing the details panel called paint() directly and
-        // re-hid a schedule that has nothing to hide behind.
-        if (disabled) return;
-        // There WAS a freeze here that pinned the schedule to invisible
-        // whenever the details panel was open. It existed only because
-        // opening the panel used to scroll the page, and that scroll would
-        // otherwise have been read as "show me the schedule".
-        //
-        // Opening no longer moves the page at all — the card grows upward
-        // from a fixed bottom edge — so the freeze protected against
-        // something that can no longer happen, while remaining the one code
-        // path capable of leaving the whole schedule invisible with no way
-        // back. Deleted rather than patched. Scroll position alone decides,
-        // which is the rule everywhere else.
-        const p = Math.min(1, Math.max(0, (window.scrollY || 0) / RANGE));
-        scrim.style.opacity = p;
-        reveal.style.opacity = p;
-        // Untouchable while invisible, or a stray tap lands on a row
-        // nobody can see. Scrolling still works: that is on the page.
-        reveal.style.pointerEvents = p > 0.12 ? 'auto' : 'none';
-        if (hud) {
-          hud.style.opacity = 1 - p;
-          hud.style.pointerEvents = p > 0.5 ? 'none' : '';
-        }
-      }
-      function onScroll() {
-        if (queued) return;
-        queued = true;
-        window.requestAnimationFrame(paint);
-      }
-      window.addEventListener('scroll', onScroll, { passive: true });
-      window.addEventListener('resize', paint);
-      paint();
-
-      // Called the moment the details panel opens or closes, so the freeze
-      // above takes effect on the same frame rather than waiting for the
-      // next scroll event.
-      window._ptPaintReveal = paint;
-
-      // If the map never comes up there is nothing to reveal from behind,
-      // so the effect stops being an effect and becomes a way of hiding the
-      // schedule for no reason. The map block calls this on failure.
-      window._ptRevealOff = function() {
-        disabled = true;
-        reveal.style.opacity = '1';
-        reveal.style.pointerEvents = 'auto';
-        scrim.style.opacity = '0';
-        window.removeEventListener('scroll', onScroll);
+      window._ptHudForSheet = function(open) {
+        if (!hud) return;
+        hud.style.opacity = open ? 0 : 1;
+        hud.style.pointerEvents = open ? 'none' : '';
       };
+      window._ptHudForSheet(false);
+
+      // Both of these are now no-ops kept ONLY as call sites, because the
+      // things that called them are in other blocks and a missing global
+      // throws. _ptPaintReveal ran on every details open/close; _ptRevealOff
+      // was the map's failure hatch, which mattered when a dead map meant a
+      // permanently hidden schedule. The sheet cannot hide the schedule, so
+      // there is nothing left for either to undo.
+      window._ptPaintReveal = function() {};
+      window._ptRevealOff = function() {};
     })();
 
     (function() {
@@ -1942,7 +2072,13 @@
         const vh = window.innerHeight;
         const cardTop = window._ptCardTop || Math.round(vh * 0.58);
         let top = 96;
-        let bottom = Math.max(48, vh - cardTop + 20);
+        // Bottom padding has to clear the SHEET, not just the card. The
+        // card sits directly on the sheet's top edge, so measuring the
+        // sheet covers both — and it tracks the sheet opening, which the
+        // card's resting top alone would not.
+        const sheetEl = document.getElementById('sheet');
+        const sheetTop = sheetEl ? sheetEl.getBoundingClientRect().top : vh;
+        let bottom = Math.max(48, vh - Math.min(cardTop, sheetTop) + 20);
         // On a very short window the two paddings can ask for more room than
         // exists, which makes Leaflet zoom out to the whole planet. Cap them.
         if (top + bottom > vh - 90) {
@@ -2646,6 +2782,31 @@
       tickRelativeTimes();
       window.addEventListener('pt:detail-rendered', tickRelativeTimes);
 
+      // SHOW ON MAP. These nine lines sat after the closing html tag,
+      // outside every
+      // script tag on the page — since at least 1.8.0, so the link in
+      // every row's dropdown has never once worked. The browser parses
+      // content after the closing html tag as text, not code, which
+      // is why it failed silently rather than erroring: there was
+      // nothing there to error.
+      //
+      // tests_ui_fixes asserted this feature existed and passed throughout,
+      // because it grepped the template for the text. A string being
+      // present in a file is not the same as it running, and for anything
+      // whose position in the document decides whether it executes, only
+      // the position is worth asserting. See the added check there.
+      document.addEventListener('click', function(e) {
+        const onMap = e.target.closest ? e.target.closest('[data-show-on-map]') : null;
+        if (!onMap) return;
+        e.preventDefault();
+        e.stopPropagation();
+        selectLeg(onMap.getAttribute('data-show-on-map'));
+        // Send them back to the map they just asked to look at. Used to be
+        // window.scrollTo(0), which did nothing once the page stopped
+        // scrolling; the sheet has to come down instead.
+        if (window._ptSheetClose) window._ptSheetClose();
+      });
+
       setInterval(refreshLiveData, {{ poll_ms }});
     })();
   </script>
@@ -2653,12 +2814,3 @@
 {% include "partials/sw_register.html" %}
 </body>
 </html>
-      document.addEventListener('click', function(e) {
-        const onMap = e.target.closest ? e.target.closest('[data-show-on-map]') : null;
-        if (!onMap) return;
-        e.preventDefault();
-        e.stopPropagation();
-        selectLeg(onMap.getAttribute('data-show-on-map'));
-        // Send them back up to the map they just asked to look at.
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      });

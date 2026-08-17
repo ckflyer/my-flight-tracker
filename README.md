@@ -1,7 +1,7 @@
 # MyPilot
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.11.0.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.12.0.
 
 The version above was stale at 1.4.0 for five releases. `app/version.py`
 is the only authority; this line is a convenience and nothing reads it.
@@ -48,7 +48,7 @@ seriously.
 
 ## STATE
 
-**v1.11.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+**v1.12.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
 owner plus several FOs, who fly the same legs — hence shared flight rows
 (v5.1, retained).
 
@@ -69,7 +69,7 @@ page split (1.6.0–1.7.0). All three came out of the same problem — the app
 could not be OPERATED without SSH, and bugs could not be reproduced without
 flying a trip.
 
-Tests: **1,125**, eleven suites, all passing.
+Tests: **1,137**, eleven suites, all passing.
 
 **Current work: the UI chunks (1.9.0 onward).** Five agreed steps, owner's
 brief, reworking the tracker and calendar around one flight-strip
@@ -82,9 +82,9 @@ become the history browser before past flights could leave the tracker.
 |---|---|---|
 | 1 | the `.fstrip` component + the current flight card | **DONE 1.9.0** |
 | 2 | the expanded view, on the reference layout | **DONE 1.10.0-1.10.2** |
-| 3 | tracker list: current trip only, no past-flights toggle, positioned on the live leg | **1.11.0 — scope/strips done, POSITIONING NOT DONE** |
-| 3b | the list's scroll position, and the row dropdown onto `.aptblock` | next |
-| 4 | calendar: expandable strips with history and a mini map | |
+| 3 | tracker list: current trip only, no past-flights toggle, positioned on the live leg | **DONE 1.11.0 + 1.12.0** |
+| 3b | the row dropdown onto `.aptblock` (scroll position solved by the sheet) | after 4 |
+| 4 | calendar: expandable strips with history and a mini map | next |
 | 5 | regression pass across themes, time formats and the odd states | |
 
 Step 3 carries a DECIDED behaviour worth not re-litigating: once a trip
@@ -99,7 +99,7 @@ the tracker entirely — they belong to step 4's calendar.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, placeholder filter |
-| `tests_ui_fixes.py` | 512 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
+| `tests_ui_fixes.py` | 524 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
 | `tests_app_shell.py` | 167 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
 | `tests_timezones.py` | 68 | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
 | `tests_closeout_sweep.py` | 42 | the abandonment cliff, the on-ground handover, the late gate-in chase and its cap |
@@ -871,6 +871,18 @@ Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
     time takes that time's colour, never a fixed one for its direction.
     (1.9.0)
 
+29. **The page does not scroll; the sheet does.** Six things once agreed
+    about `window.scrollY` — scrim, schedule opacity, pointer-events,
+    heads-up controls, card height, map framing — and three releases were
+    spent on what happened when they disagreed. The schedule's scrollbar
+    is its own. Nothing new may be driven from the document's scroll
+    offset. (1.12.0)
+30. **A string in a template is not a running line of code.** "Show on
+    map" sat outside every script block for five releases while a test
+    asserted its presence and passed. Where POSITION decides whether code
+    executes — inside a script block, inside the right closure, before the
+    thing it calls — assert the position. (1.12.0)
+
 ## MODULE MAP
 
 ```
@@ -1614,13 +1626,13 @@ python tests_poller_end_to_end.py   #  47
 python tests_past_leg_detail.py     #  19
 python tests_budget_limit.py        #  17
 python tests_carrier_cap.py         #  13
-python tests_ui_fixes.py            # 512
+python tests_ui_fixes.py            # 524
 python tests_app_shell.py           # 167
 python tests_timezones.py           #  68
 python tests_closeout_sweep.py      #  42
 python tests_import_merge.py        #  39
 python tests_test_mode.py           # 133
-```                                  # 1125
+```                                  # 1137
 
 Each uses its own scratch DB via `PT_DB_FILE`. Read
 `tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
@@ -1650,6 +1662,62 @@ invariant 1.
   exactly this reason.
 
 ## VERSION HISTORY
+
+### 1.12.0 — the flight sheet
+
+Owner's design. The schedule moves into a bottom sheet that rests PEEKING
+over the map, with its own scrollbar, opened by drag or tap. This deletes
+a system rather than adding one.
+
+**Why this was worth doing.** The page's scroll offset drove the scrim's
+opacity, the schedule's opacity, the schedule's pointer-events, the
+heads-up controls, the card's height and the map's framing — six things
+agreeing about one number. Three consecutive releases went on what
+happened when they did not: the creeping bottom edge (1.10.1, 1.10.2),
+the map re-fitting twice per collapse (1.10.1), the map swallowing scrolls
+meant for the schedule (1.10.2). And 3b — start the list on the current
+flight — was declared not-worth-the-risk in 1.11.0 precisely because it
+meant re-deriving all six. In the sheet it is one assignment to
+`scrollTop`, because the sheet owns its own scrollbar and nothing else is
+measured against it.
+
+**It rests peeking, not shut.** A button that hides the schedule would
+repeat a mistake this README already records: "Flight details" once hid
+the entire list behind a small grey line of text, and the schedule is the
+reason the page exists. Two flights are visible at rest; the rest is a
+drag away.
+
+**One substitution did most of the work.** The card was ALREADY
+bottom-anchored and already grew upward into the map — it simply measured
+against the tab pills. `tabTop()` now returns the sheet's top edge. Nothing
+in `layout()` or `capPanel()` changed at all.
+
+**Deleted:** `.scroll-scrim`, `.hero-space`'s reason for existing, the
+scroll listener and its rAF paint, `.map-shield` (1.10.2). The shield went
+because the document no longer scrolls, so there is no page scroll for the
+map to steal — the root cause rather than the cover for it. `_ptPaintReveal`
+and `_ptRevealOff` survive as no-ops only because other blocks call them.
+
+**BUG, PRE-EXISTING SINCE AT LEAST 1.8.0: "Show on map" never worked.**
+Nine lines — the entire click handler — sat after the closing html tag,
+outside every script block on the page. Browsers parse content there as
+TEXT, so it failed silently rather than erroring: there was nothing there
+to error. Every row's dropdown has offered a dead link for five releases.
+
+`tests_ui_fixes` asserted the feature existed and passed throughout,
+because it grepped the template for the handler's own text. A string being
+present in a file is not the same as it running. The replacement asserts
+the POSITION — nothing after the closing html tag, no code outside a
+script block, and the handler inside the IIFE where `selectLeg` is
+actually declared, since `selectLeg` is not on `window`.
+
+Found by chasing an unrelated `window.scrollTo` that the sheet made
+obsolete.
+
+Tests: 1,125 → 1,137. `test_scroll_reveal` became `test_flight_sheet`,
+carrying forward the two lessons it existed to guard: the schedule must
+not be hidden by CSS with the script relied on to restore it (v6.1), and
+the sheet must not live inside the map's IIFE (v6.2).
 
 ### 1.11.0 — the tracker list is the trip you are on
 

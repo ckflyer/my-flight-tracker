@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.env
+.venv/
+venv/
+ENV/
+
+# Data (optional – remove this line if you want schedule.json tracked)
+data/schedule.json
+data/flighttracker.db
+data/flighttracker.db-*
+data/secret_key.txt
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs / runtime
+*.log
+.uvicorn/
+
+data/settings.json

@@ -670,37 +670,87 @@ def test_full_bleed_map():
           "matchMedia('(prefers-reduced-motion: reduce)')" not in html)
 
 
-def test_scroll_reveal():
+def test_flight_sheet():
+    """The schedule lives in a fixed sheet with its own scrollbar. (1.12.0)
+
+    Replaces test_scroll_reveal. The scroll-driven reveal drove the scrim,
+    the schedule, the card's height, the map's framing and the heads-up
+    controls from ONE number — the page's scroll offset — and three
+    releases went on what happened when they disagreed. The sheet is
+    furniture; nothing else is measured against the page's scroll because
+    the page no longer scrolls.
+
+    The three checks that matter here are inherited from real failures and
+    must survive any redesign, so they are restated rather than dropped.
+    """
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
         html = fh.read()
-    check("the schedule starts hidden behind the map", 'id="reveal"' in html)
-    rev = html[html.find(".reveal {"):]
-    rev = rev[:rev.find("}")]
-    # NOT hidden in CSS. v6.1 shipped .reveal { opacity: 0 } and relied on
-    # the script to bring it back, so when Leaflet 404'd and the script died
-    # the schedule vanished along with the map. The script opts INTO the
-    # effect once it is known to be running.
-    check("the schedule is not hidden by CSS alone", "opacity: 0" not in rev)
-    check("...the script hides it only once alive",
-          "reveal.style.opacity = '0';" in html)
-    # A one-leg day would otherwise leave the page too short to scroll, so
-    # the list could never be revealed at all.
-    check("...with the page guaranteed scrollable", "min-height" in rev)
-    check("scroll drives it, not a timed animation", "requestAnimationFrame(paint)" in html)
-    check("invisible rows cannot be tapped", "pointerEvents" in html)
-    check("reduced motion skips the effect", "prefers-reduced-motion" in html)
 
-    # The failure that produced v6.2: the reveal lived INSIDE the map's
-    # IIFE, so a missing Leaflet took the map and the schedule down together.
-    scroll_at = html.find("// ---- Scroll reveal")
+    check("the sheet exists", 'class="sheet" id="sheet"' in html)
+    check("...and rests PEEKING, not shut", "--sheet-peek" in html and "--sheet-full" in html)
+    check("...with its own scrollbar", ".sheet-body {" in html and "overflow-y: auto" in html)
+    check("...that a flick cannot leak out of", "overscroll-behavior: contain" in html)
+
+    # LESSON FROM v6.1: the schedule was hidden in CSS with the script
+    # relied on to bring it back, so a 404 on Leaflet took the schedule
+    # down with the map. Here the equivalent risk is killing the document's
+    # scrollbar from CSS: if the script then dies, there is no sheet
+    # scrolling AND no page scrolling, and the schedule is unreachable.
+    check("the page's scrollbar is not killed by CSS alone",
+          "body.has-sheet { overflow: hidden; }" in html
+          and "\n    body { overflow: hidden" not in html)
+    check("...the script opts in only once it is alive",
+          "document.body.classList.add('has-sheet');" in html)
+
+    # LESSON FROM v6.2: the reveal lived inside the map's IIFE, so a
+    # missing Leaflet took the schedule down with the map.
+    sheet_at = html.find("// ---- THE FLIGHT SHEET")
     map_at = html.find("const mapEl = document.getElementById('flight-map')")
-    check("the reveal does not live inside the map block",
-          scroll_at != -1 and map_at != -1 and scroll_at < map_at)
+    check("the sheet does not live inside the map block",
+          sheet_at != -1 and map_at != -1 and sheet_at < map_at)
     check("a missing Leaflet is caught, not thrown",
           "typeof L === 'undefined'" in html)
     check("...and says so instead of showing a blank", "Map unavailable" in html)
-    check("...and hands the schedule back", "_ptRevealOff" in html)
+
+    # THE POINT OF THE WHOLE EXERCISE: the list starts on the current
+    # flight. Impossible in the old layout without moving flown legs above
+    # the card and re-deriving the card's position with them.
+    check("the list starts on the current flight",
+          "function startAtCurrent()" in html)
+    check("...falling back to the landmark when nothing is live",
+          "document.getElementById('past-anchor')" in html)
+    check("...and re-runs once late layout settles",
+          "window.setTimeout(startAtCurrent, 400)" in html)
+
+    # The card was ALREADY bottom-anchored; it just had the wrong thing to
+    # measure against. If this regresses, the card overlaps the sheet.
+    check("the card parks against the sheet, not the tab bar",
+          "var sheet = document.getElementById('sheet');" in html
+          and "if (sr.height) return sr.top;" in html)
+    check("...and re-lays out when the sheet settles",
+          "window._ptLayoutHero();" in html)
+
+    # Dragging must be taken from the GRIP only. Listening on the sheet
+    # would steal every scroll gesture inside the list.
+    for ev in ("touchstart", "touchmove", "touchend"):
+        check(f"the drag listens on the grip: {ev}",
+              f"grip.addEventListener('{ev}'" in html)
+    check("no drag handler is bound to the sheet body",
+          "body.addEventListener('touchmove'" not in html)
+    # An inline height left over from a drag outranks both CSS heights and
+    # would freeze the sheet wherever the finger let go.
+    check("the drag's inline height is cleared before the class decides",
+          "sheet.style.height = '';" in html)
+
+    # The scrim is gone entirely, not merely faded.
+    code = re.sub(r"^\s*//.*$", "", html, flags=re.M)
+    code = re.sub(r"/\*.*?\*/", "", code, flags=re.S)
+    code = re.sub(r"\{#.*?#\}", "", code, flags=re.S)
+    check("the scrim is gone", "scroll-scrim" not in code)
+    check("...and so is the map shield it needed", "map-shield" not in code)
+    check("reduce-motion still cannot bury the map",
+          ".scroll-scrim { opacity: 1 !important; }" not in html)
 
 
 def test_show_on_map_action():
@@ -710,7 +760,25 @@ def test_show_on_map_action():
         html = fh.read()
     check("each row offers Show on map", "data-show-on-map" in html)
     check("...wired to selectLeg", "selectLeg(onMap.getAttribute('data-show-on-map'))" in html)
-    check("...and returns you to the map", "window.scrollTo({ top: 0" in html)
+    check("...and returns you to the map by lowering the sheet",
+          "window._ptSheetClose()" in html)
+    # THE CHECK THAT WOULD HAVE CAUGHT IT. This handler sat after the
+    # closing html tag — outside every script block — since at least
+    # 1.8.0, so it never ran once, and the assertions above passed the
+    # whole time because they grepped the template for their own text.
+    # A string being present in a file is not the same as it executing.
+    # For anything whose POSITION decides whether it runs, assert the
+    # position.
+    tail = html[html.rindex("</script>"):]
+    check("no code sits outside a script block",
+          "addEventListener" not in tail and "function" not in tail, tail[:120])
+    check("...and nothing at all follows the closing html tag",
+          html[html.rindex("</html>") + 7:].strip() == "")
+    # selectLeg is declared inside the polling IIFE and is not on window,
+    # so a handler calling it has to live inside that same IIFE.
+    check("the handler can actually see selectLeg",
+          html.index("function selectLeg(legId, opts)") < html.index("// SHOW ON MAP")
+          < html.index("    })();", html.index("// SHOW ON MAP")))
     check("a bare row tap still only expands",
           "It deliberately\n      // does NOT move the card or the map" in html
           or "does NOT move the card" in html)
@@ -811,8 +879,8 @@ def test_expanding_does_not_disturb_map_or_schedule():
     check("the scroll fade is not frozen while the panel is open",
           "reveal.style.opacity = '0';\n          reveal.style.pointerEvents = 'none';"
           not in html)
-    check("...so scroll position alone drives it",
-          "const p = Math.min(1, Math.max(0, (window.scrollY || 0) / RANGE));" in html)
+    check("...and nothing pins the schedule invisible any more",
+          "reveal.style.opacity" not in html)
 
 
 def test_card_grows_upward_from_a_fixed_bottom_edge():
@@ -1509,32 +1577,36 @@ def test_list_dropdown_follows_the_same_decisions():
           "esc(d.arrival_source)" not in code)
 
 
-def test_map_does_not_steal_the_scroll():
-    """A drag below the card's top edge scrolls the page. (1.10.2)
+def test_map_cannot_steal_the_scroll():
+    """Superseded by the sheet, and the guarantee is now stronger. (1.12.0)
 
-    The map is a fixed full-screen layer BEHIND the page, so it is still
-    there below the card: in the margins either side of it, in the gap
-    above the tab pills, behind anything the list does not physically
-    cover. Leaflet will happily take a touch through a transparent gap, so
-    scrolling toward next week's flights sometimes panned the map sideways
-    instead, depending on where a thumb landed.
+    1.10.2 added .map-shield: an invisible sheet over the map below the
+    card, because the map is a fixed full-screen layer and Leaflet takes a
+    touch through any transparent gap, so scrolling toward next week's
+    flights sometimes panned the map instead.
+
+    The sheet removes the problem at its root rather than covering it. The
+    document does not scroll at all now — the only scrollable region on the
+    page is inside the sheet, and the sheet is opaque. There is no page
+    scroll left for the map to steal, so the shield is deleted rather than
+    kept as belt and braces: an invisible full-width element that swallows
+    taps is not something to leave lying around once its reason is gone.
     """
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
         html = fh.read()
+    code = re.sub(r"^\s*//.*$", "", html, flags=re.M)
+    code = re.sub(r"/\*.*?\*/", "", code, flags=re.S)
+    code = re.sub(r"\{#.*?#\}", "", code, flags=re.S)
 
-    check("the shield exists", 'class="map-shield"' in html)
-    block = html.split(".map-shield {", 1)[1].split("}", 1)[0]
-    check("it starts at the card's top edge, not the top of the window",
-          "top: var(--card-top)" in block, block)
-    check("...and runs to the bottom", "bottom: 0" in block, block)
-    # Above the map (0) and below the page (20): it must steal from
-    # neither. The scrim sits at 1.
-    check("it sits between the map and the page", "z-index: 2" in block, block)
-    check("vertical drags are declared as page scrolls",
-          "touch-action: pan-y" in block, block)
-    # The strip of map ABOVE the card is deliberately still pannable.
-    check("the visible map is left alone", "top: 0" not in block, block)
+    check("the shield is gone", "map-shield" not in code)
+    check("the document no longer scrolls", "body.has-sheet { overflow: hidden; }" in html)
+    check("...and the only scroller is the sheet's own body",
+          ".sheet-body {" in html and "overflow-y: auto" in html)
+    # The strip of map ABOVE the card is still pannable — that was true of
+    # the shield too, and it is the part you can actually see.
+    check("the visible map is still live",
+          'id="flight-map"' in html)
 
 
 def test_refit_glides_rather_than_snapping():
@@ -1802,7 +1874,7 @@ def main():
     test_schedule_works_without_the_map()
     test_session_key_survives_redeploy()
     test_scheduled_time_line_is_marked_as_an_echo()
-    test_scroll_reveal()
+    test_flight_sheet()
     test_show_on_map_action()
     test_settings_budget_saves()
     test_no_hardcoded_palette_colours()
@@ -1816,7 +1888,7 @@ def main():
     test_strip_times_fold_when_the_panel_opens()
     test_map_refits_once_and_only_when_still()
     test_list_dropdown_follows_the_same_decisions()
-    test_map_does_not_steal_the_scroll()
+    test_map_cannot_steal_the_scroll()
     test_refit_glides_rather_than_snapping()
     test_tracker_is_scoped_to_this_trip_and_the_next()
     test_list_rows_carry_delay_state()
