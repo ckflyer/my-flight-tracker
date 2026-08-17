@@ -1,7 +1,7 @@
 # MyPilot
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.10.0.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.10.1.
 
 The version above was stale at 1.4.0 for five releases. `app/version.py`
 is the only authority; this line is a convenience and nothing reads it.
@@ -48,7 +48,7 @@ seriously.
 
 ## STATE
 
-**v1.10.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+**v1.10.1.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
 owner plus several FOs, who fly the same legs — hence shared flight rows
 (v5.1, retained).
 
@@ -69,7 +69,7 @@ page split (1.6.0–1.7.0). All three came out of the same problem — the app
 could not be OPERATED without SSH, and bugs could not be reproduced without
 flying a trip.
 
-Tests: **1,067**, eleven suites, all passing.
+Tests: **1,089**, eleven suites, all passing.
 
 **Current work: the UI chunks (1.9.0 onward).** Five agreed steps, owner's
 brief, reworking the tracker and calendar around one flight-strip
@@ -81,7 +81,7 @@ become the history browser before past flights could leave the tracker.
 | Step | What | State |
 |---|---|---|
 | 1 | the `.fstrip` component + the current flight card | **DONE 1.9.0** |
-| 2 | the expanded view, on the reference layout | **DONE 1.10.0** |
+| 2 | the expanded view, on the reference layout | **DONE 1.10.0 + 1.10.1** |
 | 3 | tracker list: current trip only, no past-flights toggle, positioned on the live leg | next |
 | 4 | calendar: expandable strips with history and a mini map | |
 | 5 | regression pass across themes, time formats and the odd states | |
@@ -98,7 +98,7 @@ the tracker entirely — they belong to step 4's calendar.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, placeholder filter |
-| `tests_ui_fixes.py` | 454 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
+| `tests_ui_fixes.py` | 476 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
 | `tests_app_shell.py` | 167 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
 | `tests_timezones.py` | 68 | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
 | `tests_closeout_sweep.py` | 42 | the abandonment cliff, the on-ground handover, the late gate-in chase and its cap |
@@ -854,7 +854,14 @@ Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
     twelve minutes late and lands on time is not a late flight, and the
     people reading this app are asking when he gets there, not when he
     left. (1.10.0)
-27. **Green means EARLY. On time is plain.** Not a style preference: green
+27. **When one fact is drawn twice, fix both or neither.** 1.10.0 rebuilt
+    the card's expanded panel and left the flight list's `renderLegDetail`
+    — a second renderer for the same information — untouched, so the
+    release read as undeployed to the person who happened to tap the other
+    one. Before changing how anything is displayed, grep for every surface
+    that displays it. This is invariant 25 stated as a working habit
+    rather than as a component. (1.10.1)
+28. **Green means EARLY. On time is plain.** Not a style preference: green
     on every normal flight is wallpaper, which is the same argument that
     killed the on-time pill, AND it would make "the airline reported on
     time" indistinguishable from "the airline has reported nothing" — two
@@ -1606,13 +1613,13 @@ python tests_poller_end_to_end.py   #  47
 python tests_past_leg_detail.py     #  19
 python tests_budget_limit.py        #  17
 python tests_carrier_cap.py         #  13
-python tests_ui_fixes.py            # 454
+python tests_ui_fixes.py            # 476
 python tests_app_shell.py           # 167
 python tests_timezones.py           #  68
 python tests_closeout_sweep.py      #  42
 python tests_import_merge.py        #  39
 python tests_test_mode.py           # 133
-```                                  # 1067
+```                                  # 1089
 
 Each uses its own scratch DB via `PT_DB_FILE`. Read
 `tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
@@ -1642,6 +1649,76 @@ invariant 1.
   exactly this reason.
 
 ## VERSION HISTORY
+
+### 1.10.1 — finishing step 2: three bugs behind one symptom
+
+Reported as "deployed 1.10.0, nothing changed, Closed out is still
+there". The deploy was fine. Three separate faults were hiding behind
+that one sentence, and the first is the reason the release looked inert.
+
+**THE FLIGHT LIST HAS ITS OWN RENDERER, and 1.10.0 missed it.** There are
+two expanded views in this app: the card's panel, and the dropdown inside
+each flight-list row, which `renderLegDetail` builds as a second
+label/value list in JavaScript. Every 1.10.0 decision was applied to the
+card only. So the surface the owner happened to tap still said "Closed
+out", still stacked its rows the old way, and the whole release read as
+undeployed. Exactly the failure invariant 25 exists to prevent, committed
+while writing the component that prevents it. "Closed out" is dropped
+here and the arrival source now reads in English; the list's full move to
+`.fstrip` is 1.11.0.
+
+**BUG: the live box CONTAINED the flight detail.** `#flight-detail` was a
+child of `#live-section`. Invisible in the source — the indentation
+showed them as siblings, they read as siblings, and nothing in the panel
+suggested otherwise — but `applyLegPayload` hides `#live-section`
+whenever the selected leg is not the live one. So tapping any past or
+future flight and opening the card produced a COMPLETELY EMPTY panel: no
+times, no gates, no airport blocks. The times were never missing; they
+were inside a hidden parent. Nothing pointed at the cause, because the
+code doing the hiding names only the live box. Found while moving the
+ADS-B block, not by looking for it.
+
+**The ADS-B box moved BELOW the flight detail.** The panel opens directly
+under the progress bar, so whatever comes first is what the reader lands
+on. Altitude and groundspeed are the pilot's numbers; when he gets there
+is everyone else's. This is also what un-nested the two blocks.
+
+**The strip's times fold away when the panel opens.** The panel states the
+same two times better — bigger, with the original struck through beside
+them, with the gate attached — so leaving the summary up printed every
+time twice, in two sizes, three inches apart. Animated on `max-height`
+rather than `height`, because the zone superscript is lifted above its
+own baseline by a transform and a hard height clips it.
+
+The spacer maths had to learn about it. That row folding changes the
+card's height mid-slide, and the whole `cardBase`/`target` dance exists to
+weld the card's BOTTOM edge in place by predicting its height before the
+animation runs. Left out, the bottom edge crept ~22px across the 260ms.
+`endsHeight` is measured only while the card is SHUT and remembered,
+because measuring on the way open reads a row that has already started
+folding.
+
+**BUG: hiding the details re-fitted the map TWICE.** `.expanded` comes off
+before the 300ms slide begins — it has to, because `layout()` branches on
+it — so the old guard let a fit run immediately, against a card height
+300ms in the future. The settle pass at 320ms then measured the real
+height and fitted again. Two `fitBounds` calls with different padding, a
+third of a second apart: the map lurched out and back on every collapse.
+`window._ptSliding` now suppresses the fit until the card has stopped
+moving, and `lastTop` is deliberately not updated on a skipped fit so the
+settle pass still performs the one real one.
+
+**BUG: the card header jumped a frame into every slide.** A rule let the
+city pair re-wrap to two lines the instant `.expanded` flipped, while
+everything below it slid smoothly over 260ms. Dropped — since 1.10.0 the
+panel spells out both airports in full, by name, so the summary above can
+truncate consistently in both states, which is also what makes it
+animatable.
+
+Tests: 1,067 → 1,089. One older assertion was rewritten to match intent
+rather than an exact expression: it pinned `cardBase + target`, which the
+folding row legitimately changed, and a test that pins arithmetic makes
+every future correction look like a regression.
 
 ### 1.10.0 — the expanded view, one box per airport
 

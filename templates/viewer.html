@@ -505,17 +505,17 @@
     /* A slide IS motion, so this one genuinely belongs behind the setting —
        unlike the old rule that used it to paint over the whole map. Panel
        still opens, just instantly. */
-    /* Expanded, there's room to show the whole city pair, so let long
-       names wrap instead of truncating to "Corpus Ch...". The sizes that
-       used to sit beside this rule are gone: .fstrip--lg owns them now,
-       and having the card restate them was how the hero ended up 1.4rem
-       in one place and 1.25rem in another. */
-    .collapsed-card.expanded .fstrip-cities {
-      white-space: normal;
-      overflow: visible;
-      text-overflow: clip;
-      line-height: 1.25;
-    }
+    /* The rule that let the city pair WRAP while expanded is gone (1.10.1).
+       It changed .fstrip-cities from nowrap to normal the instant the class
+       flipped, so a long pair ("Dallas-Fort Worth to Northwest Arkansas")
+       grew a second line in a single frame while the panel below it slid
+       smoothly over 260ms. That one-frame jump, at the top of the card, is
+       most of what made the open and close look broken.
+
+       Nothing is lost by dropping it: since 1.10.0 the panel spells out
+       BOTH airports in full, by name, in their own blocks. The truncated
+       summary above is a summary, and it now truncates consistently in
+       both states — which is also why it can be animated at all. */
     #back-to-active {
       margin-top: 0.6rem;
     }
@@ -739,38 +739,6 @@
 
     <div class="expand-details" id="expand-details">
       <div class="ed-inner">
-        <div id="live-section" style="{{ '' if is_selected_live else 'display:none' }}">
-        <div class="live-box {{ '' if live else 'muted-live' }}" id="live-box-el">
-          <div id="live-box-inner">
-            {% if live %}
-            <div class="label">Live ADS-B</div>
-            <div class="live-grid">
-              {% if live.altitude_ft is not none %}
-              <div><span class="live-val">{{ live.altitude_ft }}</span> <span class="live-unit">ft</span></div>
-              {% endif %}
-              {% if live.speed_kts is not none %}
-              <div><span class="live-val">{{ live.speed_kts }}</span> <span class="live-unit">kts</span></div>
-              {% endif %}
-              {% if live.track is not none %}
-              <div><span class="live-val">{{ live.track|int }}°</span> <span class="live-unit">trk</span></div>
-              {% endif %}
-              {% if live.on_ground %}
-              <div><span class="live-val">On ground</span></div>
-              {% endif %}
-            </div>
-            {% if live.icao24 %}
-            <div class="live-meta">ICAO {{ live.icao24 }}{% if live.callsign %} · {{ live.callsign }}{% endif %}</div>
-            {% endif %}
-            {% if current.aircraft and (current.aircraft.registration or current.aircraft.display_type) %}
-            <div class="aircraft-line">
-              {{ current.aircraft.registration or '' }}{% if current.aircraft.registration and current.aircraft.display_type %} · {% endif %}{{ current.aircraft.display_type or '' }}
-            </div>
-            {% endif %}
-            {% else %}
-            No live ADS-B position right now
-            {% endif %}
-          </div>
-        </div>
         {# THE EXPANDED VIEW, on the reference layout: one block per
            AIRPORT rather than a column of label/value pairs. The old shape
            split one airport's story across four rows ("Arrival", "XNA
@@ -859,6 +827,57 @@
               <span class="k">Diverted to</span>
               <span class="v late" id="v-diverted">{{ current.diversion.diverted_to if current.diversion else '' }}</span>
             </div>
+          </div>
+        </div>
+
+        {# LIVE ADS-B SITS BELOW THE FLIGHT, not above it (1.10.1). Two
+           reasons, and the second is the important one.
+
+           Order: the panel opens directly under the progress bar, so
+           whatever comes first is what the reader lands on. Altitude and
+           groundspeed are the pilot's numbers; when he gets there is
+           everyone else's. The times go first.
+
+           Nesting: this block used to WRAP the flight detail. Not
+           visibly — the indentation showed them as siblings and they read
+           as siblings — but #flight-detail was a child of #live-section,
+           and applyLegPayload hides #live-section whenever the selected
+           leg is not the live one. So tapping any past or future flight
+           and opening the card produced a COMPLETELY EMPTY panel: no
+           times, no gates, no airport blocks. The times were never
+           missing, they were inside a hidden parent. Nothing pointed at
+           the real cause, because the code that did the hiding names only
+           the live box. They are genuine siblings now. #}
+        <div id="live-section" style="{{ '' if is_selected_live else 'display:none' }}">
+        <div class="live-box {{ '' if live else 'muted-live' }}" id="live-box-el">
+          <div id="live-box-inner">
+            {% if live %}
+            <div class="label">Live ADS-B</div>
+            <div class="live-grid">
+              {% if live.altitude_ft is not none %}
+              <div><span class="live-val">{{ live.altitude_ft }}</span> <span class="live-unit">ft</span></div>
+              {% endif %}
+              {% if live.speed_kts is not none %}
+              <div><span class="live-val">{{ live.speed_kts }}</span> <span class="live-unit">kts</span></div>
+              {% endif %}
+              {% if live.track is not none %}
+              <div><span class="live-val">{{ live.track|int }}°</span> <span class="live-unit">trk</span></div>
+              {% endif %}
+              {% if live.on_ground %}
+              <div><span class="live-val">On ground</span></div>
+              {% endif %}
+            </div>
+            {% if live.icao24 %}
+            <div class="live-meta">ICAO {{ live.icao24 }}{% if live.callsign %} · {{ live.callsign }}{% endif %}</div>
+            {% endif %}
+            {% if current.aircraft and (current.aircraft.registration or current.aircraft.display_type) %}
+            <div class="aircraft-line">
+              {{ current.aircraft.registration or '' }}{% if current.aircraft.registration and current.aircraft.display_type %} · {% endif %}{{ current.aircraft.display_type or '' }}
+            </div>
+            {% endif %}
+            {% else %}
+            No live ADS-B position right now
+            {% endif %}
           </div>
         </div>
         </div>
@@ -1013,6 +1032,26 @@
       // `instant` is used for the one call at start-up, which sets the
       // closed state before anyone is looking and must not animate.
       var slideTimer = null;
+
+      // HOW TALL THE STRIP'S TIMES ROW IS, when it is showing. That row
+      // folds away as the panel opens (see .fstrip-ends in app.css), which
+      // changes the card's height by its own height — and the spacer maths
+      // below welds the card's BOTTOM edge in place by predicting exactly
+      // how tall the card is about to be. Leave this out and the bottom
+      // edge creeps by ~22px over the 260ms, which is precisely the sort of
+      // drift the whole cardBase/target dance exists to prevent.
+      //
+      // Measured only while the card is SHUT, and remembered. Measuring it
+      // on the way open would read a row that has already started folding.
+      var endsEl = card.querySelector('.fstrip--lg .fstrip-ends');
+      var endsH = 0;
+      function measureEnds() {
+        if (!endsEl || card.classList.contains('expanded')) return;
+        var h = endsEl.getBoundingClientRect().height;
+        if (h > 0) endsH = h;
+      }
+      measureEnds();
+
       function slidePanel(open, instant) {
         if (slideTimer) { clearTimeout(slideTimer); slideTimer = null; }
         details.classList.remove('animating');
@@ -1020,8 +1059,14 @@
         if (instant) {
           details.classList.toggle('open', open);
           details.style.height = '';
+          window._ptSliding = false;
           return;
         }
+
+        // Read by layout(), in the other block, to suppress the map re-fit
+        // until the card has stopped moving. Lives on window because these
+        // two scripts share nothing else.
+        window._ptSliding = true;
 
         if (open) {
           details.classList.add('open');
@@ -1033,7 +1078,7 @@
           // than exists, it is now the capped height and scrolls internally
           // — which is what keeps the card's bottom edge, and the button on
           // it, exactly where it was when you tapped.
-          if (window._ptCapPanel) window._ptCapPanel();
+          if (window._ptCapPanel) window._ptCapPanel(endsH);
           var capPx = parseFloat(details.style.maxHeight) || natural;
           var target = Math.min(natural, capPx);
           if (target < natural - 1) details.classList.add('capped');
@@ -1051,7 +1096,9 @@
           // Shrink the spacer above the card by exactly what the panel is
           // about to add, on the same curve, so the card's bottom edge does
           // not move a pixel while its top edge slides up into the map.
-          if (window._ptLayoutHero) window._ptLayoutHero(cardBase + target, true);
+          // cardBase was measured with the times row still showing; it is
+          // about to fold away, so the card ends up that much shorter.
+          if (window._ptLayoutHero) window._ptLayoutHero(cardBase - endsH + target, true);
           // Back to auto once it arrives, so the panel can still grow when
           // live data lands in it while it is open. Pinned to a stale pixel
           // height, later content would be clipped.
@@ -1059,6 +1106,7 @@
             details.style.height = '';
             details.classList.remove('animating');
             slideTimer = null;
+            window._ptSliding = false;
           }, 300);
         } else {
           var shrinkBy = details.getBoundingClientRect().height;
@@ -1070,11 +1118,17 @@
           // Same trick in reverse: the card is about to lose the panel's
           // height, so the spacer grows back by the same amount, on the same
           // curve, and the bottom edge again holds still.
-          if (window._ptLayoutHero) window._ptLayoutHero(Math.max(0, cardBase), true);
+          // Mirror image: the times row is folded flat right now and is
+          // about to unfold, so the card ends up that much taller.
+          if (window._ptLayoutHero) window._ptLayoutHero(Math.max(0, cardBase + endsH), true);
           slideTimer = setTimeout(function() {
             details.classList.remove('open', 'animating', 'capped');
             details.style.height = '';
             slideTimer = null;
+            // Cleared BEFORE the 320ms settle pass runs, so that pass is
+            // the one allowed to re-fit the map — exactly once, against
+            // the card's real resting height.
+            window._ptSliding = false;
           }, 300);
         }
       }
@@ -1087,6 +1141,9 @@
         // route into the thin strip of map left above an open card (the map
         // "zooming into nothing"), and closing skipped the re-fit that would
         // have put it back.
+        // Must happen BEFORE the class flips: once .expanded is on, the
+        // times row has begun folding and measures short.
+        if (open) measureEnds();
         card.classList.toggle('expanded', open);
         slidePanel(open, instant);
         if (hintLabel) hintLabel.textContent = open ? 'Hide Details' : 'Flight Details';
@@ -1301,11 +1358,17 @@
       // Largest the details panel may be before it starts scrolling inside
       // itself. Everything the card shows above the panel — flight number,
       // route, times, progress, and the Show/Hide row — has to fit too.
-      function capPanel() {
+      // `shrinkingBy` is height the card is about to LOSE above the panel
+      // and has not lost yet — the folding times row. Without it the cap
+      // is short by that much and a long panel scrolls internally a little
+      // sooner than it needs to. Harmless but wrong, and wrong in a way
+      // that would be baffling to find later.
+      function capPanel(shrinkingBy) {
         var panel = document.getElementById('expand-details');
         if (!panel) return;
         var chrome = card.getBoundingClientRect().height -
-                     panel.getBoundingClientRect().height;
+                     panel.getBoundingClientRect().height -
+                     (shrinkingBy || 0);
         var room = tabTop() - GAP - minTop() - chrome;
         panel.style.maxHeight = Math.max(120, Math.round(room)) + 'px';
       }
@@ -1374,10 +1437,21 @@
         document.documentElement.style.setProperty('--card-top', actualTop + 'px');
         window._ptCardTop = actualTop;
 
-        // Re-frame the route only when the card has genuinely moved, and
-        // never while the details panel is open — the map is behind a full
-        // card then and re-fitting would only fight the user's own panning.
-        if (!card.classList.contains('expanded') &&
+        // Re-frame the route only when the card has genuinely moved, never
+        // while the details panel is open, and NEVER MID-SLIDE.
+        //
+        // That last clause is 1.10.1. Closing the card removes .expanded
+        // first (it has to — layout() branches on it), then starts a 300ms
+        // slide. The old code therefore re-fitted immediately, against a
+        // card height that was still 300ms in the future, and then the
+        // settle pass at 320ms measured the real height and fitted AGAIN.
+        // Two fitBounds calls with different padding, a third of a second
+        // apart: the map lurched out and then back, which reads as the map
+        // zooming out for no reason every time you hide the details.
+        //
+        // lastTop is deliberately NOT updated when we skip, so the settle
+        // pass still sees a difference and does the one real fit.
+        if (!card.classList.contains('expanded') && !window._ptSliding &&
             (lastTop === null || Math.abs(actualTop - lastTop) > 2)) {
           lastTop = actualTop;
           if (window._ptRefit) window._ptRefit();
@@ -1526,8 +1600,12 @@
         if (d.diversion && d.diversion.diverted_to) {
           add('Diverted to', esc(d.diversion.diverted_to), 'late');
         }
-        if (d.closed_by) add('Closed out', esc(String(d.closed_by).replace(/_/g, ' ')));
-        if (d.arrival_source) add('Arrival time from', esc(d.arrival_source));
+        // "Closed out" is NOT shown here either (1.10.1). It was removed
+        // from the card in 1.10.0 and this second renderer was missed —
+        // which is the whole reason the release looked like it had not
+        // deployed. Two places drawing one thing; the list's full move to
+        // the shared component is 1.11.0.
+        if (d.arrival_source_text) add('Arrival time from', esc(d.arrival_source_text));
         if (d.enriched_at) {
           rows.push('<div class="rd-row"><span class="k">Airline data</span>' +
                     '<span class="v" data-ago="' + esc(d.enriched_at_iso || '') +

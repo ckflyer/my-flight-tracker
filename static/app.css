@@ -229,6 +229,35 @@
   display: flex; align-items: center; gap: 0.9rem;
   font-size: var(--fstrip-ends);
 }
+/* THE STRIP'S TIMES FOLD AWAY WHEN THE PANEL OPENS (1.10.1). The expanded
+   view states the same two times better — bigger, with the original they
+   moved from struck through beside them, and with the gate and terminal
+   attached — so leaving the summary on screen means printing every time
+   twice, three inches apart, in two different sizes. The panel's times
+   land directly under the progress bar instead.
+
+   max-height, not height: the row's natural height depends on the font
+   and on the superscript zone, and a hard height would clip the zone,
+   which is lifted above its own baseline by a transform. 4rem is simply
+   "more than it will ever need" — the row is never that tall, so at rest
+   nothing is clipped and the cap does nothing at all.
+
+   The card's spacer maths has to know this row is going away, or the
+   bottom edge drifts by exactly its height while the panel slides. See
+   endsHeight() in the panel script. */
+.fstrip--lg .fstrip-ends {
+  max-height: 4rem;
+  overflow: hidden;
+  transition: max-height 260ms cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 150ms ease,
+              margin-top 260ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.collapsed-card.expanded .fstrip--lg .fstrip-ends {
+  max-height: 0; opacity: 0; margin-top: -0.2rem;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fstrip--lg .fstrip-ends { transition: none; }
+}
 .fstrip-end {
   display: inline-flex; align-items: center; gap: 0.3rem; min-width: 0;
 }

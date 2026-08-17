@@ -817,8 +817,14 @@ def test_card_grows_upward_from_a_fixed_bottom_edge():
           and ".expand-details.animating { transition: height 260ms cubic-bezier(0.4, 0, 0.2, 1); }" in html)
     check("layout accepts the card's pending height",
           "function layout(growTo, animate)" in html)
-    check("...and the panel hands it base+target rather than re-measuring",
-          "window._ptLayoutHero(cardBase + target, true)" in html)
+    # The point is that layout() is handed a PREDICTED height rather than
+    # re-measuring a card that is still animating. The exact arithmetic
+    # gained a term in 1.10.1 (the folding times row), so match the shape,
+    # not the literal — a test that pins the expression forces every future
+    # correction to look like a regression.
+    check("...and the panel hands it a predicted height, not a re-measure",
+          re.search(r"_ptLayoutHero\(cardBase[^)]*\+ target, true\)", html)
+          is not None)
 
     # The tab bar is BELOW this script in the document, so querying for it at
     # parse time returns null and every measurement silently falls back to a
@@ -1342,6 +1348,136 @@ def test_arrival_source_is_in_english():
           not any(v == k for k, v in ARRIVAL_SOURCE_TEXT.items()))
 
 
+def test_live_box_does_not_swallow_the_flight_detail():
+    """#flight-detail was a CHILD of #live-section. (1.10.1)
+
+    Invisible in the source — the indentation showed them as siblings and
+    they read as siblings — but applyLegPayload hides #live-section
+    whenever the selected leg is not the live one. So tapping any past or
+    future flight and opening the card gave a completely empty panel: no
+    times, no gates, no airport blocks. Nothing pointed at the cause,
+    because the code doing the hiding names only the live box.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    # Walk div depth through the panel and record where each block opens.
+    body = html.split('<div class="expand-details"', 1)[1]
+    depth, opens = 0, {}
+    for line in body.split("\n"):
+        for key, marker in (("live", 'id="live-section"'),
+                            ("detail", 'id="flight-detail"')):
+            if marker in line and key not in opens:
+                opens[key] = depth
+        depth += len(re.findall(r"<div\b", line)) - len(re.findall(r"</div>", line))
+        if depth < 0:
+            break
+    check("both blocks were found", "live" in opens and "detail" in opens, str(opens))
+    check("the live box does NOT contain the flight detail",
+          opens.get("live") == opens.get("detail"), str(opens))
+    # And the ADS-B numbers come SECOND: the panel opens right under the
+    # progress bar, so whatever is first is what the reader lands on.
+    # Altitude is the pilot's number; arrival time is everyone else's.
+    check("flight detail is above the ADS-B box",
+          body.index('id="flight-detail"') < body.index('id="live-section"'))
+
+
+def test_strip_times_fold_when_the_panel_opens():
+    """The panel says the same two times better, so the summary folds away.
+
+    And the card's spacer maths has to KNOW it folds, or the welded bottom
+    edge drifts by exactly the row's height across the 260ms slide — which
+    is the specific thing the whole cardBase/target dance exists to stop.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    with open(os.path.join(here, "static", "app.css"), encoding="utf-8") as fh:
+        css = fh.read()
+
+    check("the times row folds when expanded",
+          ".collapsed-card.expanded .fstrip--lg .fstrip-ends {" in css)
+    check("...only on the hero size", ".fstrip--lg .fstrip-ends {" in css)
+    # max-height, not height: the zone superscript is lifted above its own
+    # baseline by a transform, and a hard height would clip it.
+    block = css.split(".fstrip--lg .fstrip-ends {", 1)[1].split("}", 1)[0]
+    check("folded with max-height, so the zone is never clipped",
+          "max-height" in block and re.search(r"[^-]height:", block) is None, block)
+    check("...and it animates", "transition:" in block)
+    check("...unless motion is reduced",
+          ".fstrip--lg .fstrip-ends { transition: none; }" in css)
+
+    check("the spacer maths subtracts the folding row when opening",
+          "cardBase - endsH + target" in html)
+    check("...and adds it back when closing", "cardBase + endsH" in html)
+    check("the row is measured while SHUT, not mid-fold",
+          "if (open) measureEnds();" in html
+          and "card.classList.contains('expanded')) return;" in html)
+    check("the panel cap accounts for it too", "_ptCapPanel(endsH)" in html)
+
+    # The rule that let the city pair grow a second line the instant the
+    # class flipped is gone; it jumped the card header in one frame while
+    # everything below it slid over 260ms.
+    check("the city pair no longer re-wraps mid-animation",
+          ".collapsed-card.expanded .fstrip-cities {" not in html)
+
+
+def test_map_refits_once_and_only_when_still():
+    """Closing the card re-fitted the map TWICE. (1.10.1)
+
+    .expanded comes off before the 300ms slide starts, so the old guard
+    (which only checked that class) let a fit run immediately against a
+    card height 300ms in the future — then the settle pass at 320ms
+    measured the real height and fitted again. Two fitBounds calls with
+    different padding, a third of a second apart: the map lurched out and
+    back every time you hid the details.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    check("layout() refuses to re-fit mid-slide",
+          "!window._ptSliding &&" in html)
+    check("the flag is raised when an animated slide begins",
+          "window._ptSliding = true;" in html)
+    # Both slide directions must lower it, and the instant start-up call
+    # must never raise it.
+    check("both slide directions clear the flag",
+          html.count("window._ptSliding = false;") >= 3)
+    check("the settle pass still runs after the flag clears",
+          html.index("window._ptSliding = false;") <
+          html.index("if (!card.classList.contains('expanded') && window._ptLayoutHero)"))
+    # lastTop must NOT be updated on a skipped fit, or the settle pass
+    # would think the card had not moved and skip the real one too.
+    guard = html.split("!window._ptSliding &&", 1)[1].split("}", 1)[0]
+    check("lastTop is only updated when a fit actually happens",
+          "lastTop = actualTop;" in guard)
+    check("...and nowhere else in layout()",
+          html.split("function layout(", 1)[1].split("window._ptLayoutHero", 1)[0]
+          .count("lastTop = actualTop") == 1)
+
+
+def test_list_dropdown_follows_the_same_decisions():
+    """The flight list has its OWN renderer, and it was missed. (1.10.1)
+
+    renderLegDetail builds a second label/value list in JavaScript. The
+    1.10.0 decisions — drop "Closed out", say the arrival source in
+    English — were applied to the card only, so the deploy looked like it
+    had not happened. Full move to the shared component is 1.11.0.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    code = re.sub(r"^\s*//.*$", "", html, flags=re.M)
+    code = re.sub(r"\{#.*?#\}", "", code, flags=re.S)
+    check("no surface renders Closed out any more", "'Closed out'" not in code)
+    check("the list dropdown says the source in English",
+          "d.arrival_source_text" in code)
+    check("...and no longer prints the raw token",
+          "esc(d.arrival_source)" not in code)
+
+
 def test_map_remeasures():
     """Leaflet must re-measure once layout has actually happened.
 
@@ -1501,6 +1637,10 @@ def main():
     test_expanded_view_is_per_airport()
     test_route_facts_are_not_measurements()
     test_arrival_source_is_in_english()
+    test_live_box_does_not_swallow_the_flight_detail()
+    test_strip_times_fold_when_the_panel_opens()
+    test_map_refits_once_and_only_when_still()
+    test_list_dropdown_follows_the_same_decisions()
     test_map_remeasures()
     test_html_is_never_cached()
     test_overnight()
