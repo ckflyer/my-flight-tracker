@@ -532,10 +532,15 @@
     /* Expanded-only detail rows: everything that used to crowd the
        collapsed card lives here instead. */
     .detail-block { margin-top: 0.9rem; }
-    .detail-block h3 {
-      font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.07em;
-      color: var(--muted); margin-bottom: 0.5rem; font-weight: 700;
-    }
+    /* The "FLIGHT DETAIL" heading went with the label/value list in
+       1.10.0. The panel opens because the reader tapped "Flight details",
+       so a second heading saying the same thing directly underneath was
+       the only text on the page whose job was to repeat the button that
+       revealed it. No .detail-block carries an h3 now.
+
+       .detail-row survives for the provenance footer — where the arrival
+       time came from, how fresh the airline's record is, diversions. Those
+       genuinely ARE label/value pairs, and the shape is right for them. */
     .detail-row {
       display: flex; justify-content: space-between; gap: 1rem;
       font-size: 0.8125rem; padding: 0.22rem 0;
@@ -766,54 +771,94 @@
             {% endif %}
           </div>
         </div>
-        <div class="detail-block" id="flight-detail" style="{{ '' if current.enriched else 'display:none' }}">
-          <h3>Flight detail</h3>
-          {# Two rows, not three. Each carries its own time AND how far off it
-             ran, so nothing has to be cross-referenced against a separate
-             "Scheduled" line further down. #}
-          <div class="detail-row" id="row-dep-delay" style="{{ '' if current.dep_line else 'display:none' }}">
-            <span class="k">Departure</span>
-            <span class="v {{ current.dep_line.state if current.dep_line else '' }}" id="v-dep-delay">
-              {%- if current.dep_line %}<span class="tl-time">{{ current.dep_line.time }}</span>
-              {%- if current.dep_line.note or current.dep_line.was %}<span class="tl-note">{{ current.dep_line.note or '' }}{% if current.dep_line.note and current.dep_line.was %} &middot; {% endif %}{% if current.dep_line.was %}was {{ current.dep_line.was }}{% endif %}</span>{% endif %}
-              {%- endif %}
-            </span>
+        {# THE EXPANDED VIEW, on the reference layout: one block per
+           AIRPORT rather than a column of label/value pairs. The old shape
+           split one airport's story across four rows ("Arrival", "XNA
+           gate", "Baggage", each in a different place) and made the reader
+           reassemble it. Everything about the destination now sits in one
+           box, which is how a person actually asks the question — not
+           "what is the arrival time" but "what do I need to know about
+           XNA".
+
+           WORDS FOR LATENESS APPEAR ON THE ARRIVAL ONLY (owner's rule).
+           Departure carries the tint and the struck-through original, so
+           nothing is hidden, but it does not spell it out: a leg that
+           pushed 12 late and lands on time is not a late flight, and
+           saying "12 min late" under the departure invites the family to
+           read it as one. What they are asking is when he gets there. #}
+        {# Shown on the same condition applyEnrichment uses, NOT on
+           `enriched`. The block now carries the times themselves, and the
+           times exist from the moment there is a schedule — gating it on
+           the airline having replied meant a leg with a perfectly good
+           scheduled departure rendered an empty panel until the first poll
+           came back and the JavaScript disagreed with the template. Two
+           conditions for one element is one too many. #}
+        <div class="detail-block" id="flight-detail" style="{{ '' if (current.dep_line or current.arr_line or current.gates) else 'display:none' }}">
+          <div class="aptblock" id="apt-dep">
+            <div class="aptblock-head">
+              <span class="aptblock-disc {{ current.dep_line.state if current.dep_line else '' }}" id="v-dep-disc" aria-hidden="true">{% include "partials/arrow_out.html" %}</span>
+              <span class="aptblock-code" id="v-dep-code">{{ current.origin }}</span>
+              <span class="aptblock-name" id="v-dep-name">{{ current.origin_name or current.origin_city or '' }}</span>
+            </div>
+            <div class="aptblock-row">
+              <div class="aptblock-when">
+                <span class="aptblock-time {{ current.dep_line.state if current.dep_line else '' }}" id="v-dep-time">{%- if current.dep_line %}{{ current.dep_line.time_short }}{% if current.dep_line.zone %}<span class="tz" aria-hidden="true">{{ current.dep_line.zone }}</span>{% endif %}{% endif %}</span>
+                <span class="aptblock-was" id="v-dep-was" style="{{ '' if (current.dep_line and current.dep_line.was_short) else 'display:none' }}">{%- if current.dep_line and current.dep_line.was_short %}{{ current.dep_line.was_short }}{% if current.dep_line.zone %}<span class="tz" aria-hidden="true">{{ current.dep_line.zone }}</span>{% endif %}{% endif %}</span>
+              </div>
+              <div class="aptblock-facts">
+                <span class="aptblock-badge" id="v-dep-gate" style="{{ '' if (current.gates and current.gates.origin_gate) else 'display:none' }}">{% include "partials/arrow_out.html" %}<span id="v-dep-gate-text">{{ current.gates.origin_gate if current.gates else '' }}</span></span>
+                <span class="aptblock-term" id="v-dep-term" style="{{ '' if (current.gates and current.gates.origin_terminal) else 'display:none' }}">Terminal <b id="v-dep-term-text">{{ current.gates.origin_terminal if current.gates else '' }}</b></span>
+              </div>
+            </div>
           </div>
-          <div class="detail-row" id="row-arr-delay" style="{{ '' if current.arr_line else 'display:none' }}">
-            <span class="k">Arrival</span>
-            <span class="v {{ current.arr_line.state if current.arr_line else '' }}" id="v-arr-delay">
-              {%- if current.arr_line %}<span class="tl-time">{{ current.arr_line.time }}</span>
-              {%- if current.arr_line.note or current.arr_line.was %}<span class="tl-note">{{ current.arr_line.note or '' }}{% if current.arr_line.note and current.arr_line.was %} &middot; {% endif %}{% if current.arr_line.was %}was {{ current.arr_line.was }}{% endif %}</span>{% endif %}
-              {%- endif %}
-            </span>
+
+          {# The route between them. Both figures are properties of the
+             SCHEDULE and the MAP, not of the aeroplane, so unlike the live
+             strip above they are printed whether or not there is a
+             position fix. See _route_nm / _block_time in main.py. #}
+          <div class="aptblock-mid" id="apt-mid" style="{{ '' if (current.block_time or current.route_nm) else 'display:none' }}">
+            <span class="aptblock-mid-text">{{ current.block_time or '' }}{% if current.block_time and current.route_nm %} &middot; {% endif %}{% if current.route_nm %}{{ current.route_nm }} nm{% endif %}</span>
           </div>
-          <div class="detail-row" id="row-gate-dep" style="{{ '' if (current.gates and current.gates.origin_gate) else 'display:none' }}">
-            <span class="k">{{ current.origin }} gate</span>
-            <span class="v" id="v-gate-dep">{{ current.gates.origin_gate if current.gates else '' }}{% if current.gates and current.gates.origin_terminal %} &middot; Terminal {{ current.gates.origin_terminal }}{% endif %}</span>
+
+          <div class="aptblock" id="apt-arr">
+            <div class="aptblock-head">
+              <span class="aptblock-disc {{ current.arr_line.state if current.arr_line else '' }}" id="v-arr-disc" aria-hidden="true">{% include "partials/arrow_in.html" %}</span>
+              <span class="aptblock-code" id="v-arr-code">{{ current.destination }}</span>
+              <span class="aptblock-name" id="v-arr-name">{{ current.dest_name or current.dest_city or '' }}</span>
+            </div>
+            <div class="aptblock-row">
+              <div class="aptblock-when">
+                <span class="aptblock-time {{ current.arr_line.state if current.arr_line else '' }}" id="v-arr-time">{%- if current.arr_line %}{{ current.arr_line.time_short }}{% if current.arr_line.zone %}<span class="tz" aria-hidden="true">{{ current.arr_line.zone }}</span>{% endif %}{% endif %}</span>
+                <span class="aptblock-was" id="v-arr-was" style="{{ '' if (current.arr_line and current.arr_line.was_short) else 'display:none' }}">{%- if current.arr_line and current.arr_line.was_short %}{{ current.arr_line.was_short }}{% if current.arr_line.zone %}<span class="tz" aria-hidden="true">{{ current.arr_line.zone }}</span>{% endif %}{% endif %}</span>
+                <div class="aptblock-note {{ current.arr_line.state if current.arr_line else '' }}" id="v-arr-note" style="{{ '' if (current.arr_line and current.arr_line.note) else 'display:none' }}">{{ current.arr_line.note if current.arr_line else '' }}</div>
+              </div>
+              <div class="aptblock-facts">
+                <span class="aptblock-badge" id="v-arr-bag" style="{{ '' if (current.gates and current.gates.baggage) else 'display:none' }}">Bag <b id="v-arr-bag-text">{{ current.gates.baggage if current.gates else '' }}</b></span>
+                <span class="aptblock-badge" id="v-arr-gate" style="{{ '' if (current.gates and current.gates.dest_gate) else 'display:none' }}">{% include "partials/arrow_in.html" %}<span id="v-arr-gate-text">{{ current.gates.dest_gate if current.gates else '' }}</span></span>
+                <span class="aptblock-term" id="v-arr-term" style="{{ '' if (current.gates and current.gates.dest_terminal) else 'display:none' }}">Terminal <b id="v-arr-term-text">{{ current.gates.dest_terminal if current.gates else '' }}</b></span>
+              </div>
+            </div>
           </div>
-          <div class="detail-row" id="row-gate-arr" style="{{ '' if (current.gates and current.gates.dest_gate) else 'display:none' }}">
-            <span class="k">{{ current.destination }} gate</span>
-            <span class="v" id="v-gate-arr">{{ current.gates.dest_gate if current.gates else '' }}{% if current.gates and current.gates.dest_terminal %} &middot; Terminal {{ current.gates.dest_terminal }}{% endif %}</span>
-          </div>
-          <div class="detail-row" id="row-baggage" style="{{ '' if (current.gates and current.gates.baggage) else 'display:none' }}">
-            <span class="k">Baggage</span>
-            <span class="v" id="v-baggage">{{ current.gates.baggage if current.gates else '' }}</span>
-          </div>
-          <div class="detail-row" id="row-closed" style="{{ '' if current.closed else 'display:none' }}">
-            <span class="k">Closed out</span>
-            <span class="v" id="v-closed">{{ current.closed_by|replace('_',' ') if current.closed_by else '' }}</span>
-          </div>
-          <div class="detail-row" id="row-arrsrc" style="{{ '' if current.arrival_source else 'display:none' }}">
-            <span class="k">Arrival time from</span>
-            <span class="v" id="v-arrsrc">{{ current.arrival_source if current.arrival_source else '' }}</span>
-          </div>
-          <div class="detail-row" id="row-updated" style="{{ '' if current.enriched else 'display:none' }}">
-            <span class="k">Airline data</span>
-            <span class="v" id="v-updated" data-ago="{{ current.enriched_at_iso or '' }}">{{ current.enriched_at or '' }}</span>
-          </div>
-          <div class="detail-row" id="row-diverted" style="{{ '' if current.diversion else 'display:none' }}">
-            <span class="k">Diverted to</span>
-            <span class="v late" id="v-diverted">{{ current.diversion.diverted_to if current.diversion else '' }}</span>
+
+          {# What is left is provenance, not the flight itself: where the
+             arrival time came from and how fresh the airline's record is.
+             "Closed out" was removed here (owner's call, 1.10.0) — it
+             named which internal RULE ended the leg, which is diagnostics,
+             and it sat next to this row saying almost the same thing. This
+             one answers the question a person actually has. #}
+          <div class="aptblock-meta">
+            <div class="detail-row" id="row-arrsrc" style="{{ '' if current.arrival_source_text else 'display:none' }}">
+              <span class="k">Arrival time from</span>
+              <span class="v" id="v-arrsrc">{{ current.arrival_source_text or '' }}</span>
+            </div>
+            <div class="detail-row" id="row-updated" style="{{ '' if current.enriched else 'display:none' }}">
+              <span class="k">Airline data</span>
+              <span class="v" id="v-updated" data-ago="{{ current.enriched_at_iso or '' }}">{{ current.enriched_at or '' }}</span>
+            </div>
+            <div class="detail-row" id="row-diverted" style="{{ '' if current.diversion else 'display:none' }}">
+              <span class="k">Diverted to</span>
+              <span class="v late" id="v-diverted">{{ current.diversion.diverted_to if current.diversion else '' }}</span>
+            </div>
           </div>
         </div>
         </div>
@@ -2136,14 +2181,10 @@
       // into formatting the same fact differently.
 
 
-      function applyTimeLine(id, line) {
-        var el = document.getElementById(id);
-        if (!el) return;
-        el.className = 'v ' + ((line && line.state) || '');
-        // Lives in the flight-list block now, shared via window so both can
-        // format a time line the same way.
-        el.innerHTML = window._ptTimeLineHTML ? window._ptTimeLineHTML(line) : '';
-      }
+      // applyTimeLine was removed in 1.10.0 with the label/value rows it
+      // fed. The flight LIST still formats time lines that way and still
+      // uses window._ptTimeLineHTML; only the card's copy is gone. That
+      // list gets the same treatment in 1.11.0.
 
       function applyEnrichment(data) {
         function setText(id, value) {
@@ -2192,21 +2233,71 @@
         applyStripTime('card-arr-time', 'card-arr-disc', data.arr_line,
                        currentData && currentData.arr_short);
 
-        // Expanded detail block.
+        // ---- Expanded view: the two airport blocks.
+        //
+        // Same `line` objects the strip uses, so a time can never read one
+        // way collapsed and another way expanded. The only difference is
+        // that here there is room for the ORIGINAL, struck through, and
+        // for the lateness in words.
         setShown('flight-detail', !!(data.dep_line || data.arr_line || data.gates));
-        setShown('row-dep-delay', !!data.dep_line);
-        setShown('row-arr-delay', !!data.arr_line);
-        applyTimeLine('v-dep-delay', data.dep_line);
-        applyTimeLine('v-arr-delay', data.arr_line);
+
+        // A time and the zone beside it, as nodes. Shared by the big time
+        // and the struck-through one it replaced.
+        function paintTime(id, text, zone) {
+          var el = document.getElementById(id);
+          if (!el) return;
+          el.textContent = '';
+          if (!text) return;
+          el.appendChild(document.createTextNode(text));
+          if (zone) {
+            var tz = document.createElement('span');
+            tz.className = 'tz';
+            tz.setAttribute('aria-hidden', 'true');
+            tz.textContent = zone;
+            el.appendChild(tz);
+          }
+        }
+
+        // `showNote` is false for the DEPARTURE: it keeps the tint and the
+        // struck-through original, but lateness is never spelled out in
+        // words on that end. Owner's rule — a leg that pushed twelve late
+        // and lands on time is not a late flight, and the family is asking
+        // when he ARRIVES. See the .aptblock-note comment in app.css.
+        function applyAptBlock(prefix, line, showNote) {
+          var state = (line && line.state) ? ' ' + line.state : '';
+          var disc = document.getElementById('v-' + prefix + '-disc');
+          if (disc) disc.className = 'aptblock-disc' + state;
+          var t = document.getElementById('v-' + prefix + '-time');
+          if (t) t.className = 'aptblock-time' + state;
+          paintTime('v-' + prefix + '-time', line && line.time_short,
+                    line && line.zone);
+          var hasWas = !!(line && line.was_short);
+          setShown('v-' + prefix + '-was', hasWas);
+          paintTime('v-' + prefix + '-was', hasWas ? line.was_short : '',
+                    hasWas ? line.zone : '');
+          var note = document.getElementById('v-' + prefix + '-note');
+          if (note) {
+            var show = showNote && !!(line && line.note);
+            note.style.display = show ? '' : 'none';
+            note.className = 'aptblock-note' + state;
+            note.textContent = show ? line.note : '';
+          }
+        }
+        applyAptBlock('dep', data.dep_line, false);
+        applyAptBlock('arr', data.arr_line, true);
+
         var g = data.gates || {};
-        setShown('row-gate-dep', !!g.origin_gate);
-        setShown('row-gate-arr', !!g.dest_gate);
-        setShown('row-baggage', !!g.baggage);
-        if (g.origin_gate) setText('v-gate-dep', g.origin_gate +
-          (g.origin_terminal ? ' \u00b7 Terminal ' + g.origin_terminal : ''));
-        if (g.dest_gate) setText('v-gate-arr', g.dest_gate +
-          (g.dest_terminal ? ' \u00b7 Terminal ' + g.dest_terminal : ''));
-        if (g.baggage) setText('v-baggage', g.baggage);
+        setShown('v-dep-gate', !!g.origin_gate);
+        setText('v-dep-gate-text', g.origin_gate);
+        setShown('v-dep-term', !!g.origin_terminal);
+        setText('v-dep-term-text', g.origin_terminal);
+        setShown('v-arr-gate', !!g.dest_gate);
+        setText('v-arr-gate-text', g.dest_gate);
+        setShown('v-arr-term', !!g.dest_terminal);
+        setText('v-arr-term-text', g.dest_terminal);
+        setShown('v-arr-bag', !!g.baggage);
+        setText('v-arr-bag-text', g.baggage);
+
         setShown('row-diverted', !!data.diversion);
         if (data.diversion) setText('v-diverted', data.diversion.diverted_to);
 
@@ -2227,11 +2318,14 @@
         var upd = document.getElementById('v-updated');
         if (upd) upd.setAttribute('data-ago', data.enriched_at_iso || '');
 
-        setShown('row-closed', !!data.closed_by);
-        setText('v-closed', (data.closed_by || '').replace(/_/g, ' '));
-
-        setShown('row-arrsrc', !!data.arrival_source);
-        setText('v-arrsrc', data.arrival_source);
+        // "Closed out" was removed in 1.10.0. It named which internal RULE
+        // ended the leg (airline / relaunch / observed / backstop), which
+        // is diagnostics, and it sat directly above a row saying almost
+        // the same thing in language a person could actually read. The
+        // closure reason is still stored and still on the diagnostics
+        // page; it is just not on the family's card.
+        setShown('row-arrsrc', !!data.arrival_source_text);
+        setText('v-arrsrc', data.arrival_source_text);
 
         var lt = document.getElementById('last-tracked');
         if (lt) {
@@ -2279,6 +2373,24 @@
         // superscript zone element, and setText would flatten it back into
         // a plain string; applyEnrichment below rebuilds both properly
         // from dep_line/arr_line.
+
+        // The expanded view's fixed facts: which airports, and the route
+        // between them. These come from the SCHEDULE, so they change only
+        // when the selected leg changes — applyEnrichment does not touch
+        // them, because a poll cannot move an airport.
+        setText('v-dep-code', cur.origin);
+        setText('v-arr-code', cur.destination);
+        setText('v-dep-name', cur.origin_name || cur.origin_city || '');
+        setText('v-arr-name', cur.dest_name || cur.dest_city || '');
+        const midParts = [];
+        if (cur.block_time) midParts.push(cur.block_time);
+        if (cur.route_nm) midParts.push(cur.route_nm + ' nm');
+        const midEl = document.getElementById('apt-mid');
+        if (midEl) {
+          const midText = midEl.querySelector('.aptblock-mid-text');
+          if (midText) midText.textContent = midParts.join(' \u00b7 ');
+          midEl.style.display = midParts.length ? '' : 'none';
+        }
 
         applyPills(cur.status_tag, cur.phase_tag);
 

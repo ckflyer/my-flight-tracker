@@ -1201,6 +1201,147 @@ def test_leg_switch_keeps_the_time_rows():
           "'card-dep-disc', data.dep_line" in html)
 
 
+def test_expanded_view_is_per_airport():
+    """One box per AIRPORT, not a column of label/value pairs. (1.10.0)
+
+    The old shape scattered one airport's story across four non-adjacent
+    rows — "Arrival" near the top, "XNA gate" two rows down, "Baggage"
+    below that — and left the reader to reassemble it. Nobody asks "what is
+    the arrival time"; they ask "what do I need to know about XNA".
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    with open(os.path.join(here, "static", "app.css"), encoding="utf-8") as fh:
+        css = fh.read()
+
+    def code_only(text):
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+        text = re.sub(r"\{#.*?#\}", "", text, flags=re.S)
+        text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+        return re.sub(r"^\s*//.*$", "", text, flags=re.M)
+
+    html_code, css_code = code_only(html), code_only(css)
+
+    check("the departure has its own block", 'id="apt-dep"' in html_code)
+    check("the arrival has its own block", 'id="apt-arr"' in html_code)
+    check("the block lives in the SHARED stylesheet", ".aptblock {" in css_code)
+    check("no template declares its own .aptblock rules",
+          not re.search(r"\.aptblock[-\w]*\s*\{", html_code))
+
+    # THE OWNER'S RULE: lateness in WORDS only under the arrival. The
+    # departure keeps its tint and its struck-through original — nothing
+    # is concealed — but a leg that pushed twelve late and lands on time
+    # is not a late flight, and spelling it out invites reading it as one.
+    check("the arrival narrates its lateness", 'id="v-arr-note"' in html_code)
+    check("the departure does NOT", 'id="v-dep-note"' not in html_code)
+    check("...and the poller honours the same rule",
+          "applyAptBlock('dep', data.dep_line, false)" in html_code
+          and "applyAptBlock('arr', data.arr_line, true)" in html_code)
+    check("...enforced by one flag, not two code paths",
+          html_code.count("function applyAptBlock") == 1)
+
+    # Both ends still carry COLOUR. Removing the words must not have
+    # removed the tint with them.
+    check("the departure time is still tinted", 'id="v-dep-time"' in html_code
+          and "aptblock-time' + state" in html_code)
+    check("the departure still shows what it moved from",
+          'id="v-dep-was"' in html_code)
+
+    # The struck-through original, which is what the expanded view is FOR.
+    check("struck-through original is struck through",
+          "text-decoration: line-through" in css_code.split(".aptblock-was")[1][:200])
+
+    # Rows removed by owner's decision.
+    check("Closed out is gone from the card", "row-closed" not in html_code)
+    check("...and so is its value element", "v-closed" not in html_code)
+    check("Arrival time from survives", 'id="row-arrsrc"' in html_code)
+
+    # The panel shows on ONE condition. Template and poller disagreeing
+    # about when an element is visible is how a leg with a perfectly good
+    # scheduled time rendered an empty panel until the first poll.
+    server = html.split('id="flight-detail"', 1)[1].split(">", 1)[0]
+    check("template and poller agree on when the panel shows",
+          "current.dep_line or current.arr_line or current.gates" in server
+          and "!!(data.dep_line || data.arr_line || data.gates)" in html_code)
+
+    check("the dead applyTimeLine helper is gone",
+          "function applyTimeLine" not in html_code)
+    check("...but the flight list's shared formatter survives",
+          "_ptTimeLineHTML" in html_code)
+    check("no detail block carries a heading", "<h3" not in html_code)
+
+
+def test_route_facts_are_not_measurements():
+    """Block time and route distance are schedule/map facts, not live ones.
+
+    Invariant 9 blanks the LIVE figures — percent en route, distance to go,
+    ETE — without a position fix. These two are different in kind: the
+    great-circle distance between two fixed points and the block time the
+    bid line allows are the same before pushback, in the cruise and after
+    closure. That is exactly why they are safe to print beside figures
+    that go blank, and why they must never be computed from a fix.
+    """
+    from app.main import _route_nm, _block_time
+    from app.airports import enrich_leg
+    from app.models import FlightLeg
+    from datetime import date as _date
+
+    l = FlightLeg(id="R1", date=_date(2026, 8, 16), flight_number="3729",
+                  origin="DFW", destination="OKC",
+                  dep_time_local="06:00", arr_time_local="07:22")
+    enrich_leg(l)
+    nm = _route_nm(l)
+    check("DFW-OKC is roughly 150 nm", nm and 130 < nm < 180, str(nm))
+    check("block time is read off the schedule", _block_time(l) == "1h 22m",
+          str(_block_time(l)))
+
+    # A leg CROSSING A ZONE must not have its block time computed by
+    # subtracting one wall clock from the other — that is the ANC-NRT bug
+    # of 1.1.0 in a different place. LAX 22:00 to JFK 06:20 next day is
+    # five hours twenty in the air, not eight.
+    j = FlightLeg(id="R2", date=_date(2026, 8, 16), flight_number="12",
+                  origin="LAX", destination="JFK",
+                  dep_time_local="22:00", arr_time_local="06:20")
+    enrich_leg(j)
+    bt = _block_time(j)
+    check("a zone-crossing leg gets the time actually flown",
+          bt == "5h 20m", str(bt))
+
+    # An airport the database does not know cannot produce a distance, and
+    # must produce nothing rather than a zero.
+    u = FlightLeg(id="R3", date=_date(2026, 8, 16), flight_number="1",
+                  origin="ZZZZ", destination="QQQQ",
+                  dep_time_local="06:00", arr_time_local="07:00")
+    enrich_leg(u)
+    check("an unknown airport yields no distance, not zero",
+          _route_nm(u) is None, str(_route_nm(u)))
+
+
+def test_arrival_source_is_in_english():
+    """The internal token is this app's vocabulary, not the reader's.
+
+    `observed` means the app watched the aeroplane stop; `estimated` means
+    nobody has confirmed anything. The person most likely to be reading
+    this row is the one least equipped to guess. Translated on the SERVER
+    so the page and the poll cannot word it differently.
+    """
+    from app.view import ARRIVAL_SOURCE_TEXT
+    check("airline reads as the airline",
+          ARRIVAL_SOURCE_TEXT["airline"] == "the airline")
+    check("observed reads as our own tracking",
+          ARRIVAL_SOURCE_TEXT["observed"] == "our own tracking")
+    check("estimated is admitted as an estimate",
+          ARRIVAL_SOURCE_TEXT["estimated"] == "an estimate")
+    # The distinction is kept, not smoothed away: the logbook export (N3)
+    # may use only airline-confirmed times, so the card must not present
+    # the three as interchangeable.
+    check("the three stay distinguishable",
+          len(set(ARRIVAL_SOURCE_TEXT.values())) == 3)
+    check("no internal token leaks through as-is",
+          not any(v == k for k, v in ARRIVAL_SOURCE_TEXT.items()))
+
+
 def test_map_remeasures():
     """Leaflet must re-measure once layout has actually happened.
 
@@ -1357,6 +1498,9 @@ def main():
     test_flight_strip_is_one_component()
     test_time_line_splits_the_zone_off()
     test_leg_switch_keeps_the_time_rows()
+    test_expanded_view_is_per_airport()
+    test_route_facts_are_not_measurements()
+    test_arrival_source_is_in_english()
     test_map_remeasures()
     test_html_is_never_cached()
     test_overnight()

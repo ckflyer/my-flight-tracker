@@ -1,7 +1,7 @@
 # MyPilot
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.9.0.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.10.0.
 
 The version above was stale at 1.4.0 for five releases. `app/version.py`
 is the only authority; this line is a convenience and nothing reads it.
@@ -48,7 +48,7 @@ seriously.
 
 ## STATE
 
-**v1.9.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+**v1.10.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
 owner plus several FOs, who fly the same legs — hence shared flight rows
 (v5.1, retained).
 
@@ -69,7 +69,7 @@ page split (1.6.0–1.7.0). All three came out of the same problem — the app
 could not be OPERATED without SSH, and bugs could not be reproduced without
 flying a trip.
 
-Tests: **1,040**, eleven suites, all passing.
+Tests: **1,067**, eleven suites, all passing.
 
 **Current work: the UI chunks (1.9.0 onward).** Five agreed steps, owner's
 brief, reworking the tracker and calendar around one flight-strip
@@ -81,8 +81,8 @@ become the history browser before past flights could leave the tracker.
 | Step | What | State |
 |---|---|---|
 | 1 | the `.fstrip` component + the current flight card | **DONE 1.9.0** |
-| 2 | the expanded view, on the reference layout | next |
-| 3 | tracker list: current trip only, no past-flights toggle, positioned on the live leg | |
+| 2 | the expanded view, on the reference layout | **DONE 1.10.0** |
+| 3 | tracker list: current trip only, no past-flights toggle, positioned on the live leg | next |
 | 4 | calendar: expandable strips with history and a mini map | |
 | 5 | regression pass across themes, time formats and the odd states | |
 
@@ -98,7 +98,7 @@ the tracker entirely — they belong to step 4's calendar.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, placeholder filter |
-| `tests_ui_fixes.py` | 427 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
+| `tests_ui_fixes.py` | 454 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
 | `tests_app_shell.py` | 167 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
 | `tests_timezones.py` | 68 | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
 | `tests_closeout_sweep.py` | 42 | the abandonment cliff, the on-ground handover, the late gate-in chase and its cap |
@@ -847,7 +847,14 @@ Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
     A size that has to restate a layout rule is a fourth copy wearing a
     modifier's name — add a variable instead. Contextual overrides
     (`.fstrip-head .status`) belong to the surface and are fine. (1.9.0)
-26. **Green means EARLY. On time is plain.** Not a style preference: green
+26. **Lateness is narrated on the ARRIVAL only.** Colour still marks both
+    ends, and the departure keeps the time it moved from struck through
+    beside the one that replaced it — nothing is concealed. But the WORDS
+    "late" and "early" appear under the arrival alone: a leg that pushed
+    twelve minutes late and lands on time is not a late flight, and the
+    people reading this app are asking when he gets there, not when he
+    left. (1.10.0)
+27. **Green means EARLY. On time is plain.** Not a style preference: green
     on every normal flight is wallpaper, which is the same argument that
     killed the on-time pill, AND it would make "the airline reported on
     time" indistinguishable from "the airline has reported nothing" — two
@@ -1599,13 +1606,13 @@ python tests_poller_end_to_end.py   #  47
 python tests_past_leg_detail.py     #  19
 python tests_budget_limit.py        #  17
 python tests_carrier_cap.py         #  13
-python tests_ui_fixes.py            # 427
+python tests_ui_fixes.py            # 454
 python tests_app_shell.py           # 167
 python tests_timezones.py           #  68
 python tests_closeout_sweep.py      #  42
 python tests_import_merge.py        #  39
 python tests_test_mode.py           # 133
-```                                  # 1040
+```                                  # 1067
 
 Each uses its own scratch DB via `PT_DB_FILE`. Read
 `tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
@@ -1635,6 +1642,80 @@ invariant 1.
   exactly this reason.
 
 ## VERSION HISTORY
+
+### 1.10.0 — the expanded view, one box per airport
+
+Step 2 of five. Presentation only: no change to polling, closure,
+matching, budget or the schema.
+
+**The old shape asked the reader to reassemble a flight.** One airport's
+story was spread across four rows that were not even adjacent —
+"Arrival" near the top, "XNA gate" two down, "Baggage" below that. But
+nobody asks "what is the arrival time"; they ask "what do I need to know
+about XNA", and the answer is the time, the gate, the terminal and the
+belt, together. Same facts, arranged as the question:
+
+    ↗ DFW · Dallas-Fort Worth International
+      22:30ᶜᵀ  2̶2̶:̶2̶7̶ᶜᵀ                    [↗ B1]
+                                        Terminal B
+      ──── 1h 22m · 281 nm ──────────────────────
+    ↘ XNA · Northwest Arkansas National
+      23:52ᶜᵀ  2̶3̶:̶5̶1̶ᶜᵀ            [Bag 2] [↘ A1]
+      1 min late                     Terminal Main
+
+`.aptblock` lives in `static/app.css`, not in the template, because the
+calendar's expandable strips (1.12.0) show exactly this for a flown leg.
+See invariant 25.
+
+**WORDS FOR LATENESS ON THE ARRIVAL ONLY** (owner's rule). The departure
+keeps its tint and its struck-through original, so nothing is concealed —
+it just is not narrated. A leg that pushed twelve minutes late and lands
+on time is not a late flight, and printing "12 min late" under the
+departure invites the family to read it as one. What they are asking is
+when he gets there. One `showNote` flag on one function, not two code
+paths, so the two ends cannot drift.
+
+**The struck-through original appears here and nowhere else.** The
+collapsed strip shows only the corrected time (1.9.0); the expanded view
+is where there is room for what it moved from. `was_short`, added to the
+payload in 1.9.0, is what made this drawable.
+
+**"Closed out" removed** (owner's call). It named which internal RULE
+ended the leg — `airline` / `relaunch` / `observed` / `backstop` — which
+is diagnostics, and it sat directly above a row saying almost the same
+thing in readable language. Still stored, still on the diagnostics page,
+no longer on the family's card.
+
+**"Arrival time from" now says it in English.** `airline` → "the
+airline", `observed` → "our own tracking", `estimated` → "an estimate".
+Translated in `view.py`, not in the template, so the page and the poll
+cannot phrase it differently (P1-5). The three stay DISTINGUISHABLE
+rather than being smoothed into one word: the logbook export (N3) may use
+only airline-confirmed times, so the card must not present them as
+interchangeable.
+
+**Two new route facts, and why they are not measurements.** `_route_nm`
+(great-circle between the two airports) and `_block_time` (from the two
+RESOLVED UTC INSTANTS, never by subtracting one wall clock from the
+other — that is the ANC-NRT bug of 1.1.0 in a different place). Invariant
+9 blanks the LIVE figures without a position fix; these two are the same
+before pushback, in the cruise and after closure, which is exactly why
+they are safe to print beside figures that go blank. A test asserts a
+LAX-JFK red-eye reads 5h 20m and not 8h.
+
+**BUG: the panel had two disagreeing show conditions.** The template
+gated it on `enriched`, the poller on `dep_line || arr_line || gates`. A
+leg with a perfectly good scheduled time therefore rendered an empty
+panel until the first poll arrived and the JavaScript overruled the
+template. One condition now, asserted by test.
+
+**Also removed:** the `<h3>Flight detail</h3>` heading (the panel opens
+because the reader tapped "Flight details"; a heading repeating the
+button that revealed it was the only text on the page doing that), and
+`applyTimeLine`. The flight LIST still formats time lines the old way via
+`window._ptTimeLineHTML` and is untouched — that is 1.11.0.
+
+Tests: 1,040 → 1,067.
 
 ### 1.9.0 — one way to draw a flight
 
