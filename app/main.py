@@ -21,6 +21,7 @@ from .flights import get_flight, flight_key
 from .models import FlightLeg
 from .parser import parse_schedule_text
 from .airports import enrich_leg
+from .geo import haversine_nm
 from .settings import load_settings, save_settings, AppSettings
 from .track import get_breadcrumb
 from . import tags
@@ -270,6 +271,45 @@ def tag_index(user_id: int) -> dict:
         conn.close()
 
 
+def _route_nm(leg) -> Optional[int]:
+    """Great-circle distance between the two airports, whole nautical miles.
+
+    A property of the ROUTE, not of the flight — the same number before
+    pushback, in the cruise and after the leg closed. That is what makes it
+    safe to show beside the live figures that invariant 9 blanks when there
+    is no position fix: it cannot be mistaken for one, because it never
+    moves.
+    """
+    oi, di = leg.origin_info, leg.dest_info
+    if not oi or not di:
+        return None
+    if None in (oi.lat, oi.lon, di.lat, di.lon):
+        return None
+    try:
+        return int(round(haversine_nm(oi.lat, oi.lon, di.lat, di.lon)))
+    except Exception:
+        return None
+
+
+def _block_time(leg) -> Optional[str]:
+    """Scheduled block time, "1h 22m".
+
+    Taken from the two RESOLVED INSTANTS, never by subtracting one wall
+    clock from the other. Those two clocks can be in different zones, and
+    subtracting them directly is the bug that lost a whole day on an
+    ANC-NRT leg in 1.1.0 — the same mistake in a different place. Going
+    through the UTC instants means a leg crossing a zone, or a DST
+    boundary, gets the block time actually flown.
+    """
+    dep, arr = leg.dep_datetime_utc(), leg.arr_datetime_utc()
+    if not dep or not arr:
+        return None
+    minutes = int(round((arr - dep).total_seconds() / 60))
+    if minutes <= 0:
+        return None
+    return f"{minutes // 60}h {minutes % 60:02d}m" if minutes >= 60 else f"{minutes}m"
+
+
 def leg_view(leg: Optional[FlightLeg], now: datetime, time_format: str = "24",
              tag_lookup: Optional[dict] = None) -> Optional[dict]:
     if not leg:
@@ -335,6 +375,24 @@ def leg_view(leg: Optional[FlightLeg], now: datetime, time_format: str = "24",
         "dest_lon": di.lon if di else None,
         "origin_city": oi.city if oi else leg.origin,
         "dest_city": di.city if di else leg.destination,
+        # The airport's own NAME, for the expanded view's per-airport
+        # blocks. Not a duplicate of the city: the strip above already
+        # says "Dallas-Fort Worth to Oklahoma City", and what a person
+        # driving to collect somebody still needs to know is WHICH field.
+        "origin_name": oi.name if oi else None,
+        "dest_name": di.name if di else None,
+        # Two facts about the ROUTE, for the divider between the blocks.
+        #
+        # Neither is a measurement of the aeroplane and neither may ever be
+        # mistaken for one — invariant 9 governs the live figures (percent
+        # en route, distance to go, ETE) and those still require a position
+        # fix. These two are properties of the SCHEDULE and the MAP: the
+        # great-circle distance between two fixed points, and the block
+        # time the bid line allows. They are equally true before pushback
+        # and after landing, which is precisely why they are safe to print
+        # when the live figures are blank.
+        "route_nm": _route_nm(leg),
+        "block_time": _block_time(leg),
     }
 
 

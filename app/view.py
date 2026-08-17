@@ -37,6 +37,22 @@ from .track import (compute_distance_nm, compute_progress, format_ete,
 # is arguing with itself.
 ON_TIME_TOLERANCE_MIN = 0
 
+# WHERE THE ARRIVAL TIME CAME FROM, in words. `arrival_source` is stored as
+# one of three internal tokens (see closure._arrival_source) and those are
+# the app's own vocabulary, not English: "observed" means the app watched
+# the aeroplane stop, "estimated" means nobody has confirmed anything yet.
+# The person reading this row is usually a family member.
+#
+# The distinction is worth keeping visible rather than smoothing away. A
+# time the airline reported and a time this app inferred are different
+# kinds of claim, and the logbook export (N3) is allowed to use only the
+# first — so the card should not present them as interchangeable either.
+ARRIVAL_SOURCE_TEXT = {
+    "airline": "the airline",
+    "observed": "our own tracking",
+    "estimated": "an estimate",
+}
+
 
 def _parse(value) -> Optional[datetime]:
     if not value:
@@ -404,6 +420,14 @@ def build(row, leg, now: datetime, time_format: str = "24",
         "closed": closed,
         "closed_by": _col(row, "closed_by"),
         "arrival_source": _col(row, "arrival_source"),
+        # The same fact in words a family member can read. "observed" and
+        # "estimated" are this app's internal vocabulary, and the person
+        # most likely to be looking at this row is the one least equipped
+        # to guess what they mean. Translated HERE rather than in the
+        # template so the page and the poll cannot phrase it differently —
+        # the P1-5 rule: the server decides, the client displays.
+        "arrival_source_text": ARRIVAL_SOURCE_TEXT.get(
+            _col(row, "arrival_source") or "", None),
         "enriched": bool(_col(row, "last_api_query_at")),
         "enriched_at": _ago_text(_parse(_col(row, "last_api_query_at")), now),
         # The same instant as an ISO string, so the page can recompute
