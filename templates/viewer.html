@@ -83,61 +83,26 @@
       color: var(--muted);
       margin: 1rem 0 0.5rem;
     }
-    .flight-num { font-size: 1.5rem; font-weight: 700; }
-    .city-route {
-      font-size: 1.4rem;
-      font-weight: 700;
-      margin: 0.35rem 0 0.85rem;
-      color: var(--text);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .city-route .to-word {
-      font-weight: 400;
-      color: var(--muted);
-      font-size: 1.1rem;
-      margin: 0 0.15rem;
-    }
-    /* THE ROUTE STRIP. Origin and destination sit at the two ends of a line
-       the aeroplane travels along, so "how far along is he" is answered by
-       the shape of the card instead of by reading a number. This replaced
-       three separate homes for one fact: a percentage in the map corner, a
-       progress bar hidden inside the expanded detail, and nothing at all on
-       the collapsed card — which is the one thing that is always on screen.
+    /* THE ROUTE STRIP is now the PROGRESS TRACK only. The origin and
+       destination that used to sit at its two ends moved into the shared
+       .fstrip component in static/app.css (1.9.0), so the tracker card,
+       the flight list and the calendar all describe a flight the same way.
+       What is left here is the part that is unique to the tracker: the
+       line the aeroplane is actually travelling along.
 
        The TRACK is always drawn, because it is the route, not a readout.
        The FILL and the plane only move on a real position fix (invariant 9:
        no fix, no figure). A leg that has ARRIVED fills to the end, because
        closure said so and closure is authoritative — but it still prints no
-       percentage, so nothing is ever derived from the clock. */
-    .route-strip { margin-top: 0.1rem; }
-    .route-ends {
-      display: flex; justify-content: space-between; align-items: flex-start;
-      gap: 1rem;
-    }
-    .route-end { min-width: 0; }
-    .route-end.arr { text-align: right; }
-    .route-code {
-      color: var(--muted); font-size: 0.8125rem; font-weight: 600;
-      letter-spacing: 0.04em;
-    }
-    /* Positioning context for the tap-a-time bubble, which used to hang off
-       .chip-body. */
-    .route-time-wrap { position: relative; display: inline-block; }
-    .chip-time {
-      font-size: 1.0625rem; font-weight: 600; color: var(--text);
-      font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
-    }
-    .chip-time.early { color: var(--good); }
-    .chip-time.late  { color: var(--bad); }
-    .chip-delay {
-      display: block; font-size: 0.75rem; font-weight: 600; margin-top: 0.1rem;
-      white-space: nowrap;
-    }
-    .chip-delay.early { color: var(--good); }
-    .chip-delay.late { color: var(--bad); }
-    .chip-delay.cancelled { color: var(--bad); }
+       percentage, so nothing is ever derived from the clock.
+
+       Deleted with the move, so nobody restores half of a design that no
+       longer exists: .flight-num, .city-route, .route-ends, .route-end,
+       .route-code, .route-time-wrap, .chip-time and .chip-delay. The last
+       of those printed "12 min late" beside the arrival; the strip shows
+       the corrected time tinted instead, and the delta is stated in words
+       in the expanded view. */
+    .route-strip { margin-top: 0.7rem; }
     .route-line { position: relative; height: 22px; margin: 0.6rem 0 0.15rem; }
     .route-track {
       position: absolute; top: 9px; left: 0; right: 0; height: 4px;
@@ -540,16 +505,12 @@
     /* A slide IS motion, so this one genuinely belongs behind the setting —
        unlike the old rule that used it to paint over the whole map. Panel
        still opens, just instantly. */
-    .collapsed-card .flight-num { font-size: 1.3rem; }
-    .collapsed-card .city-route {
-      font-size: 1.25rem;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
     /* Expanded, there's room to show the whole city pair, so let long
-       names wrap instead of truncating to "Corpus Ch...". */
-    .collapsed-card.expanded .city-route {
+       names wrap instead of truncating to "Corpus Ch...". The sizes that
+       used to sit beside this rule are gone: .fstrip--lg owns them now,
+       and having the card restate them was how the hero ended up 1.4rem
+       in one place and 1.25rem in another. */
+    .collapsed-card.expanded .fstrip-cities {
       white-space: normal;
       overflow: visible;
       text-overflow: clip;
@@ -588,10 +549,10 @@
     .delay-note.late  { color: var(--bad); }
     .delay-note.ontime { color: var(--muted); font-weight: 500; }
     .delay-note.cancelled { color: var(--bad); font-weight: 700; }
-    .flight-line {
-      display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap;
-    }
-    .flight-line .status { flex-shrink: 0; margin-top: 0; align-self: center; }
+    /* .status carries a top margin for the flight list, where it sits under
+       the row; inside a strip head it is on the same baseline as the flight
+       number and that margin pushes it out of line. */
+    .fstrip-head .status { flex-shrink: 0; margin-top: 0; align-self: center; }
     /* "Flight details" is a row INSIDE the card now, not a floating grey
        line under it, and it opens only the card's own detail. It used to
        open the entire flight list as well, which meant the schedule — the
@@ -704,44 +665,51 @@
 
   <div class="collapsed-card" id="collapsed-card">
     <div id="collapsed-card-header">
-      <div class="flight-line">
-        <div class="flight-num" id="card-flight-num">{{ current.callsign }}{% if current.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
-        <span class="pills">
-          <span class="status {{ current.status_tag|lower|replace(' ', '-') if current.status_tag else '' }}" id="status-badge"
-                style="{{ '' if current.status_tag else 'display:none' }}">{{ current.status_tag or '' }}</span>
-          <span class="status phase {{ 'arrived' if current.phase_tag == 'Arrived' else '' }}" id="phase-badge"
-                style="{{ '' if current.phase_tag else 'display:none' }}">{{ current.phase_tag or '' }}</span>
-        </span>
-        <span class="last-tracked" id="last-tracked"
-              style="{{ '' if current.signal_note else 'display:none' }}">{{ current.signal_note or '' }}</span>
+      {# THE FLIGHT STRIP, hero size. Same component the flight list and the
+         calendar use — see the FLIGHT STRIP block in static/app.css. Every
+         id the poll writes to is preserved from the old markup, because the
+         live-update path and the layout are edited in separate sessions and
+         renaming one out from under the other is exactly how this template
+         has silently lost behaviour before.
+
+         The time shown is the CORRECTED one, tinted. No struck-through
+         original and no "12 min late" beside it: this is the always-visible
+         summary, and the whole story is one tap away in the expanded view.
+         Zone rides as a superscript, never glued into the time string. #}
+      <div class="fstrip fstrip--lg">
+        <div class="fstrip-head">
+          <div class="fstrip-num" id="card-flight-num">{{ current.callsign }}{% if current.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
+          <span class="pills fstrip-tags">
+            <span class="status {{ current.status_tag|lower|replace(' ', '-') if current.status_tag else '' }}" id="status-badge"
+                  style="{{ '' if current.status_tag else 'display:none' }}">{{ current.status_tag or '' }}</span>
+            <span class="status phase {{ 'arrived' if current.phase_tag == 'Arrived' else '' }}" id="phase-badge"
+                  style="{{ '' if current.phase_tag else 'display:none' }}">{{ current.phase_tag or '' }}</span>
+          </span>
+          <span class="last-tracked" id="last-tracked"
+                style="{{ '' if current.signal_note else 'display:none' }}">{{ current.signal_note or '' }}</span>
+        </div>
+
+        <div class="fstrip-cities" id="card-city-route">{{ current.origin_city }} <span class="to-word">to</span> {{ current.dest_city }}</div>
+
+        <div class="fstrip-ends">
+          <span class="fstrip-end dep">
+            <span class="fstrip-disc {{ current.dep_line.state if current.dep_line else '' }}" id="card-dep-disc" aria-hidden="true">{% include "partials/arrow_out.html" %}</span>
+            <span class="fstrip-code" id="card-origin-code">{{ current.origin }}</span>
+            <span class="fstrip-time {{ current.dep_line.state if current.dep_line else '' }}" id="card-dep-time">{{ (current.dep_line.time_short if current.dep_line else None) or current.dep_short or current.dep }}{% if current.dep_line and current.dep_line.zone %}<span class="tz" aria-hidden="true">{{ current.dep_line.zone }}</span>{% endif %}</span>
+          </span>
+          <span class="fstrip-end arr">
+            <span class="fstrip-disc {{ current.arr_line.state if current.arr_line else '' }}" id="card-arr-disc" aria-hidden="true">{% include "partials/arrow_in.html" %}</span>
+            <span class="fstrip-code" id="card-dest-code">{{ current.destination }}</span>
+            <span class="fstrip-time {{ current.arr_line.state if current.arr_line else '' }}" id="card-arr-time">{{ (current.arr_line.time_short if current.arr_line else None) or current.arr_short or current.arr }}{% if current.arr_line and current.arr_line.zone %}<span class="tz" aria-hidden="true">{{ current.arr_line.zone }}</span>{% endif %}</span>
+          </span>
+        </div>
       </div>
-
-
-      <div class="city-route" id="card-city-route">{{ current.origin_city }} <span class="to-word">to</span> {{ current.dest_city }}</div>
 
       {# The fill position when there is no live fix: an arrived leg is at the
          far end because closure said so, anything else sits at the start. The
          PERCENTAGE is still only ever printed from a real fix. #}
       {% set fill_pct = (current.progress_pct|round|int) if current.progress_pct is not none else (100 if current.phase_tag == 'Arrived' else 0) %}
       <div class="route-strip">
-        <div class="route-ends">
-          <div class="route-end">
-            <div class="route-code" id="card-origin-code">{{ current.origin }}</div>
-            <span class="route-time-wrap">
-              <span class="chip-time {{ current.dep_delay.state if current.dep_delay and current.dep_delay.state in ('early','late') else '' }}" id="card-dep-time">{{ (current.dep_delay.time_short if current.dep_delay and current.dep_delay.time_short else current.dep_short) or current.dep }}</span>
-              {%- if current.dep_zone %}<span class="tz" aria-hidden="true">{{ current.dep_zone }}</span>{% endif %}
-            </span>
-          </div>
-          <div class="route-end arr">
-            <div class="route-code" id="card-dest-code">{{ current.destination }}</div>
-            <span class="route-time-wrap">
-              <span class="chip-time {{ current.arr_delay.state if current.arr_delay and current.arr_delay.state in ('early','late') else '' }}" id="card-arr-time">{{ (current.arr_delay.time_short if current.arr_delay and current.arr_delay.time_short else current.arr_short) or current.arr }}</span>
-              {%- if current.arr_zone %}<span class="tz" aria-hidden="true">{{ current.arr_zone }}</span>{% endif %}
-            </span>
-            <span class="chip-delay {{ current.arr_delay.state if current.arr_delay else '' }}" id="card-arr-delay"
-                  style="{{ '' if (current.arr_delay and current.arr_delay.state in ('early','late','cancelled')) else 'display:none' }}">{{ current.arr_delay.short_text if current.arr_delay and current.arr_delay.short_text else '' }}</span>
-          </div>
-        </div>
         {#- An empty track at 0% is not information, it is a bar that looks
             broken. Show the strip only when there is a real position fix, or
             when the leg has arrived and the full bar means something. -#}
@@ -2186,28 +2154,43 @@
           var el = document.getElementById(id);
           if (el) el.style.display = show ? '' : 'none';
         }
-        // Collapsed card: just the time, tinted, plus a short
-        // delay note beside the arrival.
-        function applyTime(timeId, info, fallback) {
+        // The strip's time: the CORRECTED value, tinted by state, with the
+        // zone as a superscript beside it. Driven off dep_line/arr_line
+        // rather than dep_delay, because the *_line pair always exists
+        // whenever a scheduled time does — dep_delay is null until the
+        // airline says something, which is why this used to need a
+        // fallback argument dug out of currentData.
+        //
+        // Built as nodes rather than innerHTML: the zone comes from
+        // zone_label() so it is safe, but a time string reaching innerHTML
+        // is the kind of thing that stops being safe when somebody later
+        // pipes a gate or a tail number through the same helper.
+        function applyStripTime(timeId, discId, line, fallback) {
           var el = document.getElementById(timeId);
+          // The disc is repainted HERE, in the same call, from the same
+          // `line`. Two functions writing the two halves is how a red disc
+          // ends up beside a green time — they cannot drift if there is
+          // only one place that sets either.
+          var disc = document.getElementById(discId);
+          var state = (line && line.state) ? ' ' + line.state : '';
+          if (disc) disc.className = 'fstrip-disc' + state;
           if (!el) return;
-          var tint = (info && (info.state === 'early' || info.state === 'late'))
-            ? ' ' + info.state : '';
-          el.className = 'chip-time' + tint;
-          el.textContent = (info && info.time_short) || fallback || el.textContent;
+          el.className = 'fstrip-time' + state;
+          var text = (line && line.time_short) || fallback || '';
+          el.textContent = '';
+          el.appendChild(document.createTextNode(text));
+          if (line && line.zone) {
+            var tz = document.createElement('span');
+            tz.className = 'tz';
+            tz.setAttribute('aria-hidden', 'true');
+            tz.textContent = line.zone;
+            el.appendChild(tz);
+          }
         }
-        applyTime('card-dep-time', data.dep_delay, currentData && currentData.dep_short);
-        applyTime('card-arr-time', data.arr_delay, currentData && currentData.arr_short);
-
-        var arrChip = document.getElementById('card-arr-delay');
-        if (arrChip) {
-          var ad = data.arr_delay;
-          var showChip = ad && ad.short_text &&
-            (ad.state === 'early' || ad.state === 'late' || ad.state === 'cancelled');
-          arrChip.textContent = showChip ? ad.short_text : '';
-          arrChip.className = 'chip-delay ' + (ad ? ad.state : '');
-          arrChip.style.display = showChip ? '' : 'none';
-        }
+        applyStripTime('card-dep-time', 'card-dep-disc', data.dep_line,
+                       currentData && currentData.dep_short);
+        applyStripTime('card-arr-time', 'card-arr-disc', data.arr_line,
+                       currentData && currentData.arr_short);
 
         // Expanded detail block.
         setShown('flight-detail', !!(data.dep_line || data.arr_line || data.gates));
@@ -2291,9 +2274,11 @@
           routeEl.appendChild(document.createTextNode(' ' + (cur.dest_city || '')));
         }
         setText('card-origin-code', cur.origin);
-        setText('card-dep-time', cur.dep);
         setText('card-dest-code', cur.destination);
-        setText('card-arr-time', cur.arr);
+        // The two TIMES are deliberately not written here. They carry a
+        // superscript zone element, and setText would flatten it back into
+        // a plain string; applyEnrichment below rebuilds both properly
+        // from dep_line/arr_line.
 
         applyPills(cur.status_tag, cur.phase_tag);
 
@@ -2325,6 +2310,15 @@
         applyEnrichment({
           dep_delay: cur.dep_delay || null,
           arr_delay: cur.arr_delay || null,
+          // BUG, fixed 1.9.0: these two were never passed. applyEnrichment
+          // hides the Departure and Arrival rows when they are absent and
+          // blanks their contents, so tapping any flight in the list wiped
+          // the two most important rows in the expanded view — and they
+          // only came back on a full page reload, which made it look like
+          // the data had not loaded rather than like it had been thrown
+          // away. Silent, because every OTHER row on the panel was fine.
+          dep_line: cur.dep_line || null,
+          arr_line: cur.arr_line || null,
           gates: cur.gates || null,
           diversion: cur.diversion || null,
           // Carried through so tapping a PAST flight shows its stored

@@ -997,6 +997,210 @@ def test_no_hardcoded_palette_colours():
             check(f"{name} does not hardcode {hexcode}", hexcode not in html)
 
 
+def test_flight_strip_is_one_component():
+    """ONE way to draw a flight, in three sizes. (1.9.0)
+
+    The tracker card, the flight list and the calendar agenda each drew a
+    flight differently, which is the same failure the colour palette had
+    before v5.9 and the zone label had before 1.2.0: three implementations
+    of one idea, drifting independently, and a fix applied to whichever one
+    somebody happened to be looking at.
+
+    So the checks below are not about how it looks. They are about the
+    component staying SINGLE: living in the shared stylesheet, scaling by
+    custom property rather than by duplicated rules, and taking its glyphs
+    from one file each.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "static", "app.css"), encoding="utf-8") as fh:
+        css = fh.read()
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    # These checks look for RULES. A comment recording what was deleted,
+    # and why, must not read as the deleted thing still being there — that
+    # would make documenting a removal impossible.
+    def code_only(text):
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)   # CSS
+        text = re.sub(r"\{#.*?#\}", "", text, flags=re.S)   # Jinja
+        text = re.sub(r"<!--.*?-->", "", text, flags=re.S)  # HTML
+        return re.sub(r"^\s*//.*$", "", text, flags=re.M)   # JS line comments
+
+    html_code, css_code = code_only(html), code_only(css)
+
+    check("the strip lives in the SHARED stylesheet", ".fstrip {" in css_code)
+    for size in ("lg", "md", "sm"):
+        check(f"...and declares a --{size} size", f".fstrip--{size} {{" in css_code)
+    # Using the class is the point; DECLARING a size in a template is the
+    # regression — that is how eleven copies of the palette happened. A
+    # contextual override (.fstrip-head .status) is fine and stays with
+    # the surface that needs it; a redeclared .fstrip or .fstrip--lg is not.
+    check("no template redeclares the strip or its sizes",
+          not re.search(r"\.fstrip(--\w+)?\s*\{", html_code))
+    # If a size modifier ever has to restate a layout rule rather than a
+    # variable, the component has stopped being one component.
+    for size in ("lg", "md", "sm"):
+        block = css_code.split(f".fstrip--{size} {{", 1)[1].split("}", 1)[0]
+        decls = [d.split(":")[0].strip() for d in block.split(";") if ":" in d]
+        check(f"--{size} overrides variables only, never layout",
+              all(d.startswith("--fstrip-") for d in decls),
+              ", ".join(d for d in decls if not d.startswith("--fstrip-")))
+
+    # One glyph file each, sized from the strip's own variable. Attributes
+    # on the svg would pin all three sizes to one pixel count — the same
+    # trap that produced three different aeroplanes before 1.7.0.
+    for name in ("arrow_out.html", "arrow_in.html"):
+        path = os.path.join(here, "templates", "partials", name)
+        check(f"{name} exists as a shared partial", os.path.exists(path))
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as fh:
+                svg = fh.read()
+            # stroke-width is a paint property and is fine; a bare
+            # width/height on the <svg> is what would pin all three sizes
+            # to one pixel count.
+            check(f"...{name} carries no fixed width/height",
+                  not re.search(r'(?<!stroke-)\b(width|height)="', svg))
+    check("the card includes the shared glyphs rather than inlining them",
+          'partials/arrow_out.html' in html_code and 'partials/arrow_in.html' in html_code)
+    check("the glyph is sized from --fstrip-glyph",
+          "width: var(--fstrip-glyph)" in css_code)
+
+    # THE COLOUR RULE (owner's, 1.9.0): green EARLY, red LATE, plain for
+    # exactly-as-scheduled AND for nothing-published-yet. On time is not
+    # green — green has to mean "better than the plan" or it becomes the
+    # background colour of the app, and it would also make "the airline
+    # says on time" indistinguishable from "the airline has said nothing",
+    # when only one of those is a report.
+    check("early is green", ".fstrip-time.early { color: var(--good); }" in css_code)
+    check("late is red", ".fstrip-time.late { color: var(--bad); }" in css_code)
+    check("on time and unreported are BOTH plain, not green",
+          ".fstrip-time.scheduled, .fstrip-time.ontime { color: var(--text); }"
+          in css_code)
+    check("...so nothing paints an on-time time green",
+          not re.search(r"\.fstrip-time\.ontime[^{]*\{[^}]*--good", css_code))
+
+    # The disc takes its colour from ITS OWN time, not from which end it
+    # is. Fixed-by-direction discs meant a red disc could sit beside a
+    # green time and read as a contradiction.
+    check("the disc is not coloured by direction",
+          not re.search(r"\.fstrip-disc\.(dep|arr)\s*\{", css_code))
+    check("...it is coloured by state: early green",
+          ".fstrip-disc.early { background: var(--good); color: #fff; }" in css_code)
+    check("...late and cancelled red",
+          ".fstrip-disc.late, .fstrip-disc.cancelled { background: var(--bad); color: #fff; }"
+          in css_code)
+    check("...and a disc with no news is still visible",
+          "background: var(--border); color: var(--muted);" in css_code)
+    for tid, did in (("card-dep-time", "card-dep-disc"),
+                     ("card-arr-time", "card-arr-disc")):
+        check(f"{did} carries the same state as {tid}",
+              f'id="{did}"' in html_code
+              and html_code.count("current.dep_line.state") +
+                  html_code.count("current.arr_line.state") >= 4)
+    # One function writes BOTH halves, so they cannot drift apart.
+    check("the poller repaints disc and time together",
+          "applyStripTime('card-dep-time', 'card-dep-disc'" in html_code
+          and "disc.className = 'fstrip-disc' + state" in html_code)
+
+    # The collapsed strip shows the CORRECTED time and nothing else. The
+    # struck-through original and the "12 min late" note belong in the
+    # expanded view, where there is room to say it in words.
+    check("no delay chip survives on the strip", 'class="chip-delay' not in html_code)
+    check("no struck-through original on the strip",
+          'id="card-dep-time"' in html
+          and "was" not in html.split('id="card-dep-time"')[1].split("</span>")[0])
+
+    # Superscript zones, the 1.3.0 rule, now reachable because the payload
+    # emits the zone separately from the time.
+    for tid in ("card-dep-time", "card-arr-time"):
+        seg = html.split(f'id="{tid}"', 1)[1][:400]
+        check(f"{tid} carries its zone as a superscript element",
+              'class="tz"' in seg)
+
+    # The classes the old card used are GONE, not merely unused. Half a
+    # deleted design left in the stylesheet is how somebody restores it.
+    # Checked as RULE declarations, so the comment that records what was
+    # removed (and why) does not read as the thing itself.
+    for dead in ("chip-time", "chip-delay", "route-ends", "route-end",
+                 "route-code", "route-time-wrap", "city-route", "flight-num",
+                 "flight-line"):
+        check(f"dead rule removed: .{dead}",
+              not re.search(r"\.%s\s*[,.{:]" % re.escape(dead), html_code)
+              and not re.search(r"\.%s\s*[,.{:]" % re.escape(dead), css_code),
+              dead)
+
+
+def test_time_line_splits_the_zone_off():
+    """`time` keeps the glued form; `time_short` + `zone` are the parts.
+
+    A glued "12:39 CDT" cannot be superscripted — the zone sits inside the
+    same text node as the digits, so CSS has nothing to select. That, and
+    not a forgotten template, is why the expanded card still printed
+    full-size inline zones two releases after 1.3.0 superscripted every
+    other surface.
+    """
+    from app.view import _time_line
+    from datetime import datetime as _dt, timezone as _tz
+
+    base = _dt(2026, 8, 16, 22, 30, tzinfo=_tz.utc)
+    line = _time_line(None, base, "America/Chicago", "24")
+    check("a scheduled line still returns a glued `time`",
+          line and " " in (line["time"] or ""))
+    check("...and the bare time separately", line and line["time_short"] == "17:30")
+    check("...and the zone separately", line and line["zone"] == "CT")
+    check("...with no zone inside time_short",
+          line and not any(c.isalpha() for c in line["time_short"]))
+
+    var = {"time": "18:00 CDT", "original": "17:30 CDT", "time_short": "18:00",
+           "original_short": "17:30", "state": "late", "short_text": "30 min late",
+           "source": "airline", "minutes": 30, "settled": True}
+    line = _time_line(var, base, "America/Chicago", "24")
+    check("a revised line carries the corrected time bare", line["time_short"] == "18:00")
+    check("...and the original bare, for the strike-through",
+          line["was_short"] == "17:30")
+    check("...and one zone for the pair", line["zone"] == "CT")
+
+    # A time that did not move must not be struck through against itself.
+    same = dict(var, time="17:30 CDT", original="17:30 CDT",
+                time_short="17:30", state="ontime")
+    line = _time_line(same, base, "America/Chicago", "24")
+    check("an unmoved time offers nothing to strike through",
+          line["was"] is None and line["was_short"] is None)
+
+    # The label answers daylight time for the DATE BEING SHOWN. A January
+    # leg through the same airport is not summer.
+    winter = _dt(2026, 1, 16, 22, 30, tzinfo=_tz.utc)
+    check("the zone is resolved against the leg's own date, not today",
+          _time_line(None, winter, "Europe/London", "24")["zone"] == "GMT"
+          and _time_line(None, base, "Europe/London", "24") is not None)
+
+
+def test_leg_switch_keeps_the_time_rows():
+    """Tapping a flight must not blank the two rows that matter. (1.9.0)
+
+    applyEnrichment hides Departure and Arrival when dep_line/arr_line are
+    absent, and applyLegPayload was calling it without them — so switching
+    legs wiped the expanded view's two most important rows, and only a full
+    page reload brought them back. Silent: every other row was fine, so it
+    read as "not loaded yet" rather than as a bug.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    call = html.split("function applyLegPayload", 1)[1]
+    call = call.split("applyEnrichment({", 1)[1].split("});", 1)[0]
+    check("the leg switch passes dep_line through", "dep_line:" in call)
+    check("...and arr_line", "arr_line:" in call)
+
+    # And the strip's own times are rebuilt from those lines rather than
+    # set as flat text, which would flatten the superscript zone away.
+    check("strip times are rebuilt, not setText'd",
+          "applyStripTime('card-dep-time'" in html
+          and "setText('card-dep-time'" not in html)
+    check("...from the *_line pair, which always exists",
+          "'card-dep-disc', data.dep_line" in html)
+
+
 def test_map_remeasures():
     """Leaflet must re-measure once layout has actually happened.
 
@@ -1150,6 +1354,9 @@ def main():
     test_show_on_map_action()
     test_settings_budget_saves()
     test_no_hardcoded_palette_colours()
+    test_flight_strip_is_one_component()
+    test_time_line_splits_the_zone_off()
+    test_leg_switch_keeps_the_time_rows()
     test_map_remeasures()
     test_html_is_never_cached()
     test_overnight()

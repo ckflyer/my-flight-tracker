@@ -112,7 +112,170 @@
 }
 /* The card lays these out inline rather than in a flex row, so they need
    their own gap; .row-chip and the agenda supply their own. */
-.route-time-wrap .tz { margin-left: 0.16rem; }
+.fstrip-time .tz { margin-left: 0.16rem; }
+
+/* -------------------------------------------------------- FLIGHT STRIP
+   ONE component, three sizes. A flight is described the same way
+   everywhere it appears:
+
+       ENY3693                                    [Delayed] [In air]
+       Dallas to Northwest Arkansas
+       (↗) DFW 22:30            (↘) XNA 23:52
+
+   It lives in the SHARED stylesheet rather than in viewer.html because
+   the tracker and the calendar both draw flights and, before this, drew
+   them differently — the tracker had a route strip with the codes above
+   the times, the flight list had a pair of arrow chips, and the calendar
+   agenda had a hyphenated range. Three surfaces, three answers to one
+   question, which is the same failure the palette had before v5.9 and the
+   zone label had before 1.2.0. Any new surface that shows a flight uses
+   this and inherits every fix.
+
+   SIZE IS A MODIFIER, NOT A COPY. Everything scales off the custom
+   properties declared on .fstrip, so --lg / --md / --sm each override a
+   handful of numbers and nothing else. Adding a fourth size must never
+   mean duplicating the rules below.
+
+     --lg   the current flight, tracker            (hero)
+     --md   every other flight on the tracker
+     --sm   the calendar agenda, where there are hundreds
+
+   COLOUR SAYS WHETHER THE PLAN IS HOLDING, and it is the only thing that
+   does — there is no "on time" pill and no delta printed here (the strip
+   shows the CORRECTED time, and how far off it ran belongs in the
+   expanded view where there is room to say it in words).
+
+       green    EARLY
+       red      LATE (or cancelled)
+       plain    exactly as scheduled, or nothing published yet
+
+   ON TIME IS PLAIN, NOT GREEN, and that is deliberate (owner's call,
+   1.9.0). Green has to mean "better than the plan" or it means nothing:
+   if every normal flight is green then green is the background colour of
+   the app and the eye stops reading it — the same reasoning that killed
+   the "on time" pill. It also collapses a distinction the app cannot
+   honestly draw at a glance, because "the airline says on time" and "the
+   airline has said nothing" look identical once they are the same colour,
+   and only one of them is a report.
+
+   THE DISC TAKES ITS COLOUR FROM ITS OWN TIME. They were fixed by
+   direction — green out, red in — which is what the reference app does,
+   but it meant a disc could sit red beside a green time and read as a
+   contradiction. The glyph already says which end it is (up-and-out,
+   down-and-in), so direction does not need the colour too, and the colour
+   is worth more spent on the thing that changes. A disc with no news is
+   drawn on --border rather than left invisible; see the invariant about
+   painting on a themed surface. */
+.fstrip {
+  --fstrip-num: 0.95rem;
+  --fstrip-cities: 1rem;
+  --fstrip-ends: 0.9375rem;
+  --fstrip-disc: 18px;
+  --fstrip-glyph: 11px;
+  --fstrip-gap: 0.3rem;
+  min-width: 0;
+}
+.fstrip--lg {
+  --fstrip-num: 1.3rem;
+  --fstrip-cities: 1.25rem;
+  --fstrip-ends: 1.0625rem;
+  --fstrip-disc: 22px;
+  --fstrip-glyph: 13px;
+  --fstrip-gap: 0.4rem;
+}
+.fstrip--md {
+  --fstrip-num: 0.95rem;
+  --fstrip-cities: 0.9375rem;
+  --fstrip-ends: 0.9375rem;
+  --fstrip-disc: 18px;
+  --fstrip-glyph: 11px;
+  --fstrip-gap: 0.3rem;
+}
+.fstrip--sm {
+  --fstrip-num: 0.8125rem;
+  --fstrip-cities: 0.8125rem;
+  --fstrip-ends: 0.8125rem;
+  --fstrip-disc: 15px;
+  --fstrip-glyph: 9px;
+  --fstrip-gap: 0.22rem;
+}
+
+.fstrip-head {
+  display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap;
+}
+.fstrip-num {
+  font-size: var(--fstrip-num); font-weight: 700; letter-spacing: -0.01em;
+  color: var(--muted);
+}
+/* The hero says the flight number in full contrast; further down the page
+   the route is what the eye is scanning for and the number is a label on
+   it, so it stays muted the way it is in the reference apps. */
+.fstrip--lg .fstrip-num { color: var(--text); }
+.fstrip-tags { display: inline-flex; gap: 0.35rem; align-items: center; flex-wrap: wrap; }
+
+.fstrip-cities {
+  font-size: var(--fstrip-cities); font-weight: 700; color: var(--text);
+  margin: var(--fstrip-gap) 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* "Dallas TO Northwest Arkansas" — the joining word is not part of either
+   city name and reads as noise at the same weight. */
+.fstrip-cities .to-word {
+  font-weight: 400; color: var(--muted);
+  font-size: 0.85em; margin: 0 0.15rem;
+}
+
+.fstrip-ends {
+  display: flex; align-items: center; gap: 0.9rem;
+  font-size: var(--fstrip-ends);
+}
+.fstrip-end {
+  display: inline-flex; align-items: center; gap: 0.3rem; min-width: 0;
+}
+/* The arrival end is pushed to the right so the two ends sit at opposite
+   edges, which is what makes the progress track below them line up with
+   the airports it runs between. */
+.fstrip-end.arr { margin-left: auto; }
+.fstrip-disc {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: var(--fstrip-disc); height: var(--fstrip-disc);
+  border-radius: 999px; flex-shrink: 0;
+  /* No news. Visible, but not making a claim. */
+  background: var(--border); color: var(--muted);
+}
+.fstrip-disc.early { background: var(--good); color: #fff; }
+.fstrip-disc.late, .fstrip-disc.cancelled { background: var(--bad); color: #fff; }
+/* The glyph is sized HERE, not by width/height attributes on the svg, so
+   one shared partial serves all three strip sizes. */
+.fstrip-disc svg {
+  display: block;
+  width: var(--fstrip-glyph); height: var(--fstrip-glyph);
+}
+.fstrip-code {
+  font-weight: 700; color: var(--text); letter-spacing: 0.01em;
+}
+.fstrip-time {
+  font-weight: 600; color: var(--text);
+  font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.fstrip-time.early { color: var(--good); }
+.fstrip-time.late { color: var(--bad); }
+.fstrip-time.cancelled { color: var(--bad); text-decoration: line-through; }
+/* Running exactly to plan, and nothing published at all, are BOTH plain.
+   Green is reserved for beating the plan; see the block comment above. */
+.fstrip-time.scheduled, .fstrip-time.ontime { color: var(--text); }
+
+/* A flown leg is history, not news. Dimmed as a whole rather than by
+   restating every colour, so the delay colours survive at lower contrast
+   instead of being flattened to grey — "he landed 40 late yesterday" is
+   still worth seeing. */
+.fstrip.is-past { opacity: 0.62; }
+
+@media (max-width: 360px) {
+  .fstrip--lg { --fstrip-cities: 1.1rem; --fstrip-ends: 1rem; }
+  .fstrip-ends { gap: 0.5rem; }
+}
 
 /* ---------------------------------------------------------------- TAB BAR
    A floating pill, offset to the left rather than a full-width bar. Left

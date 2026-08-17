@@ -1,7 +1,10 @@
 # MyPilot
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.4.0.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.9.0.
+
+The version above was stale at 1.4.0 for five releases. `app/version.py`
+is the only authority; this line is a convenience and nothing reads it.
 
 Formerly "flight-tracker" / "Pilot Tracker". Renamed in 1.0.0; see VERSION
 HISTORY for why the version number restarted.
@@ -45,7 +48,7 @@ seriously.
 
 ## STATE
 
-**v1.8.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+**v1.9.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
 owner plus several FOs, who fly the same legs — hence shared flight rows
 (v5.1, retained).
 
@@ -66,7 +69,27 @@ page split (1.6.0–1.7.0). All three came out of the same problem — the app
 could not be OPERATED without SSH, and bugs could not be reproduced without
 flying a trip.
 
-Tests: **987**, eleven suites, all passing.
+Tests: **1,040**, eleven suites, all passing.
+
+**Current work: the UI chunks (1.9.0 onward).** Five agreed steps, owner's
+brief, reworking the tracker and calendar around one flight-strip
+component modelled on a reference consumer app. This is NOT a detour
+around NEXT UP — N2 (logbook) still follows — but the tracker had grown
+three different ways of drawing the same thing and the calendar had to
+become the history browser before past flights could leave the tracker.
+
+| Step | What | State |
+|---|---|---|
+| 1 | the `.fstrip` component + the current flight card | **DONE 1.9.0** |
+| 2 | the expanded view, on the reference layout | next |
+| 3 | tracker list: current trip only, no past-flights toggle, positioned on the live leg | |
+| 4 | calendar: expandable strips with history and a mini map | |
+| 5 | regression pass across themes, time formats and the odd states | |
+
+Step 3 carries a DECIDED behaviour worth not re-litigating: once a trip
+ends, the first leg of the NEXT trip takes the card, so the question "when
+do I leave again" is answered without navigating. And past flights leave
+the tracker entirely — they belong to step 4's calendar.
 
 | Suite | N | Covers |
 |---|---|---|
@@ -75,8 +98,8 @@ Tests: **987**, eleven suites, all passing.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, placeholder filter |
-| `tests_ui_fixes.py` | 376 | layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
-| `tests_app_shell.py` | 165 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
+| `tests_ui_fixes.py` | 427 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
+| `tests_app_shell.py` | 167 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
 | `tests_timezones.py` | 68 | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
 | `tests_closeout_sweep.py` | 42 | the abandonment cliff, the on-ground handover, the late gate-in chase and its cap |
 | `tests_import_merge.py` | 39 | additive import, month scoping, future-only reconciliation, the diff, manual add |
@@ -814,6 +837,24 @@ Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
     plane was `var(--accent)` on a `var(--accent)` fill and was invisible
     until it moved past it. Anything drawn ON a themed surface needs paint
     that reads against every state that surface has. (1.7.0)
+25. **A flight is drawn by `.fstrip`, in one of its three sizes.** The
+    tracker card, the tracker list and the calendar agenda each had their
+    own markup for "flight number, city pair, two times" and had already
+    diverged on which times carried a zone and what the colours meant.
+    Same shape of failure as the eleven copies of the palette (v5.9) and
+    the three producers of a zone label (1.2.0). The component lives in
+    `static/app.css`; `--lg`/`--md`/`--sm` override CUSTOM PROPERTIES ONLY.
+    A size that has to restate a layout rule is a fourth copy wearing a
+    modifier's name — add a variable instead. Contextual overrides
+    (`.fstrip-head .status`) belong to the surface and are fine. (1.9.0)
+26. **Green means EARLY. On time is plain.** Not a style preference: green
+    on every normal flight is wallpaper, which is the same argument that
+    killed the on-time pill, AND it would make "the airline reported on
+    time" indistinguishable from "the airline has reported nothing" — two
+    states this app is careful to keep apart everywhere else. Red is late
+    or cancelled. Plain is on-schedule or unreported. The disc beside a
+    time takes that time's colour, never a fixed one for its direction.
+    (1.9.0)
 
 ## MODULE MAP
 
@@ -1558,13 +1599,13 @@ python tests_poller_end_to_end.py   #  47
 python tests_past_leg_detail.py     #  19
 python tests_budget_limit.py        #  17
 python tests_carrier_cap.py         #  13
-python tests_ui_fixes.py            # 376
-python tests_app_shell.py           # 165
+python tests_ui_fixes.py            # 427
+python tests_app_shell.py           # 167
 python tests_timezones.py           #  68
 python tests_closeout_sweep.py      #  42
 python tests_import_merge.py        #  39
 python tests_test_mode.py           # 133
-```                                  # 987
+```                                  # 1040
 
 Each uses its own scratch DB via `PT_DB_FILE`. Read
 `tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
@@ -1594,6 +1635,86 @@ invariant 1.
   exactly this reason.
 
 ## VERSION HISTORY
+
+### 1.9.0 — one way to draw a flight
+
+First of five UI chunks. This one builds the COMPONENT; the surfaces that
+consume it follow. Nothing about polling, closure, matching, budget or the
+schema changed.
+
+**Three surfaces drew a flight three ways.** The tracker card stacked the
+airport code above the time at each end of the progress track; the flight
+list used a pair of arrow chips; the calendar agenda printed a hyphenated
+range. Three implementations of one idea, drifting independently, with any
+given fix landing on whichever one somebody happened to be looking at —
+the same failure the palette had before v5.9 and the zone label had before
+1.2.0.
+
+`.fstrip` in `static/app.css` is now the only one, in three sizes:
+
+    ENY3729                                    [In air]
+    Dallas-Fort Worth to Oklahoma City
+    (↗) DFW 20:10ᶜᵀ            (↘) OKC 21:32ᶜᵀ
+
+`--lg` (tracker card), `--md` (tracker list, 1.10.0) and `--sm` (calendar,
+1.12.0) override CUSTOM PROPERTIES ONLY, never layout rules — a test
+asserts that, because a size modifier that restates a layout rule has
+stopped being a modifier and become a fourth copy. Both arrow glyphs are
+single shared partials carrying no width/height, sized from
+`--fstrip-glyph`, for the reason invariant 22 exists.
+
+**The colour rule, and why on time is not green.** Owner's call:
+
+| | |
+|---|---|
+| green | EARLY |
+| red | LATE, or cancelled |
+| plain | exactly as scheduled, **or nothing published yet** |
+
+Green has to mean "better than the plan" or it becomes the background
+colour of the app and the eye stops reading it — the same reasoning that
+says there is no "on time" pill. It also collapses a distinction the app
+cannot otherwise draw at a glance: "the airline says on time" and "the
+airline has said nothing" would look identical, and only one of them is a
+report.
+
+**The discs take their colour from their own time.** They shipped fixed by
+direction (green out, red in), which is what the reference app does and
+which meant a red disc could sit beside a green time and read as an
+argument. The glyph already says which end it is, so direction does not
+need the colour as well. A disc with nothing to report is drawn on
+`--border` rather than left invisible (invariant 24). One function writes
+the disc AND its time from one `line`, so the two cannot drift.
+
+**The strip shows the corrected time and nothing else.** No struck-through
+original, no "12 min late" chip. This is the always-visible summary; the
+delta belongs in the expanded view, in words, where there is room (1.10.0).
+
+**Zone superscripts on the card, and why the template was not the bug.**
+Reported as the expanded card not using the superscript form 1.3.0
+introduced. The cause was in the PAYLOAD, not the markup: `_time_line`
+emitted one glued string, `"12:39 CDT"`, so the zone lived inside the same
+text node as the digits and CSS had nothing to select. It now emits
+`time_short`, `was_short` and `zone` alongside the glued `time`, which
+every existing caller keeps using. Additive, so no API version bump. The
+label is resolved against the leg's own scheduled instant, so it answers
+daylight time for the day being shown rather than for today.
+
+**BUG: tapping a flight blanked the two rows that matter.**
+`applyEnrichment` hides Departure and Arrival when `dep_line`/`arr_line`
+are absent, and `applyLegPayload` called it without them — so switching
+legs wiped the expanded view's two most important rows until a full page
+reload. Silent in the usual way: every other row on the panel was fine, so
+it read as "still loading". Found while rewiring the card, not reported.
+
+**Deleted, not merely unused:** `.flight-num`, `.city-route`,
+`.route-ends`, `.route-end`, `.route-code`, `.route-time-wrap`,
+`.chip-time`, `.chip-delay`, `.flight-line`. A test asserts each is gone,
+matching on rule declarations rather than on the word, so the comment
+recording the removal does not read as the removal not having happened.
+`.route-strip` survives as the progress track alone.
+
+Tests: 987 → 1,040. `tests_ui_fixes.py` 376 → 427.
 
 ### 1.8.0 — the diagnostics were the broken thing
 

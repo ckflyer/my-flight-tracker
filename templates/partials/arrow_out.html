@@ -1,0 +1,9 @@
+{#- The DEPARTURE glyph: up and out. One file so the tracker card, the
+    flight list and the calendar cannot drift into three arrows, the way
+    the aeroplane became three silhouettes before 1.7.0.
+
+    No width/height attributes — the size comes from --fstrip-glyph via
+    CSS, which is what lets one glyph serve all three strip sizes. Stroke
+    is heavier than the app's other icons because this one is painted
+    white on a saturated disc at 9-13px, where a hairline disappears. -#}
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline></svg>
