@@ -6,55 +6,20 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # Everything persistent lives here: flighttracker.db holds schedule
-      # legs, accounts, and breadcrumb positions. Point this at a TrueNAS
-      # dataset.
-      - ./data:/app/data
+      - ./data:/app/data                    # database + backups. Point at a TrueNAS dataset.
     environment:
-      # OPTIONAL. Which ADS-B feeds to use, in order. The app tries each
-      # until one answers and then sticks with it. Leave commented out to
-      # use the built-in list.
-      #
-      # airplanes.live closed its public API — it now answers HTTP 403 with
-      # a note asking you to email contact@airplanes.live for access. If you
-      # request and receive access, put it back at the front of this list.
+      - TZ=${TZ:-America/Chicago}           # server timezone
+
+      # --- optional. Uncomment to change from the default. ---------------
+      # - PT_RETENTION_DAYS=365             # days to keep flights/tracks. 0 = forever. See BACKUP.md
+      # - PT_HOME_CALLSIGN=ENY              # ICAO prefix your own legs fly under
+      # - PT_CANDIDATE_CALLSIGNS=ENY,AAL,JIA,PDT   # prefixes to try for a deadhead, cheapest first
+      # - PT_DEBUG_LOG=1                    # record why legs closed. Read at /admin. Off = fewer writes
+      # - PT_DEBUG_MAX_EVENTS=20000         # decision log ring size
+      # - PT_SECRET_KEY=                    # pins login sessions across a DB rebuild. Generate ONCE:
+      #                                     #   python3 -c "import secrets; print(secrets.token_hex(32))"
+
+      # ADS-B feeds. Normally leave these alone and manage feeds at /admin —
+      # setting either one PINS the list and the admin page can't change it.
       # - ADSB_ENDPOINTS=https://api.adsb.lol/v2,https://opendata.adsb.fi/api/v2
-      #
-      # OPTIONAL. Only if a feed issues you credentials. Sent as a bearer
-      # token; leave unset for the open feeds, which need nothing.
-      # - ADSB_API_KEY=
-      #
-      # Check which feeds are answering at /admin/diagnostics.
-      - TZ=${TZ:-America/Chicago}
-      #
-      # OPTIONAL. How long flights, tracks and closeouts are kept, in days.
-      # Default 365 (was 30 before v1.0.0). Set 0 to keep everything forever
-      # — storage is not the constraint, a growing archive of where crew have
-      # been is. Whatever you choose, read BACKUP.md: past 30 days this file
-      # stops being disposable.
-      # - PT_RETENTION_DAYS=365
-      #
-      # OPTIONAL. Carrier callsigns. This is CONFIGURATION, not branding:
-      # a bid line gives a bare flight number, and the app has to know which
-      # ICAO prefix it broadcasts under or nothing tracks. Change these and
-      # the app works for a crew member at any airline.
-      #
-      #   PT_HOME_CALLSIGN        the prefix YOUR own legs fly under
-      #   PT_CANDIDATE_CALLSIGNS  prefixes a DEADHEAD might be on, in order,
-      #                           cheapest guess first
-      #
-      # OPTIONAL. Decision logging, for chasing a bug. Records WHY the app
-      # closed (or did not close) a leg, with the exact inputs. Off by
-      # default: it writes a row on every poll and is only worth the writes
-      # while you are actually chasing something. Read it at /admin/debug.
-      # - PT_DEBUG_LOG=1
-      # - PT_DEBUG_MAX_EVENTS=20000
-      #
-      # - PT_HOME_CALLSIGN=ENY
-      # - PT_CANDIDATE_CALLSIGNS=ENY,AAL,JIA,PDT
-      # OPTIONAL. Pins the session-signing key so logins survive absolutely
-      # anything, including the database being rebuilt from scratch. Leave
-      # it commented out and the key is kept in the database automatically.
-      # To use it, generate one ONCE and never change it:
-      #     python3 -c "import secrets; print(secrets.token_hex(32))"
-      # - PT_SECRET_KEY=paste_the_generated_value_here
+      # - ADSB_API_KEY=                     # only if a feed issues you credentials

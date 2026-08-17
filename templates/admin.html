@@ -32,13 +32,6 @@
     h1 { font-size: 1.35rem; margin-bottom: 0.3rem; }
     .lede { color: var(--muted); font-size: 0.85rem; line-height: 1.55; margin-bottom: 1rem; }
     a { color: var(--accent); }
-    .jump { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1.25rem; }
-    .jump a {
-      padding: 0.4rem 0.7rem; border-radius: 999px; font-size: 0.78rem;
-      font-weight: 600; text-decoration: none;
-      border: 1px solid var(--border); color: var(--text);
-    }
-    .jump a:hover { border-color: var(--accent); color: var(--accent); }
     h2 {
       font-size: 0.78rem; font-weight: 700; text-transform: uppercase;
       letter-spacing: 0.07em; color: var(--muted);
@@ -93,10 +86,53 @@
     .flash { border-radius: 8px; padding: 0.6rem 0.8rem; font-size: 0.82rem; margin-bottom: 0.9rem; }
     .flash.err { border: 1px solid #ef4444; color: #ef4444; }
     .flash.good { border: 1px solid #22c55e; color: #22c55e; }
-    .log-line { font-family: ui-monospace, monospace; font-size: 0.72rem; border-top: 1px solid var(--border); padding: 0.45rem 0; line-height: 1.5; word-break: break-word; }
+    /* The console. A fixed-height scroller rather than an endless page:
+       the log is the longest thing on this page by an order of magnitude,
+       and letting it run free means every other section is unreachable
+       once anything has been logged. */
+    .console {
+      max-height: 60vh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+      background: var(--input-bg); border-radius: 8px;
+      padding: 0.2rem 0.7rem; margin-top: 0.5rem;
+    }
+    .console.tailing { border: 1px solid var(--accent); }
+    .log-line {
+      font-family: ui-monospace, monospace; font-size: 0.72rem;
+      border-top: 1px solid var(--border); padding: 0.45rem 0;
+      line-height: 1.5; overflow-wrap: anywhere;
+    }
+    .log-line:first-child { border-top: 0; }
+    .log-line.is-new { animation: flash-in 1.2s ease-out; }
+    @keyframes flash-in { from { background: rgba(59,130,246,0.18); } to { background: transparent; } }
     .log-what { color: var(--accent); font-weight: 600; }
+    .log-who { color: var(--muted); }
+    .log-k { color: var(--muted); }
+    .log-bar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; justify-content: space-between; margin-top: 0.75rem; }
+    .log-bar-right { display: flex; gap: 0.4rem; align-items: center; }
+    .log-bar button, .log-bar .dl {
+      padding: 0.35rem 0.7rem; font-size: 0.75rem; border-radius: 8px;
+      border: 1px solid var(--border); color: var(--text);
+      text-decoration: none; background: transparent; cursor: pointer;
+    }
+    .log-bar button.live { border-color: var(--accent); color: var(--accent); }
     .filter-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-end; margin-bottom: 0.5rem; }
-    .filter-row label { flex: 1; min-width: 8rem; font-size: 0.72rem; color: var(--muted); }
+    .filter-row label { flex: 1; min-width: 7.5rem; font-size: 0.72rem; color: var(--muted); }
+    .filter-row select { width: 100%; }
+    .clear-filters { font-size: 0.75rem; align-self: center; }
+    /* The diagnostics block is GENERATED markup with inline styles of its
+       own. Rather than chase every one, the section is constrained here:
+       nothing inside may exceed its width, long tokens break, and the two
+       places that genuinely need a wide table (the feeds editor, the
+       lookup history) scroll on their own instead of pushing the page.
+       Before 1.8.0 the whole admin page scrolled sideways on a phone. */
+    .diag { overflow-wrap: anywhere; }
+    .diag table { width: 100%; table-layout: fixed; font-size: 0.78rem; }
+    .diag td, .diag th { word-break: break-word; padding: 0.3rem 0.5rem 0.3rem 0; }
+    .diag code { background: none; padding: 0; font-size: 0.74rem; }
+    .diag h2 { font-size: 0.78rem; margin: 1.4rem 0 0.4rem; padding-top: 0.9rem; }
+    .diag h3 { font-size: 0.85rem; margin: 1rem 0 0.3rem; }
+    .diag input { max-width: 100%; min-width: 0 !important; box-sizing: border-box; }
+    .diag p { font-size: 0.78rem; line-height: 1.5; color: var(--muted); margin: 0.4rem 0; }
     .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
   </style>
 </head>
@@ -105,10 +141,6 @@
   <h1>Admin</h1>
   <p class="lede">Running the install. Your own schedule is on the <a href="/flights">Flights</a> page; this is everything else.</p>
 
-  <nav class="jump" aria-label="Sections">
-    <a href="#people">People</a><a href="#test">Test mode</a>
-    <a href="#diagnostics">Diagnostics</a><a href="#log">Decision log</a>
-  </nav>
 
   {% if flash %}<div class="flash {{ flash_kind }}">{{ flash }}</div>{% endif %}
 
@@ -249,24 +281,108 @@
       beside the value it was compared against — so "why is this leg still showing taxi-in"
       is answered by reading rather than by reasoning about code.</p>
     {% else %}
-    <form method="get" action="/admin" class="filter-row">
-      <label>Flight id<input type="text" name="subject" value="{{ log_subject }}" placeholder="2026-08-04-3729-DFW-OKC"></label>
-      <label>Event<input type="text" name="event" value="{{ log_event }}" placeholder="closure."></label>
-      <button type="submit">Filter</button>
+    <form method="get" action="/admin#log" class="filter-row">
+      <label>Search everything<input type="text" name="q" value="{{ log_q }}" placeholder="3729, N306DD, taxi…"></label>
+      <label>Flight<input type="text" name="subject" value="{{ log_subject }}" placeholder="3729"></label>
+      <label>Event
+        <select name="event">
+          <option value="">all events</option>
+          {% for n in log_names %}<option value="{{ n }}"{% if n == log_event %} selected{% endif %}>{{ n }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Show
+        <select name="limit">
+          {% for n in log_limits %}<option value="{{ n }}"{% if n == log_limit %} selected{% endif %}>{{ n }} lines</option>{% endfor %}
+        </select>
+      </label>
+      <button type="submit" class="primary">Apply</button>
+      {% if log_q or log_subject or log_event %}<a class="clear-filters" href="/admin#log">Clear</a>{% endif %}
     </form>
-    <p class="hint">{{ log_events|length }} shown{% if log_subject or log_event %}, filtered{% endif %}.</p>
-    {% for e in log_events %}
-    <div class="log-line">
-      <span class="muted">{{ (e.at[5:19]|replace('T', ' ')) if e.at else '' }}</span>
-      <span class="log-what">{{ e.event }}</span>
-      {% if e.subject %}<span class="muted">{{ e.subject }}</span>{% endif %}
-      <br>{{ e.detail }}
+
+    <div class="log-bar">
+      <span class="hint" style="margin:0">{{ log_events|length }} shown{% if log_q or log_subject or log_event %}, filtered{% endif %}</span>
+      <span class="log-bar-right">
+        <button type="button" id="tail-btn" onclick="toggleTail()">▶ Live tail</button>
+        <a class="dl" href="/admin/log/download?limit={{ log_limit }}&amp;subject={{ log_subject }}&amp;event={{ log_event }}&amp;q={{ log_q }}">Download</a>
+      </span>
     </div>
-    {% endfor %}
-    {% if not log_events %}<p class="hint">Nothing recorded yet.</p>{% endif %}
+
+    {#- The console. Newest at the TOP when static, because that is what you
+        want on opening the page; the live tail flips to appending at the
+        bottom and pins the scroll there, because that is what you want when
+        watching. Two different jobs, one element. -#}
+    <div class="console" id="console">
+      {% for e in log_events %}
+      <div class="log-line">
+        <span class="muted">{{ (e.at[5:19]|replace('T', ' ')) if e.at else '' }}</span>
+        <span class="log-what">{{ e.event }}</span>
+        {% if e.subject %}<span class="log-who">{{ e.subject }}</span>{% endif %}
+        {% for k, v in e.detail.items() %}<br><span class="log-k">{{ k }}</span> {{ v }}{% endfor %}
+      </div>
+      {% endfor %}
+      {% if not log_events %}<p class="hint">Nothing recorded yet.</p>{% endif %}
+    </div>
+
     <form method="post" action="/admin/debug/clear" style="margin-top:0.9rem" onsubmit="return confirm('Clear the decision log?');">
       <button type="submit" class="danger">Clear log</button>
     </form>
+    <script>
+      // Live tail. Polls for lines NEWER than the highest id it has seen,
+      // rather than re-fetching the window each time — the usual answer is
+      // an empty list, which costs nothing. Not a WebSocket on purpose:
+      // this runs behind whatever reverse proxy is on the NAS, and a
+      // long-lived connection is the first thing such a proxy drops.
+      var tailTimer = null, lastId = {{ log_max_id }};
+      var TAIL_MAX = 500;   // trim, or an overnight tail eats the tab
+      function tailParams() {
+        var f = document.querySelector('.filter-row');
+        var p = new URLSearchParams({ after_id: lastId });
+        ['q', 'subject', 'event'].forEach(function (n) {
+          var el = f.querySelector('[name=' + n + ']');
+          if (el && el.value) p.set(n, el.value);
+        });
+        return p.toString();
+      }
+      function tailPoll() {
+        fetch('/admin/log/tail?' + tailParams())
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (!d.events || !d.events.length) return;
+            lastId = d.max_id;
+            var box = document.getElementById('console');
+            d.events.forEach(function (e) {
+              var div = document.createElement('div');
+              div.className = 'log-line is-new';
+              div.textContent = (e.at || '').slice(5, 19).replace('T', ' ')
+                + '  ' + e.event + '  ' + (e.subject || '') + '  ' + e.detail;
+              box.appendChild(div);
+            });
+            while (box.children.length > TAIL_MAX) box.removeChild(box.firstChild);
+            box.scrollTop = box.scrollHeight;
+          })
+          .catch(function () { /* a failed poll is not worth reporting */ });
+      }
+      function toggleTail() {
+        var btn = document.getElementById('tail-btn');
+        var box = document.getElementById('console');
+        if (tailTimer) {
+          clearInterval(tailTimer); tailTimer = null;
+          btn.textContent = '▶ Live tail'; btn.classList.remove('live');
+          box.classList.remove('tailing');
+          return;
+        }
+        tailTimer = setInterval(tailPoll, 2000);
+        btn.textContent = '■ Stop tail'; btn.classList.add('live');
+        box.classList.add('tailing');
+        box.scrollTop = box.scrollHeight;
+        tailPoll();
+      }
+      // Stop polling when the tab is hidden. A phone left on this page in a
+      // pocket would otherwise poll all night.
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden && tailTimer) toggleTail();
+      });
+    </script>
     {% endif %}
   </div>
 

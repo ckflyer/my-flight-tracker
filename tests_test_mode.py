@@ -38,6 +38,26 @@ UTC = timezone.utc
 PASS, FAIL = [], []
 
 
+def _runs_of_comment_lines(text):
+    """Consecutive whole-line comments. The owner's complaint about the
+    compose file was that reading it meant wading through paragraphs, so
+    what is being asserted is the absence of paragraphs."""
+    run = []
+    for ln in text.splitlines():
+        stripped = ln.strip()
+        # A commented-OUT setting is not prose. `# - PT_DEBUG_LOG=1` is a
+        # line you uncomment, and a run of those is a menu, not a
+        # paragraph. Only genuine prose counts against the limit.
+        if stripped.startswith("#") and "=" not in stripped:
+            run.append(ln)
+        else:
+            if run:
+                yield run
+            run = []
+    if run:
+        yield run
+
+
 def _style_bodies(icons_src):
     """Each style's `icon` string out of make_icons.py, crudely but reliably.
 
@@ -412,6 +432,113 @@ check("the timezone superscript is one step smaller",
 check("...and not smaller than iOS will reliably render",
       "0.4375rem" not in css and "0.375rem" not in css)
 
+
+
+
+
+# ---------------------------------------------------------------------------
+print("\n-- the diagnostics page was the thing that was broken (1.8.0) --")
+
+with open(os.path.join(here, "app", "airplaneslive.py"), encoding="utf-8") as fh:
+    al = fh.read()
+with open(os.path.join(here, "app", "livesource.py"), encoding="utf-8") as fh:
+    ls = fh.read()
+with open(os.path.join(here, "app", "debuglog.py"), encoding="utf-8") as fh:
+    dl = fh.read()
+
+# THE FEEDS-ALL-RED BUG. probe() called requests.get directly, so loading
+# the admin page fired one request per feed with no spacing. adsb.fi allows
+# 1/second. Every feed after the first returned 429 and the page reported
+# them all dead while the poller tracked flights perfectly well.
+check("there is a shared throttle to call", "def throttle()" in ls)
+check("the probe goes through it", "throttle()" in al and "from .livesource import throttle" in al)
+check("429 is reported as rate limiting, not failure",
+      "rate limited (feed is up" in al)
+check("...and counts as a working feed",
+      "if (ok or limited) and e.get" in src)
+check("the summary falls back to REAL lookup history when the probe fails",
+      "probe says no, but %d of the last %d REAL lookups succeeded" in src)
+
+# THE CLOSED-LEG BUG. active_flights() returns anything inside the tracking
+# window, and a leg stays there 3h past scheduled arrival whether closed or
+# not — so a leg that finished on the airline's gate-in still showed under
+# "active" AND got a live uncached lookup fired at it.
+check("closed legs are separated out of the active list",
+      '(_done if (_r is not None and _r["closed"]) else _open)' in src)
+check("...and are explicitly not queried", "Not queried, because they are" in src)
+check("...with the reason they are still listed shown",
+      "still listed only because they are inside the" in src)
+
+print("\n-- the log is searchable, bounded, and takeable away --")
+check("flight filter is a CONTAINS match, not exact",
+      'where.append("subject LIKE ?")' in dl)
+check("...because it held a full flight id nobody would type exactly",
+      "Typing \"3729\" now works." in dl)
+check("free-text search covers subject, event and detail together",
+      '"(subject LIKE ? OR event LIKE ? OR detail LIKE ?)"' in dl)
+check("the event menu is built from what is in the log",
+      "def event_names(" in dl)
+check("the tail asks only for what it has not seen", "after_id" in dl)
+check("the default is 100 lines, not 200", "limit: int = 100" in src)
+check("...and is bounded at both ends",
+      "max(10, min(int(limit), 2000))" in src)
+check("there is a live tail endpoint", '"/admin/log/tail"' in src)
+check("...that polls rather than holding a connection open",
+      "long-lived connection is the first thing" in src)
+check("...and stops when the tab is hidden", "visibilitychange" in ah)
+check("...and trims itself so an overnight tail cannot eat the tab",
+      "TAIL_MAX" in ah)
+check("the log downloads as plain text", '"/admin/log/download"' in src)
+check("...carrying the same filters that are on screen",
+      "filters: subject={subject or '-'}" in src)
+check("the console is a bounded scroller, not an endless page",
+      "max-height: 60vh" in ah)
+
+print("\n-- admin page fits a phone --")
+check("the jump pills are gone", 'class="jump"' not in ah)
+check("generated diagnostics rows no longer force nowrap",
+      "white-space:nowrap;vertical-align:top'>%s</td>" not in src)
+check("...and break long tokens instead", "word-break:break-word" in src)
+check("the embedded diagnostics block is width-constrained",
+      ".diag { overflow-wrap: anywhere; }" in ah and "table-layout: fixed" in ah)
+check("...including its inline-styled inputs",
+      "min-width: 0 !important" in ah)
+
+print("\n-- ADS-B feeds after airplanes.live withdrew its free API --")
+check("the open community feeds are the defaults",
+      "api.adsb.lol/v2" in al and "opendata.adsb.fi/api/v2" in al)
+check("airplanes.live ships disabled",
+      '{"url": "https://api.airplanes.live/v2", "enabled": False' in al)
+check("...with the reason and the way back recorded",
+      "FREE FROM A FEEDER'S OWN IP" in al)
+check("attribution is carried, as adsb.fi's terms require",
+      "FEED_CREDITS" in al and "adsb.fi" in src)
+check("a saved feed list can be reset to the built-in defaults",
+      "def reset_endpoints(" in al and "/admin/diagnostics/endpoints/reset" in src)
+check("...because a saved list silently overrides the defaults",
+      "stays pinned to a feed that now returns 403" in al)
+# The first version of this button ran DELETE FROM meta. The table is
+# app_meta — the one this module reads three lines above — so it 500'd on
+# exactly the installs that needed it, because a table only exists once
+# something has been written to it.
+check("reset targets the table this module actually reads",
+      "DELETE FROM app_meta WHERE key" in al)
+check("...and treats 'nothing was ever saved' as success, not an error",
+      "nothing to reset" in al)
+
+with open(os.path.join(here, "docker-compose.yml"), encoding="utf-8") as fh:
+    dc = fh.read()
+check("docker-compose is short", len(dc.splitlines()) < 30, str(len(dc.splitlines())))
+_settings = [ln for ln in dc.splitlines() if "=" in ln and "PT_" in ln or "ADSB_" in ln]
+check("...with an inline comment on each setting, not a paragraph above it",
+      sum(1 for ln in _settings if "#" in ln.split("=", 1)[-1]) >= 6,
+      str([ln.strip()[:40] for ln in _settings]))
+check("...and no multi-line comment blocks", 
+      max((len(list(g)) for g in _runs_of_comment_lines(dc)), default=0) <= 2,
+      str(max((len(list(g)) for g in _runs_of_comment_lines(dc)), default=0)))
+check("...and still documents every setting",
+      all(k in dc for k in ("PT_RETENTION_DAYS", "PT_HOME_CALLSIGN",
+                            "PT_DEBUG_LOG", "PT_SECRET_KEY", "ADSB_ENDPOINTS")))
 
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

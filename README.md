@@ -45,7 +45,7 @@ seriously.
 
 ## STATE
 
-**v1.7.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+**v1.8.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
 owner plus several FOs, who fly the same legs — hence shared flight rows
 (v5.1, retained).
 
@@ -66,7 +66,7 @@ page split (1.6.0–1.7.0). All three came out of the same problem — the app
 could not be OPERATED without SSH, and bugs could not be reproduced without
 flying a trip.
 
-Tests: **948**, eleven suites, all passing.
+Tests: **987**, eleven suites, all passing.
 
 | Suite | N | Covers |
 |---|---|---|
@@ -80,7 +80,7 @@ Tests: **948**, eleven suites, all passing.
 | `tests_timezones.py` | 68 | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
 | `tests_closeout_sweep.py` | 42 | the abandonment cliff, the on-ground handover, the late gate-in chase and its cap |
 | `tests_import_merge.py` | 39 | additive import, month scoping, future-only reconciliation, the diff, manual add |
-| `tests_test_mode.py` | 94 | simulator isolation (no spend, no ADS-B, no logbook), each scenario, admin promotion + password gate, the one-aeroplane rule |
+| `tests_test_mode.py` | 133 | simulator isolation (no spend, no ADS-B, no logbook), each scenario, admin promotion + password gate, the one-aeroplane rule |
 
 ## OPEN
 
@@ -803,7 +803,14 @@ Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
     style is a SINGLE closed path, because the map strokes an outline round
     every shape it is given. Adding a second shape "just for the map" is
     what produced three different aeroplanes. (1.7.0)
-23. **Nothing rides on a background of its own colour.** The progress-bar
+23. **The diagnostics page must not be the broken thing.** Two 1.8.0 bugs
+    lived only there: the probe bypassed the ADS-B throttle and reported
+    every feed dead, and the active-flights list included closed legs and
+    fired live lookups at them. Anything this page does upstream goes
+    through the SAME throttle and the SAME guards as the poller, or it
+    reports on an app that does not exist. When the probe and the real
+    lookup history disagree, the history wins. (1.8.0)
+24. **Nothing rides on a background of its own colour.** The progress-bar
     plane was `var(--accent)` on a `var(--accent)` fill and was invisible
     until it moved past it. Anything drawn ON a themed surface needs paint
     that reads against every state that surface has. (1.7.0)
@@ -1355,6 +1362,38 @@ Two actual months of FFDO lines, simulated against the shipped
 The per-leg ceiling is a hard 18 in every scenario, so a 50-leg month
 cannot exceed $4.50 even if every single flight goes wrong.
 
+## ADS-B FEEDS
+
+**airplanes.live withdrew its free API in 2026.** Their reasoning, from the
+notice sent to every API user: 2 billion requests a week, the month's egress
+allowance gone in four days, hosting up nearly 300% in 18 months, and AI
+agents and scrapers named directly as the cause. It is now $25/mo
+sponsorship — **or free from a feeder's own IP.**
+
+Defaults as of 1.8.0, tried in order until one answers:
+
+| Feed | Access | Terms |
+|---|---|---|
+| `api.adsb.lol/v2` | open to everyone | ODbL 1.0 |
+| `opendata.adsb.fi/api/v2` | open, 1 req/sec | personal, non-commercial; attribution required |
+| `api.airplanes.live/v2` | **off** — feeders and sponsors | enable it if you feed or sponsor |
+
+All three are ADSBexchange-v2 compatible, which is why swapping between
+them is a URL change and not a rewrite. Attribution for adsb.fi and adsb.lol
+is on the diagnostics panel, where their terms require it to be.
+
+**If the feed list on your install still names a dead feed**, use *Reset
+feeds to current defaults* on the admin page. `load_endpoints` prefers a
+list saved in the database over the built-in one, so an install that ever
+saved a list stays pinned to it while a fresh install of the same version
+works — a difference no amount of reading the code explains.
+
+**The best long-term answer is to feed.** A ~$30 RTL-SDR dongle and an
+antenna on the NAS earns free API access at airplanes.live and adsb.fi's
+feeder endpoints, adds coverage where the pilot actually flies, and removes
+this whole category of problem. It is the only option here that gets better
+rather than worse over time.
+
 ## COST CONTROL
 
 `/flights/{ident}` costs $0.005 per result set; `/schedules` costs $0.02,
@@ -1524,8 +1563,8 @@ python tests_app_shell.py           # 165
 python tests_timezones.py           #  68
 python tests_closeout_sweep.py      #  42
 python tests_import_merge.py        #  39
-python tests_test_mode.py           #  94
-```                                  # 948
+python tests_test_mode.py           # 133
+```                                  # 987
 
 Each uses its own scratch DB via `PT_DB_FILE`. Read
 `tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
@@ -1555,6 +1594,54 @@ invariant 1.
   exactly this reason.
 
 ## VERSION HISTORY
+
+### 1.8.0 — the diagnostics were the broken thing
+
+**Feeds showed all red while tracking worked fine.** `probe()` called
+`requests.get` directly instead of going through the throttle in
+`livesource`, so opening the admin page fired one request per configured
+feed with no spacing between them. adsb.fi allows 1 per second. Every feed
+after the first came back 429, and the page reported them all dead. The
+probe now shares the throttle, 429 is reported as rate limiting rather than
+failure, and when the probe and the real lookup history disagree the
+history wins — because the history is the answer to the question actually
+being asked.
+
+**"Active flights" listed legs that had closed hours ago,** and fired a live
+uncached lookup at each one. `active_flights()` returns whatever is inside
+the tracking window, and a leg stays there until 3 hours past scheduled
+arrival whether it closed or not. The poller was always right —
+`poll_once` skips closed legs — so this was the page misreporting the app,
+and spending real ADS-B requests to do it. Closed legs are now listed
+separately and not queried.
+
+Both bugs were in the one place whose entire job is telling you whether
+anything else is broken, which is the worst place for a bug to live.
+
+**The decision log became usable.** Flight filtering was an exact match on
+a full id like `2026-08-04-3729-DFW-OKC`, so it went unused; it is a
+contains match now and `3729` works. Added: free-text search across
+subject, event and detail together; an event menu built from what is
+actually in the log rather than requiring you to know the names; a line
+limit (100 default, was 200); a **live tail** that polls for what it has
+not seen and stops when the tab is hidden; and **download** as plain text
+carrying the same filters that are on screen.
+
+**Admin page fits a phone.** The embedded diagnostics is generated markup
+with its own inline styles — `white-space: nowrap` on every label and
+180-character raw API errors in the values — so the whole page scrolled
+sideways. The section is now width-constrained and long tokens break. Jump
+pills removed.
+
+**airplanes.live withdrew its free API.** See ADS-B FEEDS. Defaults are now
+adsb.lol and adsb.fi; airplanes.live ships disabled with the way back
+documented. Added a *reset feeds to defaults* button, because a saved list
+in the database silently overrides the built-in one.
+
+**docker-compose.yml: 60 lines to 25**, comments inline with the settings
+they explain.
+
+Tests: 948 → 987.
 
 ### 1.7.0 — saying what things are
 
