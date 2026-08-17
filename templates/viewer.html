@@ -376,17 +376,10 @@
        schedule now lives in a sheet that is always on screen, so there is
        nothing to fade and nothing to reveal. Its removal takes the whole
        scroll-position-drives-everything design with it — see .sheet. */
-    /* Empty space that lets the fixed map show through above the card. This
-       is what pushes the card down the screen. The script overwrites the
-       height with a measured pixel value on load and on resize; the calc is
-       the pre-script fallback. */
-    .hero-space { height: calc(var(--card-top) - 46px - 1rem); }
-    /* Matched to .expand-details.animating exactly — same duration, same
-       curve. The spacer shrinks by however much the panel grows, so the two
-       cancel and the card's bottom edge stays welded just above the tab
-       pills while the card opens upward into the map. Any mismatch here and
-       the Show/Hide row would drift during the slide. */
-    .hero-space.animating { transition: height 260ms cubic-bezier(0.4, 0, 0.2, 1); }
+    /* .hero-space is gone (1.13.0). It existed to push the hero card down
+       the screen, and there is no hero card. The measured-spacer dance that
+       kept the card's bottom edge welded above the tab pills went with it —
+       a fixed panel does not need its position computed. */
 
     /* THE MAP AND THE HEADS-UP LAYER, and why both carry a z-index.
 
@@ -469,17 +462,36 @@
     }
     .map-settings-panel input { width: auto; margin: 0; }
 
-    .collapsed-card {
-      position: relative;
-      z-index: 20;
-      margin-top: 0;
+    /* THE DETAIL PANEL slides up over the flight list and covers it. It is
+       the same content the hero card carried; what changed is that it is
+       summoned rather than permanently in the way.
+
+       transform, not height: the panel's contents do not reflow while it
+       moves, so the browser animates it on the compositor and the times
+       inside cannot re-wrap mid-slide. Every height-driven animation in
+       this file has cost a bug — the creeping bottom edge twice over — and
+       this one has no reason to be height-driven at all.
+
+       Above the sheet (30), below nothing. It covers the sheet completely
+       by design: the reference app does the same, and a half-covered list
+       behind a detail view is just something else to mis-tap. */
+    .detail-panel {
+      position: fixed;
+      left: 0; right: 0; bottom: 0;
+      z-index: 40;
+      max-height: 92vh;
       background: var(--card);
-      border-radius: 16px;
-      padding: 1.1rem 1.25rem;
-      margin-bottom: 0.85rem;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.12);
-      border: 1px solid var(--border);
+      border-radius: 18px 18px 0 0;
+      box-shadow: 0 -10px 34px rgba(0,0,0,0.34);
+      overflow-y: auto; -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+      padding: 1rem 1.1rem calc(1rem + 46px + env(safe-area-inset-bottom, 0px));
+      transform: translateY(101%);
+      transition: transform 300ms cubic-bezier(0.4, 0, 0.2, 1);
+      visibility: hidden;
     }
+    .detail-panel.open { transform: translateY(0); visibility: visible; }
+    @media (prefers-reduced-motion: reduce) { .detail-panel { transition: none; } }
     /* SLIDE-OPEN PANEL.
        All the spacing (gap, rule, padding) lives on the inner wrapper, and
        the outer element carries nothing but overflow:hidden and a height the
@@ -564,18 +576,17 @@
        reason the page exists — was invisible until you found a 0.72rem line
        of text and tapped it. The list is always on screen; .expand-wrap is
        kept as a plain container so nothing else has to move. */
-    .card-more {
-      display: flex; align-items: center; justify-content: center; gap: 0.4rem;
-      margin-top: 0.9rem; padding-top: 0.8rem; min-height: 40px;
-      border-top: 1px solid var(--border);
-      font-size: 0.8125rem; font-weight: 600; color: var(--muted);
-      cursor: pointer; -webkit-tap-highlight-color: transparent;
+    /* .card-more and its caret are gone (1.13.0). They opened and closed a
+       panel that no longer has two states: the detail panel IS the open
+       state, and the X dismisses it. */
+    .detail-close {
+      position: absolute; top: 0.7rem; right: 0.8rem; z-index: 2;
+      width: 34px; height: 34px; border-radius: 999px;
+      border: none; background: var(--border); color: var(--text);
+      font-size: 1.35rem; line-height: 1; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
     }
-    .card-more .caret {
-      font-size: 1rem; line-height: 1; display: inline-block;
-      transition: transform 0.15s ease;
-    }
-    .collapsed-card.expanded .card-more .caret { transform: rotate(180deg); }
+    .detail-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
     .row-flight-num { font-size: 0.95rem; font-weight: 700; letter-spacing: -0.01em; }
     .row-city-route { font-size: 0.8125rem; font-weight: 500; margin: 0.1rem 0 0.4rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -631,7 +642,9 @@
 
        Heights are viewport-relative because the content is a list of
        unknown length; the peek shows about two rows on a phone. */
-    :root { --sheet-peek: 34vh; --sheet-full: 82vh; }
+        /* Peek reaches roughly where the hero card used to start, which is
+       what the owner asked for and also about three rows. */
+    :root { --sheet-peek: 38vh; --sheet-full: 88vh; }
     .sheet {
       position: fixed;
       left: 0; right: 0; bottom: 0;
@@ -694,7 +707,10 @@
        nothing across the screen and is not what that setting is for. */
   </style>
 </head>
-<body>
+{# data-live-leg drives the detail panel's auto-open. Set from the SAME
+   flag the live ADS-B box uses, so "the app thinks he is flying" cannot
+   mean two different things on one page. #}
+<body data-live-leg="{{ '1' if is_selected_live else '0' }}">
   <div id="conn-bar" class="conn-bar" role="status" aria-live="polite">
     <span class="conn-dot" aria-hidden="true"></span><span id="conn-text"></span>
   </div>
@@ -742,9 +758,17 @@
   </div>
 
   {% if current %}
-  <div class="hero-space"></div>
+  {# THE DETAIL PANEL. Was the hero card that floated over the map; it is
+     now a full panel that slides up OVER the flight list and is dismissed
+     with the X. Same markup, same ids, same poll wiring — what changed is
+     where it sits and what opens it, not what it says.
 
-  <div class="collapsed-card" id="collapsed-card">
+     Rebuilt in place rather than written fresh precisely because of that:
+     every id here is written to by the poller, and a fresh panel would
+     have meant re-deriving all of it while also changing the layout. #}
+  <div class="detail-panel" id="detail-panel" role="dialog" aria-modal="true"
+       aria-labelledby="card-city-route">
+    <button class="detail-close" id="detail-close" type="button" aria-label="Back to flights">&times;</button>
     <div id="collapsed-card-header">
       {# THE FLIGHT STRIP, hero size. Same component the flight list and the
          calendar use — see the FLIGHT STRIP block in static/app.css. Every
@@ -772,17 +796,12 @@
 
         <div class="fstrip-cities" id="card-city-route">{{ current.origin_city }} <span class="to-word">to</span> {{ current.dest_city }}</div>
 
-        <div class="fstrip-ends">
-          <span class="fstrip-end dep">
-            <span class="fstrip-disc {{ current.dep_line.state if current.dep_line else '' }}" id="card-dep-disc" aria-hidden="true">{% include "partials/arrow_out.html" %}</span>
-            <span class="fstrip-code" id="card-origin-code">{{ current.origin }}</span>
-            <span class="fstrip-time {{ current.dep_line.state if current.dep_line else '' }}" id="card-dep-time">{{ (current.dep_line.time_short if current.dep_line else None) or current.dep_short or current.dep }}{% if current.dep_line and current.dep_line.zone %}<span class="tz" aria-hidden="true">{{ current.dep_line.zone }}</span>{% endif %}</span>
-          </span>
-          <span class="fstrip-end arr">
-            <span class="fstrip-disc {{ current.arr_line.state if current.arr_line else '' }}" id="card-arr-disc" aria-hidden="true">{% include "partials/arrow_in.html" %}</span>
-            <span class="fstrip-code" id="card-dest-code">{{ current.destination }}</span>
-            <span class="fstrip-time {{ current.arr_line.state if current.arr_line else '' }}" id="card-arr-time">{{ (current.arr_line.time_short if current.arr_line else None) or current.arr_short or current.arr }}{% if current.arr_line and current.arr_line.zone %}<span class="tz" aria-hidden="true">{{ current.arr_line.zone }}</span>{% endif %}</span>
-          </span>
+        {# NO TIMES HERE. The airport blocks below give both of them at
+           three times this size, with the original struck through beside
+           them. The folding-row machinery of 1.10.1 existed only to get
+           this row out of the way when the panel opened; the panel IS the
+           view now, so the row simply does not exist and endsH, foldEnds
+           and measureEnds went with it. #}
         </div>
       </div>
 
@@ -813,7 +832,7 @@
       <a href="#" id="back-to-active-link">&#8592; Back to active flight</a>
     </div>
 
-    <div class="expand-details" id="expand-details">
+    <div class="expand-details open" id="expand-details">
       <div class="ed-inner">
         {# THE EXPANDED VIEW, on the reference layout: one block per
            AIRPORT rather than a column of label/value pairs. The old shape
@@ -851,7 +870,6 @@
               </div>
               <div class="aptblock-facts">
                 <span class="aptblock-badge" id="v-dep-gate" style="{{ '' if (current.gates and current.gates.origin_gate) else 'display:none' }}">{% include "partials/arrow_out.html" %}<span id="v-dep-gate-text">{{ current.gates.origin_gate if current.gates else '' }}</span></span>
-                <span class="aptblock-term" id="v-dep-term" style="{{ '' if (current.gates and current.gates.origin_terminal) else 'display:none' }}">Terminal <b id="v-dep-term-text">{{ current.gates.origin_terminal if current.gates else '' }}</b></span>
               </div>
             </div>
           </div>
@@ -877,9 +895,7 @@
                 <div class="aptblock-note {{ current.arr_line.state if current.arr_line else '' }}" id="v-arr-note" style="{{ '' if (current.arr_line and current.arr_line.note) else 'display:none' }}">{{ current.arr_line.note if current.arr_line else '' }}</div>
               </div>
               <div class="aptblock-facts">
-                <span class="aptblock-badge" id="v-arr-bag" style="{{ '' if (current.gates and current.gates.baggage) else 'display:none' }}">Bag <b id="v-arr-bag-text">{{ current.gates.baggage if current.gates else '' }}</b></span>
                 <span class="aptblock-badge" id="v-arr-gate" style="{{ '' if (current.gates and current.gates.dest_gate) else 'display:none' }}">{% include "partials/arrow_in.html" %}<span id="v-arr-gate-text">{{ current.gates.dest_gate if current.gates else '' }}</span></span>
-                <span class="aptblock-term" id="v-arr-term" style="{{ '' if (current.gates and current.gates.dest_terminal) else 'display:none' }}">Terminal <b id="v-arr-term-text">{{ current.gates.dest_terminal if current.gates else '' }}</b></span>
               </div>
             </div>
           </div>
@@ -968,10 +984,6 @@
     
       </div>
 </div>
-    <div class="card-more" id="expand-hint" role="button" tabindex="0"
-         aria-expanded="false" aria-controls="expand-details">
-      <span id="expand-hint-label">Flight Details</span><span class="caret" aria-hidden="true">&#9662;</span>
-    </div>
   </div>
 
   <div class="sheet" id="sheet">
@@ -1103,213 +1115,16 @@
     })();
 
 
-    // ---- Card expand/collapse + past-flights toggle ----------------------
-    // These two behaviours lost their JavaScript somewhere before v4.5: the
-    // markup and CSS survived intact, but nothing set the .open / .expanded
-    // classes. Rewritten here against the CSS
-    // contract, which specifies them exactly:
-    //   .expand-details.open      -> display: block
-    //   .expand-wrap.open         -> display: block
-    //   .collapsed-card.expanded  -> city name wraps instead of truncating
-    (function() {
-      var card = document.getElementById('collapsed-card');
-      var details = document.getElementById('expand-details');
-      var hint = document.getElementById('expand-hint');
-      var hintLabel = document.getElementById('expand-hint-label');
-      if (!card || !details || !hint) return;
-
-      // NOTE: this no longer touches #expand-wrap. It used to open the card's
-      // detail AND the whole flight list on one switch, so the schedule was
-      // invisible on first load. The list is always rendered now.
-      // Slides the panel between 0 and its natural height. The height is
-      // measured rather than guessed: set it to auto, read it, put it back.
-      // A CSS-only version would need a fixed max-height, which either cuts
-      // long panels off or makes short ones pause before they appear.
-      //
-      // `instant` is used for the one call at start-up, which sets the
-      // closed state before anyone is looking and must not animate.
-      var slideTimer = null;
-
-      // HOW TALL THE STRIP'S TIMES ROW IS, when it is showing. That row
-      // folds away as the panel opens (see .fstrip-ends in app.css), which
-      // changes the card's height by its own height — and the spacer maths
-      // below welds the card's BOTTOM edge in place by predicting exactly
-      // how tall the card is about to be. Leave this out and the bottom
-      // edge creeps by ~22px over the 260ms, which is precisely the sort of
-      // drift the whole cardBase/target dance exists to prevent.
-      //
-      // Measured only while the card is SHUT, and remembered. Measuring it
-      // on the way open would read a row that has already started folding.
-      var endsEl = card.querySelector('.fstrip--lg .fstrip-ends');
-      var endsH = 0;
-      function measureEnds() {
-        if (!endsEl || card.classList.contains('expanded')) return;
-        endsEl.style.maxHeight = '';
-        var h = endsEl.getBoundingClientRect().height;
-        if (h > 0) endsH = h;
-      }
-      measureEnds();
-
-      // Fold the row between measured pixel heights, NOT between the CSS
-      // resting cap and zero. The rendered height is min(natural, cap), so
-      // a 4rem -> 0 transition spends its first third doing nothing visible
-      // and then collapses 22px over the remainder — while the panel and
-      // the spacer move smoothly across the whole 260ms. That mismatch is
-      // exactly the bottom-edge creep all three transitions exist to
-      // prevent. Pinning to endsH first makes the fold linear in HEIGHT and
-      // the three cancel out properly.
-      function foldEnds(collapsed) {
-        if (!endsEl) return;
-        endsEl.style.maxHeight = (collapsed ? endsH : 0) + 'px';
-        void endsEl.offsetHeight;                 // commit the start value
-        endsEl.style.maxHeight = (collapsed ? 0 : endsH) + 'px';
-      }
-
-      function slidePanel(open, instant) {
-        if (slideTimer) { clearTimeout(slideTimer); slideTimer = null; }
-        details.classList.remove('animating');
-
-        if (instant) {
-          details.classList.toggle('open', open);
-          details.style.height = '';
-          // No animation, so no pinning: back to the CSS resting cap.
-          if (endsEl) endsEl.style.maxHeight = open ? '0px' : '';
-          window._ptSliding = false;
-          return;
-        }
-
-        // Read by layout(), in the other block, to suppress the map re-fit
-        // until the card has stopped moving. Lives on window because these
-        // two scripts share nothing else.
-        window._ptSliding = true;
-
-        if (open) {
-          details.classList.add('open');
-          details.classList.remove('capped');
-          details.style.maxHeight = '';
-          details.style.height = 'auto';
-          var natural = details.getBoundingClientRect().height;
-          // Apply the cap, then re-measure. If the panel wanted more room
-          // than exists, it is now the capped height and scrolls internally
-          // — which is what keeps the card's bottom edge, and the button on
-          // it, exactly where it was when you tapped.
-          if (window._ptCapPanel) window._ptCapPanel(endsH);
-          var capPx = parseFloat(details.style.maxHeight) || natural;
-          var target = Math.min(natural, capPx);
-          if (target < natural - 1) details.classList.add('capped');
-          details.style.height = '0px';
-          void details.offsetHeight;          // force the 0 to take effect
-          // Measured with the panel at zero, so this is the card's height
-          // WITHOUT it. Deriving the target as base+panel rather than
-          // reading the card again avoids depending on whether the browser
-          // has started the transition yet — a race that happens to work in
-          // a real browser and silently double-counts anywhere it doesn't.
-          var cardBase = card.getBoundingClientRect().height -
-                         details.getBoundingClientRect().height;
-          details.classList.add('animating');
-          details.style.height = target + 'px';
-          foldEnds(true);
-          // Shrink the spacer above the card by exactly what the panel is
-          // about to add, on the same curve, so the card's bottom edge does
-          // not move a pixel while its top edge slides up into the map.
-          // cardBase was measured with the times row still showing; it is
-          // about to fold away, so the card ends up that much shorter.
-          if (window._ptLayoutHero) window._ptLayoutHero(cardBase - endsH + target, true);
-          // Back to auto once it arrives, so the panel can still grow when
-          // live data lands in it while it is open. Pinned to a stale pixel
-          // height, later content would be clipped.
-          slideTimer = setTimeout(function() {
-            details.style.height = '';
-            details.classList.remove('animating');
-            slideTimer = null;
-            window._ptSliding = false;
-          }, 300);
-        } else {
-          var shrinkBy = details.getBoundingClientRect().height;
-          var cardBase = card.getBoundingClientRect().height - shrinkBy;
-          details.style.height = shrinkBy + 'px';
-          void details.offsetHeight;
-          details.classList.add('animating');
-          details.style.height = '0px';
-          foldEnds(false);
-          // Same trick in reverse: the card is about to lose the panel's
-          // height, so the spacer grows back by the same amount, on the same
-          // curve, and the bottom edge again holds still.
-          // Mirror image: the times row is folded flat right now and is
-          // about to unfold, so the card ends up that much taller.
-          if (window._ptLayoutHero) window._ptLayoutHero(Math.max(0, cardBase + endsH), true);
-          slideTimer = setTimeout(function() {
-            details.classList.remove('open', 'animating', 'capped');
-            details.style.height = '';
-            slideTimer = null;
-            if (endsEl) endsEl.style.maxHeight = '';
-            // Cleared BEFORE the 320ms settle pass runs, so that pass is
-            // the one allowed to re-fit the map — exactly once, against
-            // the card's real resting height.
-            window._ptSliding = false;
-          }, 300);
-        }
-      }
-
-      function setExpanded(open, instant) {
-        // CLASS FIRST, THEN SLIDE. slidePanel calls back into layout(), and
-        // layout() branches on this class — which clamp to use, and whether
-        // to re-frame the map. With the toggle after the slide, opening ran
-        // the whole layout as if the card were still shut: it re-fitted the
-        // route into the thin strip of map left above an open card (the map
-        // "zooming into nothing"), and closing skipped the re-fit that would
-        // have put it back.
-        // Must happen BEFORE the class flips: once .expanded is on, the
-        // times row has begun folding and measures short.
-        if (open) measureEnds();
-        card.classList.toggle('expanded', open);
-        slidePanel(open, instant);
-        if (hintLabel) hintLabel.textContent = open ? 'Hide Details' : 'Flight Details';
-        hint.setAttribute('aria-expanded', open ? 'true' : 'false');
-        // NOTHING SCROLLS HERE ANY MORE. The card grows upward from a fixed
-        // bottom edge, so the page does not need to move and neither does
-        // the reader's eye. slidePanel has already adjusted the spacer.
-        //
-        // The fade still gets frozen while the panel is open: the card is
-        // taller than the resting layout allows for, so on a short screen
-        // there may be a little scrolling to reach the bottom of the detail,
-        // and that must not be read as "show me the schedule".
-        if (window._ptPaintReveal) window._ptPaintReveal();
-        // Settle the resting position once the slide has finished, which
-        // also mops up any rounding drift between the two animations.
-        if (!open) {
-          window.setTimeout(function() {
-            if (!card.classList.contains('expanded') && window._ptLayoutHero) {
-              window._ptLayoutHero();
-            }
-          }, 320);
-        }
-      }
-
-      function toggle() { setExpanded(!details.classList.contains('open')); }
-
-      hint.addEventListener('click', toggle);
-      hint.addEventListener('keydown', function(e) {
-        if (e.key !== 'Enter' && e.key !== ' ') return;
-        e.preventDefault();
-        toggle();
-      });
-
-      // The whole card header is the tap target too — the hint is a 0.72rem
-      // line of text and a poor one on a phone. Anything interactive inside
-      // the card (a time bubble, the FR24 button, a flight row) must not
-      // collapse the card out from under the tap.
-      var header = document.getElementById('collapsed-card-header');
-      if (header) {
-        header.addEventListener('click', function(e) {
-          if (e.target.closest('a, button, input, label')) return;
-          toggle();
-        });
-        header.style.cursor = 'pointer';
-      }
-
-      setExpanded(false, true);   // instant: sets the closed state before first paint
-    })();
+    // ---- The card's expand/collapse machinery lived here and is gone.
+    //
+    // It drove a "Flight Details" row that opened a panel inside a card
+    // that floated over the map. There is no such row, no such card, and
+    // no collapsed state: the detail panel is the open state and the X
+    // closes it. Removed with it: slidePanel(), setExpanded(), foldEnds(),
+    // measureEnds() and the endsH correction that kept the card's welded
+    // bottom edge still while the strip's times folded away (1.10.1,
+    // 1.10.2). None of those problems exist for a panel that is fixed to
+    // the bottom of the screen and moved with a transform.
 
     // togglePast() and the whole reveal-on-demand mechanism it drove were
     // removed in 1.11.0, together with the anchor-and-scroll-back trick
@@ -1361,247 +1176,93 @@
       window._ptRadarPrefOff = (radarPref === '0');
     })();
 
-    // ---- Where the flight card comes to rest.
+    // ---- THE DETAIL PANEL: opening it, closing it, and nothing else.
     //
-    // The card used to start at a fixed fraction of the screen (46vh), which
-    // is a guess about a card whose height nobody knows in advance — a
-    // two-pill delayed flight is taller than a plain one, and a phone is not
-    // a laptop. It landed miles up the page and left dead map underneath it.
+    // WHAT USED TO BE HERE was the hero layout engine: a measured spacer
+    // stretched until the card's bottom edge sat just above the tab pills,
+    // recomputed on resize, on rotation, on every ResizeObserver tick, and
+    // on every open and close — plus capPanel(), minTop(), tabTop(),
+    // foldEnds(), measureEnds(), slidePanel() and the endsH correction.
     //
-    // Measure instead. The spacer above the card is stretched until the
-    // BOTTOM of the card sits just above the tab pills, so the card floats at
-    // the bottom of the screen over a full-height map, and the whole of the
-    // map above it is usable. Recomputed on resize, on rotation, and when the
-    // card is expanded or collapsed.
+    // All of it existed to place a card that floated over the map while
+    // growing upward from a welded bottom edge. The panel is fixed to the
+    // bottom of the screen and animated with a transform, so there is
+    // nothing to measure and nothing to weld. Every bug those functions
+    // were written to fix — the drifting bottom edge (1.10.1, 1.10.2), the
+    // panel overshooting the tab bar, the card growing down over the pills
+    // when live data landed — is not fixed here so much as made
+    // unreachable.
     (function() {
-      var card = document.getElementById('collapsed-card');
-      var space = document.querySelector('.hero-space');
-      if (!card || !space) return;
+      var panel = document.getElementById('detail-panel');
+      var closeBtn = document.getElementById('detail-close');
+      if (!panel) return;
+      var sheet = document.getElementById('sheet');
 
-      // Looked up LAZILY, not once at start-up. This script block sits above
-      // the <nav> in the document, so querying for it here at parse time
-      // always returned null and tabTop() silently fell back to the rough
-      // guess below — the measuring this function exists to do never
-      // actually happened. Cached on first successful lookup.
-      var tabbar = null;
-      var GAP = 14;   // breathing room between card and pills
-
-      // Where the top of the tab pills sits. The pills are a fixed element,
-      // so this is already in screen coordinates and does not move when the
-      // page scrolls. The fallback is only for a page with no tab bar.
-      // WHAT THE CARD'S BOTTOM EDGE IS PARKED AGAINST.
+      function openPanel() {
+        panel.classList.add('open');
+        panel.scrollTop = 0;
+        if (closeBtn) closeBtn.focus({ preventScroll: true });
+      }
+      function closePanel() {
+        panel.classList.remove('open');
+      }
+      // AUTO-OPEN WHEN A LEG IS AIRBORNE, on load, once.
       //
-      // It used to be the tab pills. It is now the top of the flight sheet,
-      // which sits above them — and that one substitution is most of what
-      // made the sheet possible. The card was ALREADY bottom-anchored and
-      // already grew upward into the map; it simply had the wrong thing to
-      // measure against. Nothing else in layout() or capPanel() changed.
+      // Somebody opening this app while he is in the air wants the flight,
+      // not the schedule — and this is also what keeps the progress bar on
+      // screen by default, which is the whole reason it matters.
       //
-      // The sheet moves when it opens, so this is read live rather than
-      // cached, and layout() is called again when the sheet settles.
-      function tabTop() {
-        var sheet = document.getElementById('sheet');
-        if (sheet) {
-          var sr = sheet.getBoundingClientRect();
-          if (sr.height) return sr.top;
-        }
-        if (!tabbar) tabbar = document.querySelector('.tabbar');
-        if (!tabbar) return window.innerHeight - 92;
-        var r = tabbar.getBoundingClientRect();
-        return r.height ? r.top : window.innerHeight - 92;
+      // ONCE. Never re-opened after the reader has closed it: the poller
+      // runs every few seconds and a panel that reappears each time is not
+      // a feature, it is a fight. It is the SAME panel a tap opens, not a
+      // variant, so there is only ever one thing to maintain.
+      if (document.body.getAttribute('data-live-leg') === '1') {
+        window.requestAnimationFrame(function() { panel.classList.add('open'); });
       }
 
-      var lastTop = null;
+      window._ptOpenDetail = openPanel;
+      window._ptCloseDetail = closePanel;
+      window._ptDetailIsOpen = function() { return panel.classList.contains('open'); };
 
-      // BOTTOM-ANCHORED, ALWAYS. The card's lower edge stays parked just
-      // above the tab pills whether the details panel is shut or open — so
-      // opening it grows the card UPWARD into the map, and the Show/Hide
-      // row at the bottom of the card does not move at all.
-      //
-      // Two earlier attempts got this wrong. The first re-parked the card
-      // near the top of the screen when it opened, which teleported it. The
-      // second left the card alone and scrolled the PAGE to it, which is
-      // what you are seeing now: the card appears to fly to the top of the
-      // window. Neither moved the thing that should move — the spacer above
-      // the card.
-      //
-      // `growTo` is the height the card is ABOUT to become, passed in by the
-      // panel animation. It has to be supplied rather than measured, because
-      // at the moment the slide starts the panel is still at its old height;
-      // measuring then would compute the spacer for the wrong card size and
-      // the bottom edge would lurch.
-      // The highest the card can physically go: below the title bar, clear
-      // of any notch. Measured off the card's own offset parent rather than
-      // assumed, so it is right on every device.
-      function minTop() {
-        // Derived from the card itself, not from hunting down a .topbar.
-        // The spacer is the ONLY thing between the card and its highest
-        // possible position, so subtracting the spacer's current height
-        // from the card's current top gives exactly where the card would
-        // sit with the spacer at zero — title bar, safe-area notch and all.
-        //
-        // The previous version looked up '.topbar' and fell back to 8px if
-        // it did not find one. The fallback is what fired, so the cap was
-        // calculated as though the card could start ~100px higher than it
-        // physically can, and the card overshot the tab pills by that much.
-        var spaceH = space.getBoundingClientRect().height;
-        var top = card.getBoundingClientRect().top + (window.scrollY || 0);
-        return Math.max(0, Math.round(top - spaceH));
-      }
-
-      // Largest the details panel may be before it starts scrolling inside
-      // itself. Everything the card shows above the panel — flight number,
-      // route, times, progress, and the Show/Hide row — has to fit too.
-      // `shrinkingBy` is height the card is about to LOSE above the panel
-      // and has not lost yet — the folding times row. Without it the cap
-      // is short by that much and a long panel scrolls internally a little
-      // sooner than it needs to. Harmless but wrong, and wrong in a way
-      // that would be baffling to find later.
-      function capPanel(shrinkingBy) {
-        var panel = document.getElementById('expand-details');
-        if (!panel) return;
-        var chrome = card.getBoundingClientRect().height -
-                     panel.getBoundingClientRect().height -
-                     (shrinkingBy || 0);
-        var room = tabTop() - GAP - minTop() - chrome;
-        panel.style.maxHeight = Math.max(120, Math.round(room)) + 'px';
-      }
-      window._ptCapPanel = capPanel;
-
-      function layout(growTo, animate) {
-        var vh = window.innerHeight;
-        var cardH = (typeof growTo === 'number')
-          ? growTo
-          : card.getBoundingClientRect().height;
-        var desiredTop = tabTop() - GAP - cardH;
-
-        if (card.classList.contains('expanded')) {
-          // THE CARD MUST NEVER BE TALLER THAN THE SPACE ABOVE THE PILLS.
-          //
-          // This used to be Math.max(0, desiredTop), which looks harmless
-          // and is not. When an open card is taller than the room above the
-          // tab bar, the sum goes negative and gets clamped to 0 — but the
-          // card cannot actually sit at 0, because the title bar and the
-          // safe-area padding hold it at ~105px. So its bottom landed at
-          // 105 + cardHeight, overshot the pills, and buried the Show/Hide
-          // row underneath the menu — exactly where you cannot reach it
-          // without scrolling. It only bit on tall panels, which is why it
-          // came and went: a flight with live ADS-B, gates and delay tags
-          // has a far taller panel than a bare scheduled one.
-          //
-          // The fix is to stop the card growing that big at all. The panel
-          // gets a max height and scrolls inside itself instead, so the
-          // bottom edge stays welded above the pills no matter how much
-          // detail there is.
-          desiredTop = Math.max(minTop(), desiredTop);
-        } else {
-          // Shut, also keep a usable strip of map above it on short screens
-          // (a phone in landscape, a half-height desktop window).
-          desiredTop = Math.max(Math.round(vh * 0.18),
-                                Math.min(desiredTop, vh - 120));
-        }
-
-        // Where it actually sits right now, in page coordinates. The
-        // difference is exactly how much the spacer has to grow or shrink;
-        // one pass is enough because the relationship is a straight line.
-        var currentTop = card.getBoundingClientRect().top + (window.scrollY || 0);
-        var currentSpace = space.getBoundingClientRect().height;
-        // The spacer sets the card's TOP edge, and the top edge does not
-        // depend on how tall the card is — so this is a straight difference.
-        // (An earlier version subtracted the card's pending growth here too,
-        // which double-counted it and left the bottom edge 13px adrift.)
-        var next = Math.max(0, Math.round(currentSpace + (desiredTop - currentTop)));
-
-        // The spacer shrinks on exactly the same curve and duration as the
-        // panel expands, so the two cancel and the card's bottom edge holds
-        // still while its top edge slides up.
-        if (animate) {
-          space.classList.add('animating');
-          window.setTimeout(function() { space.classList.remove('animating'); }, 300);
-        } else {
-          space.classList.remove('animating');
-        }
-        space.style.height = next + 'px';
-
-        // Publish where the card ACTUALLY ended up, not where we asked it to
-        // go. On a short screen the spacer can bottom out at zero and the
-        // card comes to rest lower than requested; the live-stats readout and
-        // the map framing must follow the real card, not the wish.
-        var actualTop = Math.max(0, Math.round(desiredTop));
-        document.documentElement.style.setProperty('--card-top', actualTop + 'px');
-        window._ptCardTop = actualTop;
-
-        // Re-frame the route only when the card has genuinely moved, never
-        // while the details panel is open, and NEVER MID-SLIDE.
-        //
-        // That last clause is 1.10.1. Closing the card removes .expanded
-        // first (it has to — layout() branches on it), then starts a 300ms
-        // slide. The old code therefore re-fitted immediately, against a
-        // card height that was still 300ms in the future, and then the
-        // settle pass at 320ms measured the real height and fitted AGAIN.
-        // Two fitBounds calls with different padding, a third of a second
-        // apart: the map lurched out and then back, which reads as the map
-        // zooming out for no reason every time you hide the details.
-        //
-        // lastTop is deliberately NOT updated when we skip, so the settle
-        // pass still sees a difference and does the one real fit.
-        if (!card.classList.contains('expanded') && !window._ptSliding &&
-            (lastTop === null || Math.abs(actualTop - lastTop) > 2)) {
-          lastTop = actualTop;
-          if (window._ptRefit) window._ptRefit();
-        }
-      }
-
-      window._ptLayoutHero = layout;
-
-      // Opening the card scrolls the page up to it, rather than moving the
-      // card up to the page. Same result — details on screen — but the card
-      // travels under your eye instead of jumping out from under it, and
-      // nothing about the resting layout has to change.
-
-      layout();
-      // Fonts and icons can land after first paint and change the card's
-      // height by a few pixels; a second pass costs nothing.
-      window.requestAnimationFrame(layout);
-      window.addEventListener('load', layout);
-
-      // THE CARD CHANGES HEIGHT ON ITS OWN. The poller adds a progress bar
-      // when a flight goes airborne, a "Delayed" pill when the airline
-      // pushes a time, a live ADS-B readout when an aircraft is acquired.
-      // Each makes the card taller, and none of them fired a resize or a
-      // scroll — so nothing recomputed and the card quietly grew down over
-      // the tab pills. That is the intermittent overlap: it only appeared
-      // once real data landed, which is why it looked random.
-      if (window.ResizeObserver) {
-        var pending = false;
-        new ResizeObserver(function() {
-          if (pending) return;            // one relayout per frame, not per pixel
-          pending = true;
-          window.requestAnimationFrame(function() {
-            pending = false;
-            if (!card.classList.contains('expanded')) layout();
-          });
-        }).observe(card);
-      }
-
-      // On a phone, the address bar sliding away as you scroll fires a
-      // resize and changes innerHeight by 60-120px. Relaying out then would
-      // shift the whole page under the reader's thumb, mid-scroll, for no
-      // reason. Only respond to a change big enough to be a real one: a
-      // rotation, or someone dragging a desktop window.
-      var lastW = window.innerWidth, lastH = window.innerHeight;
-      window.addEventListener('resize', function() {
-        var w = window.innerWidth, h = window.innerHeight;
-        if (w === lastW && Math.abs(h - lastH) < 130) return;
-        lastW = w; lastH = h;
-        layout();
+      if (closeBtn) closeBtn.addEventListener('click', closePanel);
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && panel.classList.contains('open')) closePanel();
       });
-      window.addEventListener('orientationchange', function() {
-        setTimeout(function() {
-          lastW = window.innerWidth; lastH = window.innerHeight;
-          layout();
-        }, 250);
-      });
+
+      // Tapping a row in the sheet opens that leg. The row already carries
+      // data-detail-for and already calls selectLeg; this adds the panel on
+      // top of that rather than replacing the wiring, so a row that opens
+      // the wrong leg is a selectLeg bug and not two bugs.
+      if (sheet) {
+        sheet.addEventListener('click', function(e) {
+          var row = e.target.closest ? e.target.closest('[data-detail-for]') : null;
+          if (!row) return;
+          if (e.target.closest('[data-show-on-map]')) return;
+
+          // SELECT, THEN OPEN. 1.13.0 opened the panel without selecting,
+          // so tapping any row showed whichever leg was already selected —
+          // usually the live one. The panel looked like it worked and was
+          // describing a different flight, which is the worst kind of
+          // wrong: nothing is blank, nothing errors, the numbers are just
+          // somebody else's.
+          //
+          // selectLeg re-fetches the leg and repaints the card ids AND
+          // redraws the map for it, so this single call is also what makes
+          // "tapping a flight shows it on the map" true. It is exposed on
+          // window because it lives in the polling IIFE further down the
+          // document — this block is parsed first.
+          var id = row.getAttribute('data-detail-for');
+          if (id && window._ptSelectLeg) window._ptSelectLeg(id);
+          openPanel();
+        });
+      }
+
+      // These three were the layout engine's public surface. Other blocks
+      // still call them — the poller, the map, the sheet — and a missing
+      // global throws, so they stay as no-ops rather than being chased
+      // through four call sites in a release that is already large.
+      window._ptLayoutHero = function() {};
+      window._ptCapPanel = function() {};
     })();
 
     // ---- The flight list's expanding rows.
@@ -1851,18 +1512,35 @@
         sheet.classList.add('dragging');
       }, { passive: true });
 
+      // A DRAG HAS TO BE MEANT. Movement below the threshold is a tap that
+      // wobbled, and treating it as a drag is what made the sheet feel
+      // grabby: every tap on the handle nudged the height by a few pixels
+      // and then snapped somewhere on release. Nothing moves until the
+      // finger has travelled far enough that it cannot be a tap.
+      const DRAG_MIN = 12;
+      let dragging = false;
       grip.addEventListener('touchmove', function(e) {
         if (startY === null) return;
         const dy = startY - e.touches[0].clientY;
+        if (!dragging) {
+          if (Math.abs(dy) < DRAG_MIN) return;
+          dragging = true;
+        }
         const vh = window.innerHeight;
-        const h = Math.min(vh * 0.86, Math.max(vh * 0.14, startH + dy));
+        const h = Math.min(vh * 0.9, Math.max(vh * 0.16, startH + dy));
         sheet.style.height = h + 'px';
       }, { passive: true });
 
       function endDrag() {
         if (startY === null) return;
         const h = sheet.getBoundingClientRect().height;
+        const moved = dragging;
         startY = null;
+        dragging = false;
+        // Never travelled far enough to be a drag: leave it to the click
+        // handler, which toggles cleanly. Deciding here as well would
+        // toggle twice and land back where it started.
+        if (!moved) { sheet.style.height = ''; sheet.classList.remove('dragging'); return; }
         // Inline height must go before the class decides it, or it wins
         // over both --sheet-peek and --sheet-full and the sheet freezes
         // wherever the finger left it.
@@ -2114,6 +1792,29 @@
       // touches map view (pan/zoom) when doFit is true — poll-driven
       // refreshes always pass false so a manual pan/zoom is never undone
       // out from under someone.
+      // THE WHOLE TRIP, dashed, underneath everything else.
+      //
+      // Drawn ONCE and never touched again: it is the shape of the trip,
+      // which does not change as an aeroplane moves. Keeping it out of
+      // renderMap's clear-and-redraw cycle means the poller cannot flicker
+      // it, and means the leg being tracked always paints on top of it.
+      //
+      // Deliberately faint and deliberately straight. These are not routes
+      // flown or planned — they are pairs of airports joined with a line,
+      // and drawing them any more confidently than that would be claiming
+      // something the app does not know. Invariant 9's spirit: the strong
+      // solid line is reserved for a track that actually happened.
+      var tripRoutes = {{ trip_routes|tojson }};
+      (function() {
+        if (!tripRoutes || !tripRoutes.length) return;
+        tripRoutes.forEach(function(r) {
+          L.polyline([[r[0], r[1]], [r[2], r[3]]], {
+            color: '#94a3b8', weight: 1.5, opacity: 0.45,
+            dashArray: '3 7', interactive: false
+          }).addTo(map);
+        });
+      })();
+
       function renderMap(cur, live, doFit) {
         [originMarker, destMarker, remainingLine, flownLine, planeMarker].forEach(function(l) {
           if (l) map.removeLayer(l);
@@ -2539,16 +2240,16 @@
         applyAptBlock('arr', data.arr_line, true);
 
         var g = data.gates || {};
+        // GATE ONLY (1.12.1, owner's call). The terminal line under each
+        // gate and the baggage-belt badge are gone. Both are still fetched
+        // and still stored — this is a display decision, not a data one —
+        // but a gate number already implies its terminal to anyone using
+        // it, and a belt number is worth knowing about twice a year while
+        // taking up room on every flight forever.
         setShown('v-dep-gate', !!g.origin_gate);
         setText('v-dep-gate-text', g.origin_gate);
-        setShown('v-dep-term', !!g.origin_terminal);
-        setText('v-dep-term-text', g.origin_terminal);
         setShown('v-arr-gate', !!g.dest_gate);
         setText('v-arr-gate-text', g.dest_gate);
-        setShown('v-arr-term', !!g.dest_terminal);
-        setText('v-arr-term-text', g.dest_terminal);
-        setShown('v-arr-bag', !!g.baggage);
-        setText('v-arr-bag-text', g.baggage);
 
         setShown('row-diverted', !!data.diversion);
         if (data.diversion) setText('v-diverted', data.diversion.diverted_to);
@@ -2725,6 +2426,12 @@
         });
       }
 
+      // Reachable from the sheet's row handler, which is parsed earlier in
+      // the document and cannot see into this closure. The panel needs the
+      // same selection path a tap on "Show on map" uses; two ways to
+      // select a leg would be two ways to select the wrong one.
+      window._ptSelectLeg = function(id) { selectLeg(id); };
+
       function selectLeg(legId, opts) {
         if (!legId) return;
         if (!opts || !opts.automatic) userPinnedSelection = true;
@@ -2803,7 +2510,9 @@
         selectLeg(onMap.getAttribute('data-show-on-map'));
         // Send them back to the map they just asked to look at. Used to be
         // window.scrollTo(0), which did nothing once the page stopped
-        // scrolling; the sheet has to come down instead.
+        // scrolling. Now it also has to get the DETAIL PANEL out of the
+        // way, which covers the map completely.
+        if (window._ptCloseDetail) window._ptCloseDetail();
         if (window._ptSheetClose) window._ptSheetClose();
       });
 

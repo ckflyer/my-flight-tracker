@@ -1112,6 +1112,8 @@ async def viewer(request: Request, leg: Optional[str] = None):
     # Over the WHOLE schedule, so a layover straddling the past/upcoming
     # split still gets a label. See overnight_index().
     overnights = overnight_index(info.all_legs)
+    groups = build_flight_list(info, day_numbers, now, tf,
+                               tags_by_leg, overnights, times_by_leg)
     ctx = {
         "request": request,
         "current": selected,
@@ -1123,9 +1125,18 @@ async def viewer(request: Request, leg: Optional[str] = None):
         # upcoming/past lists, so without this there's no row to tap to
         # return to it.
         "current_leg_id": info.current.id if info.current else None,
-        "flight_groups": build_flight_list(info, day_numbers, now, tf,
-                                           tags_by_leg, overnights,
-                                           times_by_leg),
+        "flight_groups": groups,
+        # EVERY LEG OF THE TRIP, as coordinate pairs, so the map can show
+        # the shape of the whole trip behind the one leg being tracked.
+        # Derived from the groups that are already built rather than
+        # re-walking the roster: whatever the tracker is listing is exactly
+        # what the map should outline, and computing the two separately is
+        # how they come to disagree.
+        "trip_routes": [
+            [l["origin_lat"], l["origin_lon"], l["dest_lat"], l["dest_lon"]]
+            for g in groups for l in g["legs"]
+            if l.get("origin_lat") is not None and l.get("dest_lat") is not None
+        ],
         # past_count is gone with the Show-past-flights button (1.11.0).
         # The tracker no longer holds every past leg to be revealed; it
         # holds this trip and the next, and every row in it is visible.

@@ -1,7 +1,7 @@
 # MyPilot
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.12.0.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.14.0.
 
 The version above was stale at 1.4.0 for five releases. `app/version.py`
 is the only authority; this line is a convenience and nothing reads it.
@@ -48,7 +48,7 @@ seriously.
 
 ## STATE
 
-**v1.12.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+**v1.14.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
 owner plus several FOs, who fly the same legs — hence shared flight rows
 (v5.1, retained).
 
@@ -69,7 +69,7 @@ page split (1.6.0–1.7.0). All three came out of the same problem — the app
 could not be OPERATED without SSH, and bugs could not be reproduced without
 flying a trip.
 
-Tests: **1,137**, eleven suites, all passing.
+Tests: **1,151**, eleven suites, all passing.
 
 **Current work: the UI chunks (1.9.0 onward).** Five agreed steps, owner's
 brief, reworking the tracker and calendar around one flight-strip
@@ -99,7 +99,7 @@ the tracker entirely — they belong to step 4's calendar.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, placeholder filter |
-| `tests_ui_fixes.py` | 524 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
+| `tests_ui_fixes.py` | 538 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
 | `tests_app_shell.py` | 167 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
 | `tests_timezones.py` | 68 | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
 | `tests_closeout_sweep.py` | 42 | the abandonment cliff, the on-ground handover, the late gate-in chase and its cap |
@@ -1626,13 +1626,13 @@ python tests_poller_end_to_end.py   #  47
 python tests_past_leg_detail.py     #  19
 python tests_budget_limit.py        #  17
 python tests_carrier_cap.py         #  13
-python tests_ui_fixes.py            # 524
+python tests_ui_fixes.py            # 538
 python tests_app_shell.py           # 167
 python tests_timezones.py           #  68
 python tests_closeout_sweep.py      #  42
 python tests_import_merge.py        #  39
 python tests_test_mode.py           # 133
-```                                  # 1137
+```                                  # 1151
 
 Each uses its own scratch DB via `PT_DB_FILE`. Read
 `tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
@@ -1661,7 +1661,178 @@ invariant 1.
   `tests_closeout_sweep.py` runs `poll_once` PAST the three-hour grace for
   exactly this reason.
 
+### THE PANEL REBUILD (owner's design, in flight)
+
+The hero card floating over the map goes away. The flight LIST becomes the
+default surface, resting about a third of the way up; tapping a flight
+slides a DETAIL panel up over it, with an X to go back. Modelled on the
+reference app, screenshots in the owner's brief.
+
+| Pass | What | State |
+|---|---|---|
+| 4 | the strip itself: overlap, gate-only | **DONE 1.12.1** |
+| 1 | the two panels, the slide between them, hero card deleted | **DONE 1.13.0** |
+| 2 | selection drives the map; whole trip dashed at rest, active leg primary | **DONE 1.14.0** |
+| 3 | current trip only; leg drops 30 min after closeout; 10-hour handover | next |
+
+DECIDED, so it does not get re-litigated:
+
+- **Progress bar lives on the hairline between the two airport blocks** —
+  the rule that already carries block time and distance. With a live fix
+  it fills and carries the aeroplane; without one it stays a plain rule.
+  NOT floated over the map: the map already shows progress (that is what
+  the marker is), and a floating bar would need its own position logic
+  against two sliding panels, which is the coupling 1.12.0 deleted.
+  A second, quieter one: a tinted hairline along the bottom edge of the
+  live flight's row in the list, so the moving leg is visible without
+  opening anything.
+- **Auto-open the detail when a leg is airborne**, on load only, and
+  NEVER re-open after the user has closed it. It must be the same panel
+  the tap opens — not a variant — or there are two things to maintain.
+  This is also what keeps the progress bar visible by default, which is
+  the whole reason it matters.
+- **The last leg of a trip does not vanish.** The 30-minute removal
+  applies only while later legs remain; otherwise 30 minutes after the
+  final arrival the list would be empty for the rest of the 10-hour wait.
+- **ADS-B stays at the bottom of the detail panel.**
+
+
 ## VERSION HISTORY
+
+### 1.14.0 — tapping a flight means that flight
+
+Pass 2. Small, and it fixes something 1.14.0's predecessor got wrong.
+
+**BUG SHIPPED IN 1.13.0: the panel opened without selecting.** Tapping any
+row opened the detail panel showing whichever leg was ALREADY selected —
+usually the live one. The worst kind of wrong: nothing blank, nothing
+thrown, no error in the console, the numbers simply somebody else's. It
+happened because the panel and the selection were wired in different
+releases and nothing asserted they met. There is a test now that reads the
+row's own id out of the handler and checks it is used before the panel
+opens.
+
+`selectLeg` is exposed as `window._ptSelectLeg` because it lives in the
+polling IIFE, which is parsed after the sheet's handler. ONE selection
+path, shared with "Show on map" — two would be two ways to select the
+wrong leg. And because `selectLeg` already redraws the map, this single
+call is also what makes "tapping a flight shows it on the map" true,
+without a second mechanism to keep in step.
+
+**The whole trip is outlined on the map**, faintly, dashed, behind the leg
+being tracked. Drawn ONCE and never touched again: a trip does not change
+shape as an aeroplane moves along it, and anything inside renderMap's
+clear-and-redraw cycle is torn down and rebuilt on every poll.
+
+Faint and straight on purpose. These are pairs of airports joined by a
+line — not routes flown, not routes planned — and drawing them any more
+confidently would claim something the app does not know. The heavy solid
+line stays reserved for a track that actually happened, which is invariant
+9's spirit applied to the map rather than to a number. Non-interactive, so
+the outline cannot steal a tap from a real marker.
+
+`trip_routes` is derived from the flight groups already built for the
+list, not from a second walk of the roster: whatever the tracker is
+listing is exactly what the map should outline, and computing them
+separately is how the two come to disagree.
+
+Tests: 1,139 → 1,151.
+
+### 1.13.0 — the hero card is gone
+
+Pass 1 of the panel rebuild, and the largest structural change since the
+app was written. The card that floated over the map is deleted. The flight
+list is the default surface; tapping a flight slides a DETAIL PANEL up
+over it, dismissed with an X or Escape.
+
+**What actually went.** Not just the card — the engine under it. A spacer
+stretched by measurement until the card's bottom edge sat just above the
+tab pills, recomputed on resize, on rotation, on every ResizeObserver
+tick, and on every open and close, plus `capPanel()`, `minTop()`,
+`tabTop()`, `slidePanel()`, `setExpanded()`, `foldEnds()`, `measureEnds()`
+and the `endsH` correction. Also `.hero-space`, `.card-more`, the caret,
+the "Flight Details" row, and the 1.10.1 fold that hid the strip's times
+when the panel opened.
+
+**Every bug that machinery was written to fix is now unreachable rather
+than fixed.** The creeping bottom edge (1.10.1, 1.10.2) needed a card
+whose height changed while its position was computed from that height. The
+panel is `bottom: 0` and moves with a `transform`, so its contents do not
+reflow while it slides and there is no position to compute. It cannot
+outgrow the screen because `max-height` says so. It cannot disturb the map
+because it shares no coordinate system with it.
+
+Transform rather than height is deliberate and worth keeping: every
+height-driven animation in this file has cost a bug, the same one twice.
+
+**The panel header carries no times.** The airport blocks below give both
+at three times the size with the original struck through beside them,
+which is exactly what the folding row was working around.
+
+**Auto-open when a leg is airborne**, on load, ONCE. Never re-opened after
+the reader closes it — the poller runs every few seconds and a panel that
+reappears each time is a fight, not a feature. It is the same panel a tap
+opens, not a variant, driven off the same `is_selected_live` flag as the
+live ADS-B box so "the app thinks he is flying" cannot mean two things on
+one page. This is also what keeps the progress bar on screen by default.
+
+**The sheet drag has a threshold.** Twelve pixels before anything moves.
+It felt grabby because a drag began on the first pixel, so every tap on
+the handle nudged the height and snapped somewhere on release; a
+sub-threshold move is now left to the click handler, which toggles
+cleanly. Peek raised to 38vh — roughly where the hero card used to start.
+
+**Test bookkeeping, and a mistake worth recording.** Three hero-layout
+tests were replaced by one panel test, and two machinery tests
+(`test_strip_times_fold_when_the_panel_opens`,
+`test_map_refits_once_and_only_when_still`) by
+`test_fold_and_refit_machinery_is_gone`, which asserts the deleted
+functions stay deleted — the cheapest way to reintroduce those bugs is to
+reintroduce the machinery.
+
+A line-range edit while removing the hero tests also deleted
+`test_viewer_theme_is_consistent_across_pages`, which had nothing to do
+with any of it. Caught by diffing the test names against the previous
+release and restored. Editing this file by line range rather than by
+matched text is how that happened; do not.
+
+Tests: 1,148 → 1,139. The drop is deletions, not lost coverage.
+
+STILL TO DO (pass 2): tapping a flight does not yet redraw the map for
+that leg, and the map does not yet show the whole trip at rest.
+
+### 1.12.1 — the strip stops printing on itself
+
+First pass of the panel rebuild, taken out of order because it is
+self-contained and it is the thing most looked at.
+
+**BUG: the zone printed under the next disc.** The ends row was a flex row
+whose items carried `min-width: 0` — which lets a flex item shrink BELOW
+its own content. The times are `nowrap`, so rather than shrinking they
+spilled out of their box, and the departure's zone superscript landed
+under the arrival's disc.
+
+Not a marginal case. 12-hour time adds " PM" to both ends and about a
+third more width, so the format most likely to be in use was the one
+guaranteed to collide — and 12-hour was never checked when the strip was
+designed in 1.9.0, despite the app supporting it and a test suite existing
+for it. Each end is now `flex: 0 0 auto` and the row wraps, so an arrival
+that genuinely will not fit drops to a second line, which is legible,
+rather than printing on top of something, which is not.
+
+Reintroducing `min-width: 0` to silence an overflow here would restore the
+bug exactly. An overflow in this row means the content does not fit, and
+the answer is to let it wrap, not to let it lie about its width.
+
+**Gate only** (owner's call). The terminal line under each gate and the
+baggage-belt badge are gone: a gate number already tells anyone using it
+which terminal they want, so the line spent a row of every flight
+restating its neighbour, and a belt is useful rarely and on screen always.
+DISPLAY decision, not a data one — both are still fetched, still stored,
+still in the payload, asserted by test. Bringing them back must never mean
+re-querying the airline for flights already paid for.
+
+Tests: 1,137 → 1,148.
 
 ### 1.12.0 — the flight sheet
 

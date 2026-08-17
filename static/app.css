@@ -112,7 +112,7 @@
 }
 /* The card lays these out inline rather than in a flex row, so they need
    their own gap; .row-chip and the agenda supply their own. */
-.fstrip-time .tz { margin-left: 0.16rem; }
+.fstrip-time .tz { margin-left: 0.16rem; margin-right: 0.1rem; }
 
 /* -------------------------------------------------------- FLIGHT STRIP
    ONE component, three sizes. A flight is described the same way
@@ -225,46 +225,39 @@
   font-size: 0.85em; margin: 0 0.15rem;
 }
 
+/* WHY THIS WRAPS AND NEVER SHRINKS.
+
+   This row shipped as a flex row whose items carried `min-width: 0`, which
+   lets a flex item shrink BELOW its own content. The times are `nowrap`,
+   so instead of shrinking they spilled out of their box — the departure's
+   zone superscript ended up sitting under the arrival's disc. Not a
+   rounding error at the margins either: 12-hour time adds " PM" to both
+   ends and roughly a third more width, so the format most likely to be in
+   use was the one guaranteed to collide.
+
+   `flex: 0 0 auto` says each end is as wide as it needs to be, full stop.
+   `flex-wrap` gives it somewhere to go when both ends genuinely will not
+   fit: the arrival drops to a second line, which is legible, rather than
+   printing on top of something, which is not. The row-gap is what that
+   second line lands on.
+   
+   Do not reintroduce min-width:0 here to "fix" an overflow. An overflow
+   in this row means the content does not fit, and the answer is to let it
+   wrap, not to let it lie about its width. */
 .fstrip-ends {
-  display: flex; align-items: center; gap: 0.9rem;
+  display: flex; align-items: center; flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
   font-size: var(--fstrip-ends);
 }
-/* THE STRIP'S TIMES FOLD AWAY WHEN THE PANEL OPENS (1.10.1). The expanded
-   view states the same two times better — bigger, with the original they
-   moved from struck through beside them, and with the gate and terminal
-   attached — so leaving the summary on screen means printing every time
-   twice, three inches apart, in two different sizes. The panel's times
-   land directly under the progress bar instead.
-
-   THE COLLAPSE IS DRIVEN FROM JAVASCRIPT, in measured pixels, and that is
-   the whole point. A CSS-only version transitioning 4rem -> 0 looks
-   identical in isolation and is wrong in company: the row's RENDERED
-   height is min(natural, max-height), so while max-height falls from 64px
-   to 22px nothing moves at all, and the row then collapses over whatever
-   is left of the curve. The panel and the spacer, meanwhile, move
-   smoothly across the whole 260ms. The three stop cancelling out and the
-   card's bottom edge — the thing every one of these transitions exists to
-   hold still — creeps and then snaps. Pinning max-height to the measured
-   height first makes the fold exactly 1:1 with the other two.
-
-   4rem is only the RESTING value, so nothing is ever clipped when no
-   animation is running. max-height rather than height, because the zone
-   superscript is lifted above its own baseline by a transform and a hard
-   height would cut it off. */
-.fstrip--lg .fstrip-ends {
-  max-height: 4rem;
-  overflow: hidden;
-  transition: max-height 260ms cubic-bezier(0.4, 0, 0.2, 1),
-              opacity 150ms ease;
-}
-/* Opacity stays in CSS; max-height is set inline by slidePanel and an
-   inline style would win over this rule anyway. */
-.collapsed-card.expanded .fstrip--lg .fstrip-ends { opacity: 0; }
-@media (prefers-reduced-motion: reduce) {
-  .fstrip--lg .fstrip-ends { transition: none; }
-}
+/* The fold is gone (1.13.0). This row used to collapse when the hero
+   card's panel opened, because the panel restated the same two times
+   better. There is no hero card and no header times: the detail panel's
+   airport blocks are the only place a time appears at that size. Removed
+   with it: the max-height cap, the pixel-pinned foldEnds() that made the
+   collapse linear in height, and the endsH term in the spacer maths. */
 .fstrip-end {
-  display: inline-flex; align-items: center; gap: 0.3rem; min-width: 0;
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  flex: 0 0 auto;
 }
 /* The arrival end is pushed to the right so the two ends sit at opposite
    edges, which is what makes the progress track below them line up with
@@ -400,13 +393,12 @@
   white-space: nowrap;
 }
 .aptblock-badge svg { display: block; width: 10px; height: 10px; }
-/* Sits on its own line under the badges, so a long terminal name ("Main")
-   cannot push the gate off the row. */
-.aptblock-term {
-  flex-basis: 100%; text-align: right;
-  font-size: 0.75rem; color: var(--muted); white-space: nowrap;
-}
-.aptblock-term b { color: var(--text); font-weight: 700; }
+/* .aptblock-term is gone (1.12.1). The terminal sat on its own line under
+   the gate badge; a gate number already tells anyone using it which
+   terminal they want, so the line spent a row of every flight restating
+   its neighbour. The baggage badge went with it for the same reason in
+   reverse: useful rarely, on screen always. Both are still fetched and
+   stored — display decision, not a data one. */
 /* The route between the two blocks: a hairline with the block time and
    the great-circle distance sitting on it. Neither figure is a
    measurement of the aeroplane (invariant 9 governs those), so both are

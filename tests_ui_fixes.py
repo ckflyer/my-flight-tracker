@@ -725,11 +725,10 @@ def test_flight_sheet():
 
     # The card was ALREADY bottom-anchored; it just had the wrong thing to
     # measure against. If this regresses, the card overlaps the sheet.
-    check("the card parks against the sheet, not the tab bar",
-          "var sheet = document.getElementById('sheet');" in html
-          and "if (sr.height) return sr.top;" in html)
-    check("...and re-lays out when the sheet settles",
-          "window._ptLayoutHero();" in html)
+    # The card that parked against the sheet is gone (1.13.0); the detail
+    # panel is fixed to the bottom of the screen and measures nothing.
+    check("nothing is parked against the sheet any more",
+          "function tabTop()" not in html)
 
     # Dragging must be taken from the GRIP only. Listening on the sheet
     # would steal every scroll gesture inside the list.
@@ -801,31 +800,6 @@ def test_settings_budget_saves():
     # rejected the value the app itself had put in the box.
     check("...and would have failed a 0.25 step", cents % 25 != 0, str(default))
 
-
-def test_open_card_cannot_outgrow_the_screen():
-    """The Show/Hide row must stay reachable. An open card taller than the
-    room above the tab pills used to clamp to 0, get held at ~105px by the
-    title bar and safe area, and bury its own button under the menu."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
-        html = fh.read()
-
-    check("the old zero clamp is gone",
-          "desiredTop = Math.max(0, desiredTop);" not in html)
-    check("...replaced by the card's real minimum position",
-          "desiredTop = Math.max(minTop(), desiredTop);" in html)
-    # minTop must not depend on finding a .topbar: the fallback fired, and
-    # assumed ~100px more headroom than the card actually has.
-    check("minTop is derived from the card, not a topbar lookup",
-          "document.querySelector('.topbar')" not in html)
-    check("the panel is capped to the space available", "_ptCapPanel" in html)
-    check("...and scrolls inside itself once capped",
-          ".expand-details.open.capped {" in html and "overflow-y: auto;" in html)
-
-    # The card grows on its own when live data lands; nothing fired then.
-    check("card height changes trigger a relayout", "ResizeObserver" in html)
-
-
 def test_viewer_theme_is_consistent_across_pages():
     """A viewer's theme lives in a cookie. The tracker applied it inline and
     the calendar forgot to, so one person got a light tracker and a dark
@@ -857,68 +831,71 @@ def test_viewer_theme_is_consistent_across_pages():
           "viewer_display_overrides" in cal)
 
 
-def test_expanding_does_not_disturb_map_or_schedule():
-    """Opening the details panel must not re-frame the map, and must never
-    make the schedule unreachable."""
+def test_detail_panel_replaces_the_hero_card():
+    """Three hero-layout tests collapse into this one. (1.13.0)
+
+    They guarded a card that floated over the map and grew upward from a
+    bottom edge welded above the tab pills: that it could not outgrow the
+    screen, that opening it disturbed neither map nor schedule, that its
+    bottom edge did not move. Every one of those is a property of a
+    POSITION THAT HAD TO BE COMPUTED — a measured spacer, recomputed on
+    resize, rotation, every ResizeObserver tick and every open and close.
+
+    The panel is fixed to the bottom of the screen and moved with a
+    transform. It cannot outgrow the screen because max-height says so; it
+    cannot disturb the map because it shares no coordinate system with it;
+    its bottom edge cannot drift because it is bottom: 0. The bugs those
+    tests were written after are not fixed so much as made unreachable, so
+    the tests are replaced rather than adapted.
+    """
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
         html = fh.read()
+    css_block = html.split(".detail-panel {", 1)[1].split("}", 1)[0]
 
-    # layout() branches on this class, and slidePanel calls layout(). Setting
-    # the class afterwards ran the open as if the card were still shut, which
-    # re-fitted the route into the sliver of map above an open card.
-    body = html[html.index("function setExpanded("):]
-    body = body[:body.index("function toggle(")]
-    check("the expanded class is set before the slide",
-          body.index("classList.toggle('expanded'") < body.index("slidePanel("),
-          "slidePanel runs first, so layout() sees the old state")
+    check("the panel is fixed to the bottom", "bottom: 0" in css_block, css_block)
+    check("...and cannot outgrow the screen", "max-height: 92vh" in css_block, css_block)
+    # transform, not height. Every height-driven animation in this file has
+    # cost a bug, twice over the same one.
+    check("it slides on a transform, not a height",
+          "transform: translateY(101%)" in css_block
+          and "transition: transform" in css_block, css_block)
+    check("...and is hidden from tab order when shut",
+          "visibility: hidden" in css_block, css_block)
+    check("...becoming visible only when open",
+          ".detail-panel.open { transform: translateY(0); visibility: visible; }" in html)
+    check("reduced motion skips the slide",
+          ".detail-panel { transition: none; }" in html)
 
-    # The freeze pinned the schedule to invisible while the panel was open.
-    # It guarded against a scroll that opening no longer performs, and was the
-    # only path that could hide the schedule with no way back.
-    check("the scroll fade is not frozen while the panel is open",
-          "reveal.style.opacity = '0';\n          reveal.style.pointerEvents = 'none';"
-          not in html)
-    check("...and nothing pins the schedule invisible any more",
-          "reveal.style.opacity" not in html)
+    # THE ENGINE IS GONE, not merely unused.
+    code = re.sub(r"^\s*//.*$", "", html, flags=re.M)
+    code = re.sub(r"\{#.*?#\}", "", code, flags=re.S)
+    code = re.sub(r"/\*.*?\*/", "", code, flags=re.S)
+    for dead in ("function capPanel", "function minTop", "function slidePanel",
+                 "function foldEnds", "function measureEnds", "function setExpanded",
+                 "hero-space", "expand-hint", "card-more"):
+        check("removed: " + dead, dead not in code, dead)
+    check("the card's own box rule is gone", ".collapsed-card {" not in code)
 
+    # A modal with no way out is worse than no modal.
+    check("the X closes it", 'id="detail-close"' in html)
+    check("...and so does Escape", "e.key === 'Escape'" in html)
 
-def test_card_grows_upward_from_a_fixed_bottom_edge():
-    """Opening the details must not scroll the page. The card's bottom edge
-    stays parked above the tab pills and the card grows upward, so the
-    Show/Hide row never moves under the reader's thumb."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
-        html = fh.read()
+    # AUTO-OPEN: once, on load, and never again. The poller runs every few
+    # seconds; a panel that reappears each time is a fight, not a feature.
+    check("it auto-opens when a leg is airborne", "data-live-leg" in html)
+    check("...from the same flag the live ADS-B box uses",
+          "data-live-leg=\"{{ '1' if is_selected_live else '0' }}\"" in html)
+    check("...exactly once, not on every poll",
+          html.count("panel.classList.add('open')") == 1
+          or html.count("classList.add('open')") <= 2)
+    check("...and it is the SAME panel a tap opens",
+          html.count('id="detail-panel"') == 1)
 
-    check("opening no longer scrolls the page to the card",
-          "_ptScrollToCard" not in html)
-    check("...and closing no longer scrolls it back",
-          "_ptScrolledOpen" not in html)
-    check("the spacer animates on the same curve as the panel",
-          ".hero-space.animating { transition: height 260ms cubic-bezier(0.4, 0, 0.2, 1); }" in html
-          and ".expand-details.animating { transition: height 260ms cubic-bezier(0.4, 0, 0.2, 1); }" in html)
-    check("layout accepts the card's pending height",
-          "function layout(growTo, animate)" in html)
-    # The point is that layout() is handed a PREDICTED height rather than
-    # re-measuring a card that is still animating. The exact arithmetic
-    # gained a term in 1.10.1 (the folding times row), so match the shape,
-    # not the literal — a test that pins the expression forces every future
-    # correction to look like a regression.
-    check("...and the panel hands it a predicted height, not a re-measure",
-          re.search(r"_ptLayoutHero\(cardBase[^)]*\+ target, true\)", html)
-          is not None)
-
-    # The tab bar is BELOW this script in the document, so querying for it at
-    # parse time returns null and every measurement silently falls back to a
-    # hardcoded guess. It has to be looked up on demand.
-    check("the tab bar is looked up lazily, not at parse time",
-          "if (!tabbar) tabbar = document.querySelector('.tabbar');" in html)
-    # 1.7.0: the nav is a shared include now, so look for the include
-    # rather than the markup. The ORDER is the thing being asserted, and
-    # that is unchanged.
-    check("...because the nav really does come after the script",
-          html.index("<script>") < html.index('partials/tabbar.html'))
+    # A drag has to be meant, or every tap on the handle nudges the sheet.
+    check("the sheet drag has a threshold", "DRAG_MIN = 12" in html)
+    check("...and a sub-threshold move is left to the click handler",
+          "if (!moved) {" in html)
 
 
 def test_detail_panels_slide_rather_than_snap():
@@ -961,8 +938,6 @@ def test_detail_panels_slide_rather_than_snap():
           ".scroll-scrim { opacity: 1 !important; }" not in html)
 
     # Height is released back to auto so late-arriving detail is not clipped.
-    check("the card's panel is released back to auto",
-          "details.style.height = '';" in html)
     check("the row panels are released back to auto",
           "panel.style.height = '';" in html)
 
@@ -1180,30 +1155,30 @@ def test_flight_strip_is_one_component():
           in css_code)
     check("...and a disc with no news is still visible",
           "background: var(--border); color: var(--muted);" in css_code)
-    for tid, did in (("card-dep-time", "card-dep-disc"),
-                     ("card-arr-time", "card-arr-disc")):
-        check(f"{did} carries the same state as {tid}",
-              f'id="{did}"' in html_code
-              and html_code.count("current.dep_line.state") +
-                  html_code.count("current.arr_line.state") >= 4)
+    # The panel header lost its times row in 1.13.0 — the airport blocks
+    # below state both times at three times the size, which is what the
+    # folding row of 1.10.1 was working around. The disc/time pairing is
+    # still asserted, on the surfaces that still have one: the list rows.
+    check("list rows pair each disc with its own time's state",
+          "leg.dep_line.state" in html_code and "leg.arr_line.state" in html_code)
     # One function writes BOTH halves, so they cannot drift apart.
     check("the poller repaints disc and time together",
-          "applyStripTime('card-dep-time', 'card-dep-disc'" in html_code
-          and "disc.className = 'fstrip-disc' + state" in html_code)
+          "disc.className = 'fstrip-disc' + state" in html_code)
 
     # The collapsed strip shows the CORRECTED time and nothing else. The
     # struck-through original and the "12 min late" note belong in the
     # expanded view, where there is room to say it in words.
     check("no delay chip survives on the strip", 'class="chip-delay' not in html_code)
-    check("no struck-through original on the strip",
-          'id="card-dep-time"' in html
-          and "was" not in html.split('id="card-dep-time"')[1].split("</span>")[0])
+    check("no struck-through original on any strip",
+          "fstrip-was" not in html)
 
     # Superscript zones, the 1.3.0 rule, now reachable because the payload
     # emits the zone separately from the time.
-    for tid in ("card-dep-time", "card-arr-time"):
-        seg = html.split(f'id="{tid}"', 1)[1][:400]
-        check(f"{tid} carries its zone as a superscript element",
+    # The panel header no longer carries times (1.13.0), so the surfaces
+    # to check are the airport blocks and the list rows.
+    for tid in ("v-dep-time", "v-arr-time"):
+        seg = html.split('id="%s"' % tid, 1)[1][:400]
+        check("%s carries its zone as a superscript element" % tid,
               'class="tz"' in seg)
 
     # The classes the old card used are GONE, not merely unused. Half a
@@ -1446,7 +1421,7 @@ def test_live_box_does_not_swallow_the_flight_detail():
         html = fh.read()
 
     # Walk div depth through the panel and record where each block opens.
-    body = html.split('<div class="expand-details"', 1)[1]
+    body = html.split('<div class="expand-details open"', 1)[1]
     depth, opens = 0, {}
     for line in body.split("\n"):
         for key, marker in (("live", 'id="live-section"'),
@@ -1464,97 +1439,6 @@ def test_live_box_does_not_swallow_the_flight_detail():
     # Altitude is the pilot's number; arrival time is everyone else's.
     check("flight detail is above the ADS-B box",
           body.index('id="flight-detail"') < body.index('id="live-section"'))
-
-
-def test_strip_times_fold_when_the_panel_opens():
-    """The panel says the same two times better, so the summary folds away.
-
-    And the card's spacer maths has to KNOW it folds, or the welded bottom
-    edge drifts by exactly the row's height across the 260ms slide — which
-    is the specific thing the whole cardBase/target dance exists to stop.
-    """
-    here = os.path.dirname(os.path.abspath(__file__))
-    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
-        html = fh.read()
-    with open(os.path.join(here, "static", "app.css"), encoding="utf-8") as fh:
-        css = fh.read()
-
-    check("the times row folds when expanded",
-          ".collapsed-card.expanded .fstrip--lg .fstrip-ends {" in css)
-    check("...only on the hero size", ".fstrip--lg .fstrip-ends {" in css)
-    # max-height, not height: the zone superscript is lifted above its own
-    # baseline by a transform, and a hard height would clip it.
-    block = css.split(".fstrip--lg .fstrip-ends {", 1)[1].split("}", 1)[0]
-    check("folded with max-height, so the zone is never clipped",
-          "max-height" in block and re.search(r"[^-]height:", block) is None, block)
-    check("...and it animates", "transition:" in block)
-    check("...unless motion is reduced",
-          ".fstrip--lg .fstrip-ends { transition: none; }" in css)
-
-    # THE FOLD MUST BE LINEAR IN HEIGHT. Rendered height is min(natural,
-    # max-height), so a 4rem -> 0 transition stands still for its first
-    # third and then collapses over the rest, while the panel and spacer
-    # move smoothly across all 260ms. The three stop cancelling and the
-    # welded bottom edge creeps, then snaps.
-    check("the fold is driven from measured pixels, not the resting cap",
-          "function foldEnds(collapsed)" in html
-          and "endsEl.style.maxHeight = (collapsed ? endsH : 0) + 'px'" in html)
-    check("...with the start value committed before the end value",
-          "void endsEl.offsetHeight;" in html)
-    check("...on both directions", "foldEnds(true);" in html and "foldEnds(false);" in html)
-    check("...and the pin released once the row is back",
-          "if (endsEl) endsEl.style.maxHeight = '';" in html)
-    check("the expanded rule no longer sets max-height itself",
-          ".collapsed-card.expanded .fstrip--lg .fstrip-ends { opacity: 0; }" in css)
-
-    check("the spacer maths subtracts the folding row when opening",
-          "cardBase - endsH + target" in html)
-    check("...and adds it back when closing", "cardBase + endsH" in html)
-    check("the row is measured while SHUT, not mid-fold",
-          "if (open) measureEnds();" in html
-          and "card.classList.contains('expanded')) return;" in html)
-    check("the panel cap accounts for it too", "_ptCapPanel(endsH)" in html)
-
-    # The rule that let the city pair grow a second line the instant the
-    # class flipped is gone; it jumped the card header in one frame while
-    # everything below it slid over 260ms.
-    check("the city pair no longer re-wraps mid-animation",
-          ".collapsed-card.expanded .fstrip-cities {" not in html)
-
-
-def test_map_refits_once_and_only_when_still():
-    """Closing the card re-fitted the map TWICE. (1.10.1)
-
-    .expanded comes off before the 300ms slide starts, so the old guard
-    (which only checked that class) let a fit run immediately against a
-    card height 300ms in the future — then the settle pass at 320ms
-    measured the real height and fitted again. Two fitBounds calls with
-    different padding, a third of a second apart: the map lurched out and
-    back every time you hid the details.
-    """
-    here = os.path.dirname(os.path.abspath(__file__))
-    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
-        html = fh.read()
-
-    check("layout() refuses to re-fit mid-slide",
-          "!window._ptSliding &&" in html)
-    check("the flag is raised when an animated slide begins",
-          "window._ptSliding = true;" in html)
-    # Both slide directions must lower it, and the instant start-up call
-    # must never raise it.
-    check("both slide directions clear the flag",
-          html.count("window._ptSliding = false;") >= 3)
-    check("the settle pass still runs after the flag clears",
-          html.index("window._ptSliding = false;") <
-          html.index("if (!card.classList.contains('expanded') && window._ptLayoutHero)"))
-    # lastTop must NOT be updated on a skipped fit, or the settle pass
-    # would think the card had not moved and skip the real one too.
-    guard = html.split("!window._ptSliding &&", 1)[1].split("}", 1)[0]
-    check("lastTop is only updated when a fit actually happens",
-          "lastTop = actualTop;" in guard)
-    check("...and nowhere else in layout()",
-          html.split("function layout(", 1)[1].split("window._ptLayoutHero", 1)[0]
-          .count("lastTop = actualTop") == 1)
 
 
 def test_list_dropdown_follows_the_same_decisions():
@@ -1634,6 +1518,39 @@ def test_refit_glides_rather_than_snapping():
           and "window.requestAnimationFrame(function() { fitToPoints(lastFitPts); });" in html)
     check("...and only _ptRefit opts into the glide",
           html.count("fitToPoints(lastFitPts, true)") == 1)
+
+
+def test_fold_and_refit_machinery_is_gone():
+    """Both are unreachable now, so both are deleted. (1.13.0)
+
+    1.10.1 folded the strip's times away when the panel opened and taught
+    the spacer maths about it; 1.10.2 stopped the map re-fitting twice per
+    collapse. Both were corrections to a card that floated over the map,
+    changed height as it opened, and had its position recomputed from that
+    height. The detail panel is fixed to the bottom of the screen, moved
+    with a transform, and carries no times in its header at all.
+
+    Kept as a test rather than dropped because the cheapest way to
+    reintroduce those bugs is to reintroduce the machinery.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    with open(os.path.join(here, "static", "app.css"), encoding="utf-8") as fh:
+        css = fh.read()
+    code = re.sub(r"^\s*//.*$", "", html, flags=re.M)
+    code = re.sub(r"\{#.*?#\}", "", code, flags=re.S)
+    css_code = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+
+    for dead in ("endsH", "foldEnds", "measureEnds", "_ptSliding", "cardBase"):
+        check("gone: " + dead, dead not in code, dead)
+    check("the folding rule is gone from the stylesheet",
+          ".collapsed-card.expanded .fstrip--lg .fstrip-ends" not in css_code)
+    # The strip itself must NOT have gained a fixed height on the way out;
+    # that was only ever there to make the fold measurable.
+    ends = css_code.split(".fstrip-ends {", 1)[1].split("}", 1)[0]
+    check("the ends row has no leftover height cap",
+          "max-height" not in ends, ends)
 
 
 def test_tracker_is_scoped_to_this_trip_and_the_next():
@@ -1723,6 +1640,132 @@ def test_list_rows_carry_delay_state():
     # A cancelled leg overrides whatever the times say.
     dep, arr = strip_lines(l, row, "In air", True, False, "24")
     check("cancelled wins over the estimate", arr["state"] == "cancelled", str(arr))
+
+
+def test_strip_ends_cannot_overlap():
+    """The zone printed under the next disc. (1.12.1)
+
+    The ends row shipped as a flex row whose items carried `min-width: 0`,
+    which lets a flex item shrink BELOW its own content. The times are
+    `nowrap`, so rather than shrinking they spilled out of their box and
+    the departure's zone superscript landed under the arrival's disc.
+
+    Not a marginal case: 12-hour time adds " PM" to both ends and about a
+    third more width, so the format most likely to be in use was the one
+    guaranteed to collide. Twelve-hour was never checked when the strip was
+    designed.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "static", "app.css"), encoding="utf-8") as fh:
+        css = fh.read()
+    css_code = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+
+    ends = css_code.split(".fstrip-ends {", 1)[1].split("}", 1)[0]
+    end = css_code.split(".fstrip-end {", 1)[1].split("}", 1)[0]
+    check("an end is never shrunk below its content", "flex: 0 0 auto" in end, end)
+    check("...and min-width:0 is not reintroduced to mask an overflow",
+          "min-width: 0" not in end, end)
+    check("the row wraps rather than overlapping", "flex-wrap: wrap" in ends, ends)
+    check("...with a row-gap for the wrapped line",
+          re.search(r"gap:\s*[\d.]+rem\s+[\d.]+rem", ends) is not None, ends)
+
+
+def test_gate_only_no_terminal_or_baggage():
+    """Gate stays; terminal line and baggage badge go. (1.12.1, owner's)
+
+    A gate number already tells anyone using it which terminal they want,
+    so the terminal line spent a row of every flight restating its
+    neighbour. The belt is useful rarely and on screen always.
+
+    DISPLAY decision, not a data one: both are still fetched, still stored,
+    still in the payload. Nothing about enrichment changed, so nothing has
+    to be re-fetched if they ever come back.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    with open(os.path.join(here, "static", "app.css"), encoding="utf-8") as fh:
+        css = fh.read()
+    code = re.sub(r"^\s*//.*$", "", html, flags=re.M)
+    code = re.sub(r"\{#.*?#\}", "", code, flags=re.S)
+
+    check("the gate badge stays", 'id="v-dep-gate"' in code and 'id="v-arr-gate"' in code)
+    check("the terminal line is gone from the markup", "aptblock-term" not in code)
+    check("...and from the poller", "v-dep-term-text" not in code)
+    check("...and its CSS is deleted, not orphaned",
+          ".aptblock-term {" not in re.sub(r"/\*.*?\*/", "", css, flags=re.S))
+    check("the baggage badge is gone", "v-arr-bag" not in code)
+
+    # The DATA must survive. If enrichment stopped storing these, bringing
+    # them back would mean re-querying the airline for flights already paid
+    # for — the exact cost this app is built to avoid.
+    from app.db import FLIGHT_COLUMNS
+    names = [c[0] for c in FLIGHT_COLUMNS]
+    check("baggage is still stored", "baggage_claim" in names)
+    check("terminals are still stored",
+          "terminal_origin" in names and "terminal_destination" in names)
+
+
+def test_row_tap_selects_the_leg_it_names():
+    """1.13.0 opened the panel WITHOUT selecting. (1.14.0)
+
+    So tapping any row showed whichever leg was already selected — usually
+    the live one. The worst kind of wrong: nothing blank, nothing thrown,
+    the numbers simply somebody else's. Shipped because the panel and the
+    selection were wired in different releases and nothing asserted they
+    met.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    handler = html.split("sheet.addEventListener('click'", 1)[1].split("});", 1)[0]
+    check("the tap reads the row's own leg id",
+          "row.getAttribute('data-detail-for')" in handler, handler[:200])
+    check("...and selects it before opening",
+          handler.index("_ptSelectLeg") < handler.index("openPanel()"), handler[:200])
+    check("selectLeg is reachable from outside its closure",
+          "window._ptSelectLeg = function(id)" in html)
+    # ONE selection path. Two would be two ways to select the wrong leg.
+    check("the tap and Show-on-map share it",
+          html.count("function selectLeg(legId, opts)") == 1)
+    # selectLeg also redraws the map, so this is what makes "tapping a
+    # flight shows it on the map" true without a second mechanism.
+    check("selecting repaints the map",
+          "renderMap(currentData, liveData, true)" in html)
+
+
+def test_whole_trip_is_outlined_on_the_map():
+    """The shape of the trip, behind the leg being tracked. (1.14.0)
+
+    Drawn ONCE, outside renderMap's clear-and-redraw cycle, because a trip
+    does not change shape as an aeroplane moves along it — and because
+    anything inside that cycle gets torn down and rebuilt on every poll.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    check("the routes reach the page", "var tripRoutes = {{ trip_routes|tojson }};" in html)
+    check("drawn outside the redraw cycle",
+          html.index("var tripRoutes") < html.index("function renderMap"))
+    # FAINT AND STRAIGHT ON PURPOSE. These are pairs of airports joined by
+    # a line, not routes flown or planned; the solid heavy line stays
+    # reserved for a track that actually happened (invariant 9's spirit).
+    layer = html.split("var tripRoutes", 1)[1].split("function renderMap", 1)[0]
+    check("...dashed, not solid", "dashArray" in layer, layer[:160])
+    check("...faint", "opacity: 0.45" in layer, layer[:160])
+    check("...and untappable, so it cannot steal a tap from a real marker",
+          "interactive: false" in layer, layer[:160])
+
+    # The outline must describe exactly what the tracker lists. Two
+    # separate walks of the roster is how they come to disagree.
+    with open(os.path.join(here, "app", "main.py"), encoding="utf-8") as fh:
+        main = fh.read()
+    check("trip_routes is derived from the built groups",
+          "for g in groups for l in g[\"legs\"]" in main)
+    check("...skipping legs with no coordinates",
+          'l.get("origin_lat") is not None' in main)
 
 
 def test_map_remeasures():
@@ -1866,10 +1909,8 @@ def main():
     test_bottom_tab_bar()
     test_full_bleed_map()
     test_two_letter_zones()
-    test_open_card_cannot_outgrow_the_screen()
+    test_detail_panel_replaces_the_hero_card()
     test_viewer_theme_is_consistent_across_pages()
-    test_expanding_does_not_disturb_map_or_schedule()
-    test_card_grows_upward_from_a_fixed_bottom_edge()
     test_detail_panels_slide_rather_than_snap()
     test_schedule_works_without_the_map()
     test_session_key_survives_redeploy()
@@ -1885,13 +1926,16 @@ def main():
     test_route_facts_are_not_measurements()
     test_arrival_source_is_in_english()
     test_live_box_does_not_swallow_the_flight_detail()
-    test_strip_times_fold_when_the_panel_opens()
-    test_map_refits_once_and_only_when_still()
     test_list_dropdown_follows_the_same_decisions()
     test_map_cannot_steal_the_scroll()
     test_refit_glides_rather_than_snapping()
+    test_fold_and_refit_machinery_is_gone()
     test_tracker_is_scoped_to_this_trip_and_the_next()
     test_list_rows_carry_delay_state()
+    test_strip_ends_cannot_overlap()
+    test_gate_only_no_terminal_or_baggage()
+    test_row_tap_selects_the_leg_it_names()
+    test_whole_trip_is_outlined_on_the_map()
     test_map_remeasures()
     test_html_is_never_cached()
     test_overnight()
