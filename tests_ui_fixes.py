@@ -375,8 +375,17 @@ def test_template_contract():
                   indent <= 12, f"indent={indent}")
 
     # Still true from v4.5/v5.5 — these are the two that went missing before.
-    check("togglePast is defined, not just called",
-          html.count("function togglePast") == 1)
+    # togglePast was removed in 1.11.0 with the button that called it. The
+    # assertion that replaced it is the one that matters now: nothing may
+    # hide a flight behind a control, because the list is scoped instead.
+    # Comments recording the removal must not read as the removal not
+    # having happened — same trap as the dead-CSS checks above.
+    code = re.sub(r"^\s*//.*$", "", html, flags=re.M)
+    code = re.sub(r"\{#.*?#\}", "", code, flags=re.S)
+    check("no Show-past-flights control survives",
+          "togglePast" not in code and "past-toggle" not in code)
+    check("...and nothing hides a flown leg with display:none",
+          "body:not(.past-open)" not in html)
     check("tickRelativeTimes survives", "function tickRelativeTimes" in html)
 
     # Display-time rounding: track.py keeps one decimal, the card must not
@@ -481,8 +490,14 @@ def test_zone_never_wraps_a_time():
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
         html = fh.read()
-    check("list rows print the bare time, not time+zone",
-          '<span class="row-chip-time">{{ leg.dep_short or leg.dep }}</span>' in html)
+    # The MARKUP moved to the shared strip in 1.11.0; the RULE did not.
+    # Matched on shape rather than on the old literal, because a test that
+    # pins one surface's markup makes replacing that surface look like a
+    # regression — which is exactly what happened here.
+    check("list rows print the bare time, not a glued time+zone",
+          "leg.dep_line.time_short" in html and "leg.arr_line.time_short" in html)
+    check("...falling back to the bare scheduled time, never the glued one",
+          "or leg.dep_short or leg.dep }}" in html)
     # The label rides beside the time it belongs to. It used to sit at the
     # far right of the row, pushed there by margin-left:auto, stranded in
     # empty space away from the number it described.
@@ -497,10 +512,10 @@ def test_zone_never_wraps_a_time():
     # Now every time carries its own zone, everywhere. Longer, and
     # predictable, which is worth more to a family member who does not know
     # that a missing label is supposed to mean "same as the other one".
-    check("the arrival states its zone",
-          '{% if leg.arr_zone %}<span class="tz" aria-hidden="true">{{ leg.arr_zone }}</span>{% endif %}' in html)
+    check("the arrival states its zone, as its own element",
+          '{% if leg.arr_line and leg.arr_line.zone %}<span class="tz" aria-hidden="true">{{ leg.arr_line.zone }}</span>{% endif %}' in html)
     check("the departure states its zone too, unconditionally",
-          '{% if leg.dep_zone %}<span class="tz" aria-hidden="true">{{ leg.dep_zone }}</span>{% endif %}' in html)
+          '{% if leg.dep_line and leg.dep_line.zone %}<span class="tz" aria-hidden="true">{{ leg.dep_line.zone }}</span>{% endif %}' in html)
     check("no surface suppresses a zone by comparing the two",
           "not leg.same_zone" not in html and "not current.same_zone" not in html)
     check("the card no longer prints an 'All times' line", "All times" not in html)
@@ -1408,6 +1423,22 @@ def test_strip_times_fold_when_the_panel_opens():
     check("...unless motion is reduced",
           ".fstrip--lg .fstrip-ends { transition: none; }" in css)
 
+    # THE FOLD MUST BE LINEAR IN HEIGHT. Rendered height is min(natural,
+    # max-height), so a 4rem -> 0 transition stands still for its first
+    # third and then collapses over the rest, while the panel and spacer
+    # move smoothly across all 260ms. The three stop cancelling and the
+    # welded bottom edge creeps, then snaps.
+    check("the fold is driven from measured pixels, not the resting cap",
+          "function foldEnds(collapsed)" in html
+          and "endsEl.style.maxHeight = (collapsed ? endsH : 0) + 'px'" in html)
+    check("...with the start value committed before the end value",
+          "void endsEl.offsetHeight;" in html)
+    check("...on both directions", "foldEnds(true);" in html and "foldEnds(false);" in html)
+    check("...and the pin released once the row is back",
+          "if (endsEl) endsEl.style.maxHeight = '';" in html)
+    check("the expanded rule no longer sets max-height itself",
+          ".collapsed-card.expanded .fstrip--lg .fstrip-ends { opacity: 0; }" in css)
+
     check("the spacer maths subtracts the folding row when opening",
           "cardBase - endsH + target" in html)
     check("...and adds it back when closing", "cardBase + endsH" in html)
@@ -1476,6 +1507,150 @@ def test_list_dropdown_follows_the_same_decisions():
           "d.arrival_source_text" in code)
     check("...and no longer prints the raw token",
           "esc(d.arrival_source)" not in code)
+
+
+def test_map_does_not_steal_the_scroll():
+    """A drag below the card's top edge scrolls the page. (1.10.2)
+
+    The map is a fixed full-screen layer BEHIND the page, so it is still
+    there below the card: in the margins either side of it, in the gap
+    above the tab pills, behind anything the list does not physically
+    cover. Leaflet will happily take a touch through a transparent gap, so
+    scrolling toward next week's flights sometimes panned the map sideways
+    instead, depending on where a thumb landed.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    check("the shield exists", 'class="map-shield"' in html)
+    block = html.split(".map-shield {", 1)[1].split("}", 1)[0]
+    check("it starts at the card's top edge, not the top of the window",
+          "top: var(--card-top)" in block, block)
+    check("...and runs to the bottom", "bottom: 0" in block, block)
+    # Above the map (0) and below the page (20): it must steal from
+    # neither. The scrim sits at 1.
+    check("it sits between the map and the page", "z-index: 2" in block, block)
+    check("vertical drags are declared as page scrolls",
+          "touch-action: pan-y" in block, block)
+    # The strip of map ABOVE the card is deliberately still pannable.
+    check("the visible map is left alone", "top: 0" not in block, block)
+
+
+def test_refit_glides_rather_than_snapping():
+    """A re-fit is a correction, not a new subject. (1.10.2)
+
+    The route has not moved; only the window onto it has, because the card
+    changed height. Leaflet's fitBounds is instant by default, which turns
+    that correction into a jump that reads as the map losing its place.
+    The first fit still snaps — there is no previous view to ease from.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    check("card-driven re-fits ask for a glide",
+          "fitToPoints(lastFitPts, true)" in html)
+    check("...and fitToPoints honours it",
+          "opts.animate = true; opts.duration = 0.35;" in html)
+    check("...including the single-point case",
+          "glide ? { animate: true, duration: 0.35 } : undefined" in html)
+    # Only the card-driven correction glides. The first paint and the
+    # poll-driven fits stay instant, which is why the flag is opt-in
+    # rather than the default.
+    check("the initial fit is still instant",
+          "function fitToPoints(pts, glide)" in html
+          and "window.requestAnimationFrame(function() { fitToPoints(lastFitPts); });" in html)
+    check("...and only _ptRefit opts into the glide",
+          html.count("fitToPoints(lastFitPts, true)") == 1)
+
+
+def test_tracker_is_scoped_to_this_trip_and_the_next():
+    """The tracker holds this trip and the next. Nothing else. (1.11.0)
+
+    It used to render the entire 365-day roster and hide most of it behind
+    a button — a list that grows without bound, pretending to be a list
+    that does not. The scope is the fix; the button was the symptom.
+    """
+    from app.main import trip_slices, tracker_window
+    from app.models import FlightLeg
+    from datetime import date as _d
+
+    def L(n, day, start=False):
+        return FlightLeg(id=n, date=_d(2026, 8, day), flight_number=n,
+                         origin="DFW", destination="OKC",
+                         dep_time_local="06:00", arr_time_local="07:30",
+                         trip_start=start)
+
+    roster = [L("a1", 1, True), L("a2", 2),
+              L("b1", 10, True), L("b2", 11), L("b3", 12),
+              L("c1", 20, True),
+              L("d1", 28, True)]
+
+    trips = trip_slices(roster)
+    check("the roster cuts into four trips", len(trips) == 4, str(len(trips)))
+    check("...at the trip_start markers",
+          [len(t) for t in trips] == [2, 3, 1, 1], str([len(t) for t in trips]))
+
+    # Anchored mid-trip: that whole trip, flown legs and all, plus the next.
+    w = tracker_window(roster, "b2")
+    check("the anchor's whole trip is kept, including what is already flown",
+          {"b1", "b2", "b3"} <= w, str(w))
+    check("...and the next trip", "c1" in w, str(w))
+    check("...but not the one after that", "d1" not in w, str(w))
+    check("...and nothing older", "a1" not in w and "a2" not in w, str(w))
+
+    # The last trip on the roster has no successor and must not blow up.
+    check("a final trip is handled", tracker_window(roster, "d1") == {"d1"})
+
+    # DEGRADE TO THE OLD BEHAVIOUR, NEVER TO A BLANK PAGE. A roster with
+    # no trip markers at all (pasted without the blank lines the parser
+    # keys on) is one trip containing everything.
+    flat = [L("x1", 1), L("x2", 2), L("x3", 3)]
+    check("an unmarked roster is a single trip", len(trip_slices(flat)) == 1)
+    check("...so every leg still shows",
+          tracker_window(flat, "x2") == {"x1", "x2", "x3"})
+    # And an anchor that cannot be placed says "no opinion" rather than
+    # returning an empty set, which would render an empty tracker.
+    check("an unplaceable anchor shows everything", tracker_window(roster, "zzz") is None)
+    check("no anchor at all shows everything", tracker_window(roster, None) is None)
+
+
+def test_list_rows_carry_delay_state():
+    """A row and the card above it cannot disagree about lateness. (1.11.0)
+
+    List rows printed a bare scheduled time with no state at all, so a
+    flight could read plain in the list and red on the card in the same
+    breath. Both now reach the same two dicts through the same _variance
+    and _time_line.
+    """
+    from app.view import strip_lines
+    from app.airports import enrich_leg
+    from app.models import FlightLeg
+    from datetime import date as _d, timedelta as _td
+
+    l = FlightLeg(id="S1", date=_d(2026, 8, 16), flight_number="3729",
+                  origin="DFW", destination="OKC",
+                  dep_time_local="06:00", arr_time_local="07:22")
+    enrich_leg(l)
+
+    # No flights row at all: an unflown leg. Scheduled, and NOT green.
+    dep, arr = strip_lines(l, None, "Scheduled", False, False, "24")
+    check("an unflown leg still shows its times", dep and arr)
+    check("...tagged scheduled, not on time",
+          dep["state"] == "scheduled" and arr["state"] == "scheduled")
+
+    late = (l.arr_datetime_utc() + _td(minutes=18)).isoformat()
+    row = {"out_actual_api": None, "out_observed": None, "out_estimated": None,
+           "in_actual_api": None, "in_observed": None, "in_estimated": late}
+    dep, arr = strip_lines(l, row, "In air", False, False, "24")
+    check("an 18-minute delay reads late", arr["state"] == "late", str(arr))
+    check("...and carries the corrected time bare", arr["time_short"] is not None)
+    check("...and the original to strike through", arr["was_short"] is not None)
+    check("...and its zone separately", arr["zone"] == "CT", str(arr["zone"]))
+
+    # A cancelled leg overrides whatever the times say.
+    dep, arr = strip_lines(l, row, "In air", True, False, "24")
+    check("cancelled wins over the estimate", arr["state"] == "cancelled", str(arr))
 
 
 def test_map_remeasures():
@@ -1641,6 +1816,10 @@ def main():
     test_strip_times_fold_when_the_panel_opens()
     test_map_refits_once_and_only_when_still()
     test_list_dropdown_follows_the_same_decisions()
+    test_map_does_not_steal_the_scroll()
+    test_refit_glides_rather_than_snapping()
+    test_tracker_is_scoped_to_this_trip_and_the_next()
+    test_list_rows_carry_delay_state()
     test_map_remeasures()
     test_html_is_never_cached()
     test_overnight()

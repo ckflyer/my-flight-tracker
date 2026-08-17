@@ -216,7 +216,12 @@
        because past and live rows now interleave inside the same list — a
        single collapsible container can no longer express "hide these three
        rows but keep the fourth". */
-    body:not(.past-open) .is-past { display: none !important; }
+    /* .is-past no longer HIDES anything (1.11.0). Flown legs of the
+       current trip are always on screen, dimmed by .fstrip.is-past — the
+       display:none rule and the body.past-open switch that drove it went
+       with the Show-past-flights button. Kept as a hook because the day
+       card and the overnight label still dim as a whole. */
+    .day-card.is-past, .trip-divider.is-past, .overnight-label.is-past { opacity: 0.62; }
 
     .leg-head {
       display: flex; align-items: flex-start; justify-content: space-between;
@@ -592,6 +597,32 @@
        the background of the app, fading in as you scroll. min-height
        guarantees the page CAN scroll even on a one-leg day — otherwise the
        list would have no way to appear. */
+    /* THE MAP SHIELD. The map is a fixed, full-screen layer BEHIND the
+       page, so it is still there below the card — in the margins either
+       side of it, in the gap above the tab pills, and behind every part of
+       the schedule the list does not physically cover. Dragging on any of
+       those pans the map, because Leaflet is perfectly happy to receive a
+       touch through a transparent gap. The result is that scrolling down
+       to next week's flights sometimes slid the map sideways instead,
+       depending on exactly where a thumb landed.
+
+       This is an invisible sheet from the card's top edge to the bottom of
+       the window. It sits above the map and below the card and the list
+       (z-index 2, against 0 for the map and 20 for the page), so it steals
+       nothing from either — it only catches the drags that would otherwise
+       fall through to Leaflet. `touch-action: pan-y` states the intent
+       outright: vertical drags here scroll the document.
+
+       ABOVE the card top, the map is deliberately still live. That strip
+       is the part of the map you can actually see, and panning it is the
+       point. --card-top moves with the card, so opening the details grows
+       the shield to match without anything having to be told. */
+    .map-shield {
+      position: fixed;
+      top: var(--card-top); left: 0; right: 0; bottom: 0;
+      z-index: 2;
+      touch-action: pan-y;
+    }
     .reveal {
       position: relative; z-index: 20;
       min-height: 72vh;
@@ -659,6 +690,10 @@
     </div>
   </div>
   <div class="scroll-scrim" id="scroll-scrim"></div>
+  {# Catches drags that would otherwise fall through the page and pan the
+     map. See .map-shield. Rendered inside the same {% if current %} as the
+     map itself — no map, nothing to shield. #}
+  <div class="map-shield" id="map-shield" aria-hidden="true"></div>
   {% endif %}
 
   <div class="topbar">
@@ -900,21 +935,24 @@
 
   <div class="reveal" id="reveal">
   <div class="expand-wrap" id="expand-wrap">
-    {% if past_count %}
-    <button class="toggle" id="past-toggle" onclick="togglePast()">Show past flights ({{ past_count }})</button>
-    {% endif %}
+    {# ONE list: this trip and the next, in order, with NOTHING HIDDEN.
+       The Show-past-flights button is gone (1.11.0) and so is the whole
+       reveal-on-demand idea behind it. It existed because the tracker
+       rendered the entire 365-day roster and had to hide most of it — a
+       list that grows without bound, pretending to be a list that does
+       not. The scope is the fix; the button was the symptom.
 
-    {# ONE list: past, the live flight, then upcoming, in order. The live
-       flight is IN the list, not only on the card above — scrolling a
-       schedule with a hole where you actually are gives you nothing to
-       measure against. Past rows and wholly-past days carry .is-past and
-       are hidden until the toggle opens them; a day holding both flown and
-       upcoming legs stays visible and hides only its flown rows. #}
+       Flown legs of THIS trip stay, dimmed: "he has done three of today's
+       four" is the question this page exists to answer. Flown legs of
+       older trips are on the calendar, which is what the calendar is for.
+
+       The live flight is IN the list, not only on the card above —
+       scrolling a schedule with a hole where you actually are gives you
+       nothing to measure against. #}
     {% for group in flight_groups %}
     {% if group.first_live %}
-    {# Scroll landmark for togglePast(). Sits before the first day that is
-       not entirely past, so every element the toggle inserts is above it
-       and the delta it moves by is exactly the height added. #}
+    {# Marks where the flown part of this trip ends. Kept as a landmark for
+       the scroll positioning, which is why it survived the toggle. #}
     <div id="past-anchor" style="height:0"></div>
     {% endif %}
     {% if group.trip_start and not loop.first %}
@@ -927,16 +965,28 @@
         <div class="list-item leg-head" data-detail-for="{{ leg.id }}" role="button" tabindex="0"
              aria-expanded="false" aria-controls="rd-{{ leg.id }}">
           <div class="leg-head-main">
-            <div class="row-flight-num">{{ leg.callsign }}{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}{% if leg.is_current %}<span class="live-dot" title="Current flight"></span>{% endif %}</div>
-            <div class="row-city-route">{{ leg.origin }} &rarr; {{ leg.destination }}</div>
-            <div class="row-times-row">
-              {# The zone rides directly beside the time it belongs to. A leg
-                 that starts and ends in the same zone states it once, on the
-                 arrival; one that crosses a zone states it at both ends. The
-                 label is always its own element, so it can never be the thing
-                 that wraps a time onto a second line. #}
-              <div class="row-chip"><span class="row-chip-icon"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="7" y1="17" x2="17" y2="7"></line><polyline points="7 7 17 7 17 17"></polyline></svg></span><span class="row-chip-time">{{ leg.dep_short or leg.dep }}</span>{% if leg.dep_zone %}<span class="tz" aria-hidden="true">{{ leg.dep_zone }}</span>{% endif %}</div>
-              <div class="row-chip"><span class="row-chip-icon"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="7" y1="7" x2="17" y2="17"></line><polyline points="17 7 17 17 7 17"></polyline></svg></span><span class="row-chip-time">{{ leg.arr_short or leg.arr }}</span>{% if leg.arr_zone %}<span class="tz" aria-hidden="true">{{ leg.arr_zone }}</span>{% endif %}</div>
+            {# THE SHARED STRIP, medium size. Same component as the card
+               above and the calendar below — see invariant 25. This row
+               used to be bespoke markup with its own arrow icons, its own
+               zone placement and NO delay state at all, so a flight could
+               read plain here and red on the card in the same breath. #}
+            <div class="fstrip fstrip--md {% if leg.is_past %}is-past{% endif %}">
+              <div class="fstrip-head">
+                <div class="fstrip-num">{{ leg.callsign }}{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}{% if leg.is_current %}<span class="live-dot" title="Current flight"></span>{% endif %}</div>
+              </div>
+              <div class="fstrip-cities">{{ leg.origin_city }} <span class="to-word">to</span> {{ leg.dest_city }}</div>
+              <div class="fstrip-ends">
+                <span class="fstrip-end dep">
+                  <span class="fstrip-disc {{ leg.dep_line.state if leg.dep_line else '' }}" aria-hidden="true">{% include "partials/arrow_out.html" %}</span>
+                  <span class="fstrip-code">{{ leg.origin }}</span>
+                  <span class="fstrip-time {{ leg.dep_line.state if leg.dep_line else '' }}">{{ (leg.dep_line.time_short if leg.dep_line else None) or leg.dep_short or leg.dep }}{% if leg.dep_line and leg.dep_line.zone %}<span class="tz" aria-hidden="true">{{ leg.dep_line.zone }}</span>{% endif %}</span>
+                </span>
+                <span class="fstrip-end arr">
+                  <span class="fstrip-disc {{ leg.arr_line.state if leg.arr_line else '' }}" aria-hidden="true">{% include "partials/arrow_in.html" %}</span>
+                  <span class="fstrip-code">{{ leg.destination }}</span>
+                  <span class="fstrip-time {{ leg.arr_line.state if leg.arr_line else '' }}">{{ (leg.arr_line.time_short if leg.arr_line else None) or leg.arr_short or leg.arr }}{% if leg.arr_line and leg.arr_line.zone %}<span class="tz" aria-hidden="true">{{ leg.arr_line.zone }}</span>{% endif %}</span>
+                </span>
+              </div>
             </div>
           </div>
           <div class="leg-head-tags">
@@ -1007,13 +1057,11 @@
     // ---- Card expand/collapse + past-flights toggle ----------------------
     // These two behaviours lost their JavaScript somewhere before v4.5: the
     // markup and CSS survived intact, but nothing set the .open / .expanded
-    // classes and togglePast() was called by an inline onclick that pointed
-    // at a function which no longer existed. Rewritten here against the CSS
+    // classes. Rewritten here against the CSS
     // contract, which specifies them exactly:
     //   .expand-details.open      -> display: block
     //   .expand-wrap.open         -> display: block
     //   .collapsed-card.expanded  -> city name wraps instead of truncating
-    //   body.past-open            -> reveals .is-past rows and days
     (function() {
       var card = document.getElementById('collapsed-card');
       var details = document.getElementById('expand-details');
@@ -1047,10 +1095,26 @@
       var endsH = 0;
       function measureEnds() {
         if (!endsEl || card.classList.contains('expanded')) return;
+        endsEl.style.maxHeight = '';
         var h = endsEl.getBoundingClientRect().height;
         if (h > 0) endsH = h;
       }
       measureEnds();
+
+      // Fold the row between measured pixel heights, NOT between the CSS
+      // resting cap and zero. The rendered height is min(natural, cap), so
+      // a 4rem -> 0 transition spends its first third doing nothing visible
+      // and then collapses 22px over the remainder — while the panel and
+      // the spacer move smoothly across the whole 260ms. That mismatch is
+      // exactly the bottom-edge creep all three transitions exist to
+      // prevent. Pinning to endsH first makes the fold linear in HEIGHT and
+      // the three cancel out properly.
+      function foldEnds(collapsed) {
+        if (!endsEl) return;
+        endsEl.style.maxHeight = (collapsed ? endsH : 0) + 'px';
+        void endsEl.offsetHeight;                 // commit the start value
+        endsEl.style.maxHeight = (collapsed ? 0 : endsH) + 'px';
+      }
 
       function slidePanel(open, instant) {
         if (slideTimer) { clearTimeout(slideTimer); slideTimer = null; }
@@ -1059,6 +1123,8 @@
         if (instant) {
           details.classList.toggle('open', open);
           details.style.height = '';
+          // No animation, so no pinning: back to the CSS resting cap.
+          if (endsEl) endsEl.style.maxHeight = open ? '0px' : '';
           window._ptSliding = false;
           return;
         }
@@ -1093,6 +1159,7 @@
                          details.getBoundingClientRect().height;
           details.classList.add('animating');
           details.style.height = target + 'px';
+          foldEnds(true);
           // Shrink the spacer above the card by exactly what the panel is
           // about to add, on the same curve, so the card's bottom edge does
           // not move a pixel while its top edge slides up into the map.
@@ -1115,6 +1182,7 @@
           void details.offsetHeight;
           details.classList.add('animating');
           details.style.height = '0px';
+          foldEnds(false);
           // Same trick in reverse: the card is about to lose the panel's
           // height, so the spacer grows back by the same amount, on the same
           // curve, and the bottom edge again holds still.
@@ -1125,6 +1193,7 @@
             details.classList.remove('open', 'animating', 'capped');
             details.style.height = '';
             slideTimer = null;
+            if (endsEl) endsEl.style.maxHeight = '';
             // Cleared BEFORE the 320ms settle pass runs, so that pass is
             // the one allowed to re-fit the map — exactly once, against
             // the card's real resting height.
@@ -1193,52 +1262,13 @@
       setExpanded(false, true);   // instant: sets the closed state before first paint
     })();
 
-    // Called by the inline onclick on #past-toggle, so it has to be a real
-    // global — a function declared inside an IIFE would not be reachable
-    // from the attribute and the button would silently do nothing.
-    function togglePast() {
-      var btn = document.getElementById('past-toggle');
-      if (!btn) return;
-
-      // The past list sits ABOVE the upcoming list, so opening it inserts
-      // its whole height into the middle of the page and shoves everything
-      // below down by that much. The browser keeps scrollTop where it was,
-      // so from the reader's seat the page appears to jump backwards to the
-      // OLDEST past flight — the least interesting one — and whatever they
-      // were reading is now far below.
-      //
-      // Fix: pick a landmark below the section, note where it sits on
-      // screen, toggle, then scroll by exactly how far it moved. The
-      // landmark stays under the same pixel, the past flights unfold
-      // upwards out of view, and the most recent one — last in the list,
-      // nearest the reader — is a short scroll up.
-      //
-      // Measured with getBoundingClientRect immediately after the class
-      // change, which is safe ONLY because .is-past toggles display:none
-      // with no transition. Give it an animation and this has to move into
-      // a rAF or a transitionend handler.
-      var anchor = document.getElementById('past-anchor');
-      var before = anchor ? anchor.getBoundingClientRect().top : null;
-
-      var open = document.body.classList.toggle('past-open');
-
-      if (before !== null) {
-        var after = anchor.getBoundingClientRect().top;
-        var shift = after - before;
-        if (shift) {
-          // scrollBy with behavior:'instant' — a smooth scroll here reads
-          // as the same jump, just slower.
-          window.scrollBy({ top: shift, left: 0, behavior: 'instant' });
-        }
-      }
-
-      // The count comes from the button's own current label rather than a
-      // template variable, so this keeps working after the poll swaps legs
-      // and the number changes.
-      var count = (btn.textContent.match(/\((\d+)\)/) || [])[1] || '';
-      btn.textContent = (open ? 'Hide past flights (' : 'Show past flights (') + count + ')';
-    }
-    window.togglePast = togglePast;
+    // togglePast() and the whole reveal-on-demand mechanism it drove were
+    // removed in 1.11.0, together with the anchor-and-scroll-back trick
+    // that stopped the page jumping to the OLDEST past flight when the
+    // section unfolded. None of it is needed once the tracker holds only
+    // this trip and the next: every row is on screen, and there is nothing
+    // to unfold. The landmark itself survives as #past-anchor, because the
+    // scroll positioning still wants to know where the flown part ends.
 
     // Map layer toggle popover (live overlay + radar), preferences kept in
     // localStorage since the map keeps refreshing in place and the choice
@@ -1922,17 +1952,25 @@
         return { paddingTopLeft: [30, top], paddingBottomRight: [30, bottom], maxZoom: 8 };
       }
 
-      function fitToPoints(pts) {
+      // `glide` eases the view instead of snapping it. A re-fit caused by
+      // the card changing height is a correction, not a new subject: the
+      // route has not moved, only the window onto it, and Leaflet's default
+      // instant fitBounds turns that into a jump that reads as the map
+      // losing its place. The FIRST fit still snaps, because there is no
+      // previous view to move away from.
+      function fitToPoints(pts, glide) {
         if (!pts || !pts.length) return;
         if (pts.length === 1) {
-          map.setView(pts[0], 7);
+          map.setView(pts[0], 7, glide ? { animate: true, duration: 0.35 } : undefined);
           // A single point sits dead centre of the map, which is behind the
           // card. Nudge the view up by half the hidden strip.
           const vh = window.innerHeight;
           const hidden = Math.max(0, vh - (window._ptCardTop || vh));
           if (hidden > 40) map.panBy([0, hidden / 2], { animate: false });
         } else {
-          map.fitBounds(pts, fitOpts());
+          var opts = fitOpts();
+          if (glide) { opts.animate = true; opts.duration = 0.35; }
+          map.fitBounds(pts, opts);
         }
       }
 
@@ -2009,7 +2047,7 @@
       // Called by the card-layout script once it knows where the card rests,
       // so the first frame — drawn before that measurement exists — gets
       // re-framed against the real position instead of the fallback guess.
-      window._ptRefit = function() { fitToPoints(lastFitPts); };
+      window._ptRefit = function() { fitToPoints(lastFitPts, true); };
       window.requestAnimationFrame(function() { fitToPoints(lastFitPts); });
 
       const recenterBtn = document.getElementById('map-recenter-btn');

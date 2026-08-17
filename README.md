@@ -1,7 +1,7 @@
 # MyPilot
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.10.1.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.11.0.
 
 The version above was stale at 1.4.0 for five releases. `app/version.py`
 is the only authority; this line is a convenience and nothing reads it.
@@ -48,7 +48,7 @@ seriously.
 
 ## STATE
 
-**v1.10.1.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+**v1.11.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
 owner plus several FOs, who fly the same legs — hence shared flight rows
 (v5.1, retained).
 
@@ -69,7 +69,7 @@ page split (1.6.0–1.7.0). All three came out of the same problem — the app
 could not be OPERATED without SSH, and bugs could not be reproduced without
 flying a trip.
 
-Tests: **1,089**, eleven suites, all passing.
+Tests: **1,125**, eleven suites, all passing.
 
 **Current work: the UI chunks (1.9.0 onward).** Five agreed steps, owner's
 brief, reworking the tracker and calendar around one flight-strip
@@ -81,8 +81,9 @@ become the history browser before past flights could leave the tracker.
 | Step | What | State |
 |---|---|---|
 | 1 | the `.fstrip` component + the current flight card | **DONE 1.9.0** |
-| 2 | the expanded view, on the reference layout | **DONE 1.10.0 + 1.10.1** |
-| 3 | tracker list: current trip only, no past-flights toggle, positioned on the live leg | next |
+| 2 | the expanded view, on the reference layout | **DONE 1.10.0-1.10.2** |
+| 3 | tracker list: current trip only, no past-flights toggle, positioned on the live leg | **1.11.0 — scope/strips done, POSITIONING NOT DONE** |
+| 3b | the list's scroll position, and the row dropdown onto `.aptblock` | next |
 | 4 | calendar: expandable strips with history and a mini map | |
 | 5 | regression pass across themes, time formats and the odd states | |
 
@@ -98,7 +99,7 @@ the tracker entirely — they belong to step 4's calendar.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, placeholder filter |
-| `tests_ui_fixes.py` | 476 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
+| `tests_ui_fixes.py` | 512 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
 | `tests_app_shell.py` | 167 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
 | `tests_timezones.py` | 68 | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
 | `tests_closeout_sweep.py` | 42 | the abandonment cliff, the on-ground handover, the late gate-in chase and its cap |
@@ -1613,13 +1614,13 @@ python tests_poller_end_to_end.py   #  47
 python tests_past_leg_detail.py     #  19
 python tests_budget_limit.py        #  17
 python tests_carrier_cap.py         #  13
-python tests_ui_fixes.py            # 476
+python tests_ui_fixes.py            # 512
 python tests_app_shell.py           # 167
 python tests_timezones.py           #  68
 python tests_closeout_sweep.py      #  42
 python tests_import_merge.py        #  39
 python tests_test_mode.py           # 133
-```                                  # 1089
+```                                  # 1125
 
 Each uses its own scratch DB via `PT_DB_FILE`. Read
 `tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
@@ -1649,6 +1650,104 @@ invariant 1.
   exactly this reason.
 
 ## VERSION HISTORY
+
+### 1.11.0 — the tracker list is the trip you are on
+
+Step 3, partly. The scope and the strips are done; the SCROLL POSITIONING
+is not, and the reason is recorded below because it is a design problem
+rather than unfinished typing.
+
+**THE TRACKER NOW HOLDS THIS TRIP AND THE NEXT.** It rendered the entire
+365-day roster and hid most of it behind Show-past-flights — a list that
+grows without bound, pretending to be a list that does not. `trip_slices`
+cuts the roster at `trip_start` markers; `tracker_window` keeps the
+anchor's trip and its successor. The anchor is the live leg, or failing
+that the next leg flown, which is the same fallback the card uses — so
+the card and the list are always discussing the same trip.
+
+Flown legs of the CURRENT trip stay, dimmed. "He has done three of
+today's four" is the question this page exists to answer. Flown legs of
+older trips leave entirely; they are the calendar's job.
+
+Degrades toward the OLD behaviour, never toward a blank page: a roster
+with no `trip_start` markers at all — pasted without the blank lines the
+parser keys on — comes back as one trip containing everything, and an
+anchor that cannot be placed returns None, meaning "no opinion, show
+everything".
+
+**Show past flights is gone**, and so is `togglePast` and the
+anchor-and-scroll-back trick that stopped the page leaping to the oldest
+flown leg when the section unfolded. None of it is needed once there is
+nothing to unfold. `.is-past` no longer sets `display:none`; it dims.
+
+**List rows are `.fstrip--md`** — the same component as the card. They
+were bespoke markup with their own arrow icons, their own zone placement
+and NO DELAY STATE AT ALL, so a flight could read plain in the list and
+red on the card in the same breath. `view.strip_lines()` is the shared
+middle: `build()` and the list now reach the same two `*_line` dicts
+through the same `_variance` and `_time_line`. `time_index()` fetches the
+six timestamps for every row in one narrow SELECT, following `tag_index`.
+
+**NOT DONE: the list does not position itself on the live leg.** The
+agreed behaviour was "scroll down from the map and land on the current
+flight; scroll up for flown ones". That requires the flown legs to sit
+ABOVE the card in the document, and they sit below it — the card is a
+hero whose top edge is driven by a measured spacer, and moving content
+above it means the spacer maths, the reveal fade and the map framing all
+have to be re-derived. It is a real piece of work, not a line of CSS, and
+doing it badly would put the card's welded bottom edge back in play after
+three releases of fixing exactly that. It is 3b.
+
+The pressure behind it is also much lower now: the flown section is at
+most a handful of dimmed rows from the current trip, not hundreds.
+
+Tests: 1,105 → 1,125. Four older assertions pinned the list's old markup
+literals — the RULE they protected (every time carries its own zone
+element, never suppressed by comparing the two) still holds and is now
+matched on shape. A test that pins one surface's markup makes replacing
+that surface look like a regression, which is what happened here.
+
+### 1.10.2 — the creep, the jump, and the stolen scroll
+
+Three motion faults on the tracker. No change to data, polling or layout
+structure.
+
+**BUG: the card's bottom edge still crept while opening.** 1.10.1 folded
+the strip's times away and taught the spacer maths about it, and the
+arithmetic was right — but the ANIMATION was not. A row's rendered height
+is `min(natural, max-height)`, so transitioning max-height from its 4rem
+resting cap down to zero stands still for the first third of the curve
+and then collapses 22px over the remainder. The panel and the spacer,
+meanwhile, move smoothly across the whole 260ms. The three stopped
+cancelling out, so the edge drifted and then snapped back at the end.
+`foldEnds()` now pins max-height to the MEASURED height before starting,
+which makes the fold linear in height and the three cancel properly. The
+lesson is not about CSS: the number was correct and the motion was wrong,
+and only one of those is visible in a test that checks arithmetic.
+
+**BUG: the map stole scrolls meant for the schedule.** The map is a fixed
+full-screen layer behind the page, so it is still there below the card —
+in the margins either side of it, in the gap above the tab pills, behind
+anything the flight list does not physically cover. Leaflet takes a touch
+through a transparent gap quite happily, so scrolling toward next week's
+flights sometimes panned the map sideways instead, depending on where a
+thumb landed. `.map-shield` is an invisible sheet from `--card-top` to the
+bottom of the window at z-index 2 — above the map, below the page — with
+`touch-action: pan-y`. The strip of map ABOVE the card stays live, because
+that is the part you can see and panning it is the point.
+
+**The map's re-fit glides instead of snapping.** `fitBounds` is instant by
+default. When the card changes height the route has not moved, only the
+window onto it, so an instant re-frame reads as the map losing its place.
+`_ptRefit` now passes `animate: true, duration: 0.35`; the first paint and
+the poll-driven fits stay instant, because there is no previous view to
+ease away from. This is a mitigation, not a proof: 1.10.1 already stopped
+the DOUBLE fit, and whether a correctly-timed single fit was the whole of
+the remaining "jumping around" is not yet confirmed on a real device.
+
+Tests: 1,089 → 1,105. One assertion added in this session was written
+backwards — it asserted the instant call sites did NOT exist, when their
+existence is the point — and was corrected before the release.
 
 ### 1.10.1 — finishing step 2: three bugs behind one symptom
 
