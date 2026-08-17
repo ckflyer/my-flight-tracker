@@ -243,14 +243,33 @@ def _time_line(variance: Optional[Dict[str, Any]], baseline: Optional[datetime],
     leg still shows its times rather than nothing at all — the empty-field
     hiding would otherwise wipe a future flight's block entirely now that
     the Scheduled row is gone.
+
+    THE TIME AND ITS ZONE ARE ALSO EMITTED SEPARATELY (1.9.0), as
+    `time_short` / `zone` and `was_short` / `zone`. `time` keeps the glued
+    "12:39 CDT" form and every existing caller keeps working, but a glued
+    string cannot be superscripted — the zone is inside the same text node
+    as the digits, so CSS has nothing to grab. That is the whole reason the
+    expanded card still printed full-size inline zones two releases after
+    1.3.0 made every other surface superscript them: not an oversight in
+    the template, a shape the payload could not express.
+
+    The zone is resolved against `baseline` — the leg's own scheduled
+    instant — so it answers daylight time for the day being displayed
+    rather than for today. See invariant: labels come from zone_label(),
+    always, with the date attached.
     """
+    zone = zone_label(tz_name, baseline) if baseline is not None else None
     if variance:
         revised, original = variance.get("time"), variance.get("original")
+        was = original if (original and original != revised) else None
         return {
             "time": revised,
             # Only when it actually moved. Striking through a time
             # identical to the one above it is noise.
-            "was": original if (original and original != revised) else None,
+            "was": was,
+            "time_short": variance.get("time_short"),
+            "was_short": variance.get("original_short") if was else None,
+            "zone": zone,
             "note": (variance.get("short_text")
                      or ("on time" if variance.get("state") == "ontime" else None)),
             "state": variance.get("state"),
@@ -267,7 +286,10 @@ def _time_line(variance: Optional[Dict[str, Any]], baseline: Optional[datetime],
     shown = _fmt_local(baseline, tz_name, time_format)
     if not shown:
         return None
-    return {"time": shown, "was": None, "note": None, "state": "scheduled",
+    return {"time": shown,
+            "time_short": _fmt_local(baseline, tz_name, time_format, with_zone=False),
+            "was": None, "was_short": None, "zone": zone,
+            "note": None, "state": "scheduled",
             "source": "scheduled", "minutes": 0, "settled": False}
 
 
