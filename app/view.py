@@ -309,6 +309,49 @@ def _time_line(variance: Optional[Dict[str, Any]], baseline: Optional[datetime],
             "source": "scheduled", "minutes": 0, "settled": False}
 
 
+def strip_lines(leg, row, phase_tag, cancelled, closed, time_format="24"):
+    """The two `*_line` dicts for one leg, from an already-fetched row.
+
+    `build()` produces these for ONE leg alongside everything else it
+    knows. The flight list needs only these two, for every row on screen,
+    and calling build() per row would be a query per row plus a great deal
+    of work thrown away — a list row has no use for gates, aircraft,
+    diversions or provenance.
+
+    So this is the shared middle: build() and the list reach the same two
+    dicts through the same `_variance` and `_time_line`. That matters more
+    than the saved queries. The list used to print a bare scheduled time
+    with no state at all, which is precisely how a row and the card above
+    it come to disagree about whether a flight is running late.
+
+    `row` may be None — an unflown leg has no flights record yet — and the
+    answer is then the scheduled time tagged "scheduled". Not green, not
+    red: unreported is not on time. See invariant 28.
+    """
+    o_tz = leg.origin_info.timezone if leg.origin_info else None
+    d_tz = leg.dest_info.timezone if leg.dest_info else None
+
+    def _c(name):
+        return _col(row, name) if row is not None else None
+
+    departed = phase_tag in (tags.PHASE_IN_AIR, tags.PHASE_LANDING,
+                             tags.PHASE_TAXI_IN, tags.PHASE_ARRIVED)
+    dep_delay = _variance(
+        leg.dep_datetime_utc(), _c("out_actual_api"), _c("out_observed"),
+        _c("out_estimated"), o_tz, time_format, "Departing", "Departed",
+        settled_override=True if departed else None)
+    arr_delay = _variance(
+        leg.arr_datetime_utc(), _c("in_actual_api"), _c("in_observed"),
+        _c("in_estimated"), d_tz, time_format, "Arrives", "Arrived",
+        settled_override=True if (phase_tag == tags.PHASE_ARRIVED or closed)
+        else None)
+    if cancelled:
+        arr_delay = {"state": "cancelled", "minutes": 0, "settled": True,
+                     "time": None, "original": None, "text": "Cancelled"}
+    return (_time_line(dep_delay, leg.dep_datetime_utc(), o_tz, time_format),
+            _time_line(arr_delay, leg.arr_datetime_utc(), d_tz, time_format))
+
+
 def build(row, leg, now: datetime, time_format: str = "24",
           include_breadcrumb: bool = True) -> Dict[str, Any]:
     """Everything the card needs, from the row and nothing else."""

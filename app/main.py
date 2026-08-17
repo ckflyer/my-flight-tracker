@@ -271,6 +271,74 @@ def tag_index(user_id: int) -> dict:
         conn.close()
 
 
+def time_index(user_id: int) -> dict:
+    """{leg_id: row} of just the columns the strip's times need.
+
+    Same reasoning as tag_index above, for the same lists: a row per query
+    would be dozens of round trips. Deliberately a NARROW select — the
+    flights table is wide, and a list row uses six timestamps and two
+    flags. Legs with no flights record simply do not appear, and
+    strip_lines treats a missing row as "nothing published yet".
+    """
+    from .db import get_connection
+    conn = get_connection()
+    try:
+        return {r["id"]: r for r in conn.execute(
+            "SELECT f.id, f.out_actual_api, f.out_observed, f.out_estimated, "
+            "       f.in_actual_api, f.in_observed, f.in_estimated, "
+            "       f.cancelled, f.closed "
+            "FROM roster r JOIN flights f ON f.id = r.flight_id "
+            "WHERE r.user_id = ?", (user_id,))}
+    finally:
+        conn.close()
+
+
+def trip_slices(all_legs: list) -> list:
+    """The roster cut into trips, in order.
+
+    A trip begins at a leg carrying `trip_start`, which the parser sets
+    from a blank line in the pasted schedule. Anything before the first
+    such leg is its own trip, so a roster with NO markers at all comes
+    back as one trip containing everything — which degrades to exactly the
+    old behaviour rather than to an empty tracker.
+    """
+    trips, current = [], []
+    for leg in all_legs:
+        if leg.trip_start and current:
+            trips.append(current)
+            current = []
+        current.append(leg)
+    if current:
+        trips.append(current)
+    return trips
+
+
+def tracker_window(all_legs: list, anchor_id: Optional[str]) -> Optional[set]:
+    """Which legs the TRACKER shows: the anchor's trip, and the one after.
+
+    The tracker answers two questions — where is he now, and when does he
+    go again — and both are answered by this trip and the next one. It
+    used to render the entire 365-day roster and hide most of it behind a
+    button, which is a list that grows without bound pretending to be a
+    list that does not. Everything older lives on the calendar now, which
+    is what the calendar is for.
+
+    Returning None means "no opinion, show everything" — used when the
+    anchor cannot be placed, so a bug here degrades to the old behaviour
+    instead of to a blank page.
+    """
+    if not anchor_id:
+        return None
+    trips = trip_slices(all_legs)
+    for i, trip in enumerate(trips):
+        if any(l.id == anchor_id for l in trip):
+            keep = list(trip)
+            if i + 1 < len(trips):
+                keep.extend(trips[i + 1])
+            return {l.id for l in keep}
+    return None
+
+
 def _route_nm(leg) -> Optional[int]:
     """Great-circle distance between the two airports, whole nautical miles.
 
@@ -311,7 +379,8 @@ def _block_time(leg) -> Optional[str]:
 
 
 def leg_view(leg: Optional[FlightLeg], now: datetime, time_format: str = "24",
-             tag_lookup: Optional[dict] = None) -> Optional[dict]:
+             tag_lookup: Optional[dict] = None,
+             times_by_leg: Optional[dict] = None) -> Optional[dict]:
     if not leg:
         return None
     # Tags come from the row the poller wrote, never from the clock. The
@@ -340,6 +409,15 @@ def leg_view(leg: Optional[FlightLeg], now: datetime, time_format: str = "24",
         if cancelled or status_tag == tags.STATUS_CANCELLED:
             phase_tag = None
     oi, di = leg.origin_info, leg.dest_info
+    dep_line = arr_line = None
+    if times_by_leg is not None:
+        cancelled_f = closed_f = False
+        if tag_lookup is not None:
+            _s, _p, cancelled_f, closed_f = tag_lookup.get(
+                leg.id, (None, None, False, False))
+        dep_line, arr_line = flight_view.strip_lines(
+            leg, times_by_leg.get(leg.id), phase_tag, cancelled_f, closed_f,
+            time_format)
     return {
         "id": leg.id,
         "callsign": leg.callsign,
@@ -375,6 +453,12 @@ def leg_view(leg: Optional[FlightLeg], now: datetime, time_format: str = "24",
         "dest_lon": di.lon if di else None,
         "origin_city": oi.city if oi else leg.origin,
         "dest_city": di.city if di else leg.destination,
+        # The strip's two times, WITH state, so a list row and the card
+        # above it cannot disagree about whether a flight is late. Absent
+        # unless the caller supplied a bulk time index — the calendar and
+        # the import pages do not need them and should not pay for them.
+        "dep_line": dep_line,
+        "arr_line": arr_line,
         # The airport's own NAME, for the expanded view's per-airport
         # blocks. Not a duplicate of the city: the strip above already
         # says "Dallas-Fort Worth to Oklahoma City", and what a person
@@ -514,7 +598,8 @@ def overnight_index(all_legs: list) -> dict:
 
 def group_legs_by_day(legs: list, day_numbers: dict, now: datetime, time_format: str = "24",
                       tags_by_leg: Optional[dict] = None,
-                      overnights: Optional[dict] = None) -> list:
+                      overnights: Optional[dict] = None,
+                      times_by_leg: Optional[dict] = None) -> list:
     """Groups legs by calendar date, labeled 'Day N - March 27' where N
     resets to 1 at each trip boundary (a blank line in the pasted FFDO —
     see parser.py). Trip boundaries are explicit and pilot-controlled, not
@@ -537,7 +622,8 @@ def group_legs_by_day(legs: list, day_numbers: dict, now: datetime, time_format:
         date_label = bucket["date"].strftime("%B %d").replace(" 0", " ")
         groups.append({
             "date_label": f"Day {trip_day_num} - {date_label}",
-            "legs": [leg_view(l, now, time_format, tags_by_leg) for l in bucket["legs"]],
+            "legs": [leg_view(l, now, time_format, tags_by_leg, times_by_leg)
+                     for l in bucket["legs"]],
             "overnight": overnights.get(bucket["date"]),
             "trip_start": bucket["trip_start"],
         })
@@ -920,7 +1006,8 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool,
 
 
 def build_flight_list(info, day_numbers: dict, now: datetime, time_format: str,
-                      tags_by_leg, overnights: dict) -> list:
+                      tags_by_leg, overnights: dict,
+                      times_by_leg: Optional[dict] = None) -> list:
     """Past, current and upcoming as ONE chronological list of day groups.
 
     Previously the page built past and upcoming through two separate calls
@@ -945,8 +1032,22 @@ def build_flight_list(info, day_numbers: dict, now: datetime, time_format: str,
     past_ids = {l.id for l in info.past}
     current_id = info.current.id if info.current else None
 
+    # SCOPED TO THIS TRIP AND THE NEXT (1.11.0). The anchor is the live leg
+    # if there is one; between legs, and between trips, it is the next leg
+    # the pilot flies — which is also what the card falls back to, so the
+    # card and the list are always talking about the same trip.
+    #
+    # Past legs of the CURRENT trip stay: "he has done three of today's
+    # four" is the question this page exists to answer. Past legs of older
+    # trips leave entirely; they are the calendar's job.
+    anchor = info.current or (info.upcoming[0] if info.upcoming else None) \
+        or (info.past[-1] if info.past else None)
+    window = tracker_window(info.all_legs, anchor.id if anchor else None)
+    if window is not None:
+        ordered = [l for l in ordered if l.id in window]
+
     groups = group_legs_by_day(ordered, day_numbers, now, time_format,
-                               tags_by_leg, overnights)
+                               tags_by_leg, overnights, times_by_leg)
     for group in groups:
         for row in group["legs"]:
             row["is_past"] = row["id"] in past_ids
@@ -998,6 +1099,7 @@ async def viewer(request: Request, leg: Optional[str] = None):
 
     selected_leg, is_selected_live = resolve_selected_leg(info, leg)
     tags_by_leg = tag_index(user_id)
+    times_by_leg = time_index(user_id)
     selected = leg_view(selected_leg, now, tf, tags_by_leg)
     live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, settings.poll_seconds, tf)
     if selected:
@@ -1022,8 +1124,11 @@ async def viewer(request: Request, leg: Optional[str] = None):
         # return to it.
         "current_leg_id": info.current.id if info.current else None,
         "flight_groups": build_flight_list(info, day_numbers, now, tf,
-                                           tags_by_leg, overnights),
-        "past_count": len(info.past),
+                                           tags_by_leg, overnights,
+                                           times_by_leg),
+        # past_count is gone with the Show-past-flights button (1.11.0).
+        # The tracker no longer holds every past leg to be revealed; it
+        # holds this trip and the next, and every row in it is visible.
         "settings": settings_dict,
         "poll_ms": max(10, settings.poll_seconds) * 1000,
         "is_pilot": pilot is not None,
