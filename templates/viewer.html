@@ -233,11 +233,7 @@
       text-align: right; flex: 0 0 auto;
       display: flex; flex-direction: column; align-items: flex-end; gap: 0.3rem;
     }
-    .row-caret {
-      color: var(--muted); font-size: 1.25rem; line-height: 1;
-      transition: transform 0.15s ease; display: inline-block;
-    }
-    .leg-head[aria-expanded="true"] .row-caret { transform: rotate(180deg); }
+    /* .row-caret removed (1.14.1) with the dropdown it opened. */
 
     /* The live flight, shown IN the list as well as on the card, so the
        scroll has a "you are here". */
@@ -248,10 +244,9 @@
       margin-left: -0.75rem; padding-left: 0.72rem;
       background: rgba(56,189,248,0.06); border-radius: 0 8px 8px 0;
     }
-    .live-dot {
-      display: inline-block; width: 7px; height: 7px; border-radius: 50%;
-      background: var(--accent); margin-left: 0.4rem; vertical-align: middle;
-    }
+    /* .live-dot removed (1.14.1): the blue edge down the left of the row
+       already says which flight is live, and two marks for one fact is one
+       too many. */
 
     /* Same slide as the big card's detail panel, same reasoning: the outer
        element holds nothing but overflow and an animated height, so a height
@@ -654,27 +649,20 @@
       border-radius: 18px 18px 0 0;
       box-shadow: 0 -8px 28px rgba(0,0,0,0.28);
       display: flex; flex-direction: column;
-      transition: height 280ms cubic-bezier(0.4, 0, 0.2, 1);
       /* Above the tab pills, which stay reachable below it. */
       padding-bottom: calc(46px + env(safe-area-inset-bottom, 0px));
     }
-    .sheet.open { height: var(--sheet-full); }
-    .sheet.dragging { transition: none; }
-    @media (prefers-reduced-motion: reduce) { .sheet { transition: none; } }
     /* The grab area. Generous, because it is the one control here and a
        12px bar is not a touch target. */
+    /* A HEADER, not a handle (1.14.1). The sheet no longer moves, so the
+       grab bar was advertising a gesture that does nothing. */
     .sheet-grip {
-      flex-shrink: 0; padding: 0.55rem 0 0.45rem;
-      display: flex; flex-direction: column; align-items: center; gap: 0.3rem;
-      cursor: grab; touch-action: none;
-    }
-    .sheet-grip:active { cursor: grabbing; }
-    .sheet-grip-bar {
-      width: 38px; height: 4px; border-radius: 999px; background: var(--border);
+      flex-shrink: 0; padding: 0.9rem 0.9rem 0.5rem;
+      display: flex; align-items: center;
     }
     .sheet-title {
-      font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em;
-      text-transform: uppercase; color: var(--muted);
+      font-size: 1.35rem; font-weight: 800; letter-spacing: -0.01em;
+      color: var(--text);
     }
     /* The ONLY scrolling region on this page. `overscroll-behavior:
        contain` stops a flick at the end of the list turning into a pull on
@@ -802,7 +790,6 @@
            this row out of the way when the panel opened; the panel IS the
            view now, so the row simply does not exist and endsH, foldEnds
            and measureEnds went with it. #}
-        </div>
       </div>
 
       {# The fill position when there is no live fix: an arrived leg is at the
@@ -987,11 +974,8 @@
   </div>
 
   <div class="sheet" id="sheet">
-    <div class="sheet-grip" id="sheet-grip" role="button" tabindex="0"
-         aria-expanded="false" aria-controls="sheet-body"
-         aria-label="Show more flights">
-      <span class="sheet-grip-bar" aria-hidden="true"></span>
-      <span class="sheet-title" id="sheet-title">My flights</span>
+    <div class="sheet-grip" id="sheet-grip">
+      <span class="sheet-title" id="sheet-title">Flights</span>
     </div>
     <div class="sheet-body" id="sheet-body">
   <div class="expand-wrap" id="expand-wrap">
@@ -1022,8 +1006,7 @@
       <div class="day-label">{{ group.date_label }}</div>
       {% for leg in group.legs %}
       <div class="upcoming-item {% if leg.is_past %}is-past{% endif %} {% if leg.is_current %}live-row{% endif %}">
-        <div class="list-item leg-head" data-detail-for="{{ leg.id }}" role="button" tabindex="0"
-             aria-expanded="false" aria-controls="rd-{{ leg.id }}">
+        <div class="list-item leg-head" data-detail-for="{{ leg.id }}" role="button" tabindex="0">
           <div class="leg-head-main">
             {# THE SHARED STRIP, medium size. Same component as the card
                above and the calendar below — see invariant 25. This row
@@ -1031,8 +1014,19 @@
                zone placement and NO delay state at all, so a flight could
                read plain here and red on the card in the same breath. #}
             <div class="fstrip fstrip--md {% if leg.is_past %}is-past{% endif %}">
+              {# Status sits NEXT TO the flight number (1.14.1), where the
+                 eye already is, rather than out on its own. The live dot
+                 went with it: the blue edge down the left of the row
+                 already says which flight is happening, and two marks for
+                 one fact is one too many. #}
               <div class="fstrip-head">
-                <div class="fstrip-num">{{ leg.callsign }}{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}{% if leg.is_current %}<span class="live-dot" title="Current flight"></span>{% endif %}</div>
+                <div class="fstrip-num">{{ leg.callsign }}{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
+                {% if leg.status_tag or leg.phase_tag %}
+                <span class="pills fstrip-tags">
+                  {% if leg.status_tag %}<span class="status {{ leg.status_tag|lower|replace(' ', '-') }}">{{ leg.status_tag }}</span>{% endif %}
+                  {% if leg.phase_tag %}<span class="status phase {{ 'arrived' if leg.phase_tag == 'Arrived' else '' }}">{{ leg.phase_tag }}</span>{% endif %}
+                </span>
+                {% endif %}
               </div>
               <div class="fstrip-cities">{{ leg.origin_city }} <span class="to-word">to</span> {{ leg.dest_city }}</div>
               <div class="fstrip-ends">
@@ -1049,26 +1043,13 @@
               </div>
             </div>
           </div>
-          <div class="leg-head-tags">
-            {% if leg.status_tag %}<span class="status {{ leg.status_tag|lower|replace(' ', '-') }}">{{ leg.status_tag }}</span>{% endif %}{% if leg.phase_tag %}<span class="status phase {{ 'arrived' if leg.phase_tag == 'Arrived' else '' }}">{{ leg.phase_tag }}</span>{% endif %}
-            <span class="row-caret" aria-hidden="true">&#9662;</span>
-          </div>
         </div>
-        {# Filled on first open from /api/leg/{id}. Empty fields are never
-           rendered, so an unflown leg shows only what actually exists
-           instead of a column of blanks. #}
-        <div class="row-detail" id="rd-{{ leg.id }}" data-loaded="0" hidden>
-          <div class="row-detail-body"><div class="rd-skeleton" aria-label="Loading flight detail"><span></span><span></span><span></span></div></div>
-          <div class="rd-links">
-            <a href="#" data-show-on-map="{{ leg.id }}">Show on map</a>
-            {% if settings.show_flightaware %}
-            <a data-fa-link href="{{ leg.links.flightaware }}" target="_blank" rel="noopener">FlightAware</a>
-            {% endif %}
-            {% if settings.show_fr24 %}
-            <a data-fr24-link href="{{ leg.links.fr24 }}" target="_blank" rel="noopener">FR24</a>
-            {% endif %}
-          </div>
-        </div>
+        {# The row DROPDOWN is gone (1.14.1). It opened a second, smaller
+           detail view inside the row — its own renderer, its own
+           label/value list, its own "Show on map" link — and tapping the
+           row now opens the full panel, which says all of it better. Two
+           detail views for one flight is the thing this rebuild set out to
+           stop. #}
       </div>
       {% endfor %}
     </div>
@@ -1237,7 +1218,6 @@
         sheet.addEventListener('click', function(e) {
           var row = e.target.closest ? e.target.closest('[data-detail-for]') : null;
           if (!row) return;
-          if (e.target.closest('[data-show-on-map]')) return;
 
           // SELECT, THEN OPEN. 1.13.0 opened the panel without selecting,
           // so tapping any row showed whichever leg was already selected —
@@ -1442,7 +1422,6 @@
       document.addEventListener('click', function(e) {
         if (!e.target.closest) return;
         // Handled by the map block, which pans to the flight instead.
-        if (e.target.closest('[data-show-on-map]')) return;
         // Let the FlightAware / FR24 links inside an open panel behave as
         // links rather than collapsing the row out from under the tap.
         if (e.target.closest('.rd-links')) return;
@@ -1477,79 +1456,16 @@
       // replacement means one broken file costs the whole schedule.
       document.body.classList.add('has-sheet');
 
-      let open = false;
-
-      function setOpen(next, instant) {
-        open = next;
-        if (instant) sheet.classList.add('dragging');
-        sheet.classList.toggle('open', open);
-        grip.setAttribute('aria-expanded', open ? 'true' : 'false');
-        grip.setAttribute('aria-label', open ? 'Show less' : 'Show more flights');
-        if (window._ptHudForSheet) window._ptHudForSheet(open);
-        if (instant) { void sheet.offsetHeight; sheet.classList.remove('dragging'); }
-        // The card is parked against the sheet's TOP edge, which has just
-        // moved. Re-run once it has finished moving, not now — mid-transition
-        // the sheet measures somewhere between the two heights.
-        window.setTimeout(function() {
-          if (window._ptLayoutHero) window._ptLayoutHero();
-        }, instant ? 0 : 300);
-      }
-
-      grip.addEventListener('click', function() { setOpen(!open); });
-      grip.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open); }
-      });
-
-      // DRAG. Tracked on the grip only — dragging inside the list is
-      // scrolling the list, which is a different gesture and must not be
-      // stolen. Committing on distance rather than on velocity keeps a slow
-      // deliberate pull working the same as a flick.
-      let startY = null, startH = 0;
-      grip.addEventListener('touchstart', function(e) {
-        if (!e.touches || e.touches.length !== 1) return;
-        startY = e.touches[0].clientY;
-        startH = sheet.getBoundingClientRect().height;
-        sheet.classList.add('dragging');
-      }, { passive: true });
-
-      // A DRAG HAS TO BE MEANT. Movement below the threshold is a tap that
-      // wobbled, and treating it as a drag is what made the sheet feel
-      // grabby: every tap on the handle nudged the height by a few pixels
-      // and then snapped somewhere on release. Nothing moves until the
-      // finger has travelled far enough that it cannot be a tap.
-      const DRAG_MIN = 12;
-      let dragging = false;
-      grip.addEventListener('touchmove', function(e) {
-        if (startY === null) return;
-        const dy = startY - e.touches[0].clientY;
-        if (!dragging) {
-          if (Math.abs(dy) < DRAG_MIN) return;
-          dragging = true;
-        }
-        const vh = window.innerHeight;
-        const h = Math.min(vh * 0.9, Math.max(vh * 0.16, startH + dy));
-        sheet.style.height = h + 'px';
-      }, { passive: true });
-
-      function endDrag() {
-        if (startY === null) return;
-        const h = sheet.getBoundingClientRect().height;
-        const moved = dragging;
-        startY = null;
-        dragging = false;
-        // Never travelled far enough to be a drag: leave it to the click
-        // handler, which toggles cleanly. Deciding here as well would
-        // toggle twice and land back where it started.
-        if (!moved) { sheet.style.height = ''; sheet.classList.remove('dragging'); return; }
-        // Inline height must go before the class decides it, or it wins
-        // over both --sheet-peek and --sheet-full and the sheet freezes
-        // wherever the finger left it.
-        sheet.style.height = '';
-        sheet.classList.remove('dragging');
-        setOpen(h > window.innerHeight * 0.5);
-      }
-      grip.addEventListener('touchend', endDrag);
-      grip.addEventListener('touchcancel', endDrag);
+      // The sheet is FIXED IN PLACE (1.14.1). The open/close toggle, the drag with its
+      // threshold, the touch handlers and the click toggle are all gone:
+      // two snap points plus a drag gave three ways to end up somewhere
+      // you did not mean, and the list scrolls inside the sheet anyway.
+      // The height comes from CSS and nothing changes it.
+      //
+      // _ptHudForSheet is called with a constant now rather than deleted,
+      // because the map block owns it and this release is not the place to
+      // chase it through two files.
+      if (window._ptHudForSheet) window._ptHudForSheet(false);
 
       // WHERE THE LIST STARTS: on the current flight.
       //
@@ -1582,7 +1498,7 @@
       window._ptSheetToCurrent = startAtCurrent;
       // "Show on map" needs to get the sheet out of the way. Exposed rather
       // than duplicated so there is one place that knows how to close it.
-      window._ptSheetClose = function() { if (open) setOpen(false); };
+      window._ptSheetClose = function() {};
     })();
 
     // ---- Scroll reveal. At rest the map is the background of the app,
@@ -1792,28 +1708,12 @@
       // touches map view (pan/zoom) when doFit is true — poll-driven
       // refreshes always pass false so a manual pan/zoom is never undone
       // out from under someone.
-      // THE WHOLE TRIP, dashed, underneath everything else.
-      //
-      // Drawn ONCE and never touched again: it is the shape of the trip,
-      // which does not change as an aeroplane moves. Keeping it out of
-      // renderMap's clear-and-redraw cycle means the poller cannot flicker
-      // it, and means the leg being tracked always paints on top of it.
-      //
-      // Deliberately faint and deliberately straight. These are not routes
-      // flown or planned — they are pairs of airports joined with a line,
-      // and drawing them any more confidently than that would be claiming
-      // something the app does not know. Invariant 9's spirit: the strong
-      // solid line is reserved for a track that actually happened.
-      var tripRoutes = {{ trip_routes|tojson }};
-      (function() {
-        if (!tripRoutes || !tripRoutes.length) return;
-        tripRoutes.forEach(function(r) {
-          L.polyline([[r[0], r[1]], [r[2], r[3]]], {
-            color: '#94a3b8', weight: 1.5, opacity: 0.45,
-            dashArray: '3 7', interactive: false
-          }).addTo(map);
-        });
-      })();
+      // The whole-trip dashed outline (1.14.0) is removed. With a tap now
+      // selecting a leg and redrawing the map for it, the outline meant
+      // every other leg stayed drawn underneath the one being looked at,
+      // and the answer to "where is he" was competing with four faint
+      // lines that were not answers to anything. One leg on the map: the
+      // one on screen. Owner's call.
 
       function renderMap(cur, live, doFit) {
         [originMarker, destMarker, remainingLine, flownLine, planeMarker].forEach(function(l) {
@@ -2113,7 +2013,6 @@
         if (!head) return;
         var tags = head.querySelector('.leg-head-tags');
         if (!tags) return;
-        var caret = tags.querySelector('.row-caret');
         var html = '';
         if (data.status_tag) {
           html += '<span class="status ' +
@@ -2126,7 +2025,6 @@
                   data.phase_tag + '</span>';
         }
         tags.innerHTML = html;
-        if (caret) tags.appendChild(caret);
       }
 
       // One "12:39 CDT / 12 min late - was 12:27 CDT" cell. Shared by the
@@ -2489,32 +2387,11 @@
       tickRelativeTimes();
       window.addEventListener('pt:detail-rendered', tickRelativeTimes);
 
-      // SHOW ON MAP. These nine lines sat after the closing html tag,
-      // outside every
-      // script tag on the page — since at least 1.8.0, so the link in
-      // every row's dropdown has never once worked. The browser parses
-      // content after the closing html tag as text, not code, which
-      // is why it failed silently rather than erroring: there was
-      // nothing there to error.
-      //
-      // tests_ui_fixes asserted this feature existed and passed throughout,
-      // because it grepped the template for the text. A string being
-      // present in a file is not the same as it running, and for anything
-      // whose position in the document decides whether it executes, only
-      // the position is worth asserting. See the added check there.
-      document.addEventListener('click', function(e) {
-        const onMap = e.target.closest ? e.target.closest('[data-show-on-map]') : null;
-        if (!onMap) return;
-        e.preventDefault();
-        e.stopPropagation();
-        selectLeg(onMap.getAttribute('data-show-on-map'));
-        // Send them back to the map they just asked to look at. Used to be
-        // window.scrollTo(0), which did nothing once the page stopped
-        // scrolling. Now it also has to get the DETAIL PANEL out of the
-        // way, which covers the map completely.
-        if (window._ptCloseDetail) window._ptCloseDetail();
-        if (window._ptSheetClose) window._ptSheetClose();
-      });
+      // The SHOW ON MAP handler is gone (1.14.1) along with the link it
+      // served. Tapping a row selects the leg and redraws the map for it,
+      // so a separate control for the same thing was a second way to do
+      // one thing — and it was the one that spent five releases dead
+      // outside every script block (1.12.0).
 
       setInterval(refreshLiveData, {{ poll_ms }});
     })();

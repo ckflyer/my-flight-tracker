@@ -1,7 +1,7 @@
 # MyPilot
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.14.0.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.14.1.
 
 The version above was stale at 1.4.0 for five releases. `app/version.py`
 is the only authority; this line is a convenience and nothing reads it.
@@ -48,7 +48,7 @@ seriously.
 
 ## STATE
 
-**v1.14.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+**v1.14.1.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
 owner plus several FOs, who fly the same legs — hence shared flight rows
 (v5.1, retained).
 
@@ -69,7 +69,7 @@ page split (1.6.0–1.7.0). All three came out of the same problem — the app
 could not be OPERATED without SSH, and bugs could not be reproduced without
 flying a trip.
 
-Tests: **1,151**, eleven suites, all passing.
+Tests: **1,140**, eleven suites, all passing.
 
 **Current work: the UI chunks (1.9.0 onward).** Five agreed steps, owner's
 brief, reworking the tracker and calendar around one flight-strip
@@ -99,7 +99,7 @@ the tracker entirely — they belong to step 4's calendar.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, placeholder filter |
-| `tests_ui_fixes.py` | 538 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
+| `tests_ui_fixes.py` | 527 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
 | `tests_app_shell.py` | 167 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
 | `tests_timezones.py` | 68 | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
 | `tests_closeout_sweep.py` | 42 | the abandonment cliff, the on-ground handover, the late gate-in chase and its cap |
@@ -883,6 +883,12 @@ Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
     executes — inside a script block, inside the right closure, before the
     thing it calls — assert the position. (1.12.0)
 
+31. **Check div balance after removing markup.** A stray `</div>` is not a
+    syntax error, it is a different document: it renders, returns 200 and
+    passes every suite while nesting content somewhere nobody intended.
+    1.13.0 shipped one and it cost two visible bugs. The check is three
+    lines and belongs after any edit that deletes elements. (1.14.1)
+
 ## MODULE MAP
 
 ```
@@ -1626,13 +1632,13 @@ python tests_poller_end_to_end.py   #  47
 python tests_past_leg_detail.py     #  19
 python tests_budget_limit.py        #  17
 python tests_carrier_cap.py         #  13
-python tests_ui_fixes.py            # 538
+python tests_ui_fixes.py            # 527
 python tests_app_shell.py           # 167
 python tests_timezones.py           #  68
 python tests_closeout_sweep.py      #  42
 python tests_import_merge.py        #  39
 python tests_test_mode.py           # 133
-```                                  # 1151
+```                                  # 1140
 
 Each uses its own scratch DB via `PT_DB_FILE`. Read
 `tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
@@ -1698,6 +1704,55 @@ DECIDED, so it does not get re-litigated:
 
 
 ## VERSION HISTORY
+
+### 1.14.1 — first real device pass on the rebuild
+
+Nine issues from the owner's first proper look at 1.14.0. One of them was
+the cause of two others.
+
+**BUG: a stray `</div>` broke the panel.** Removing the times row from the
+panel header in 1.13.0 took out ONE opening div and left BOTH closers, so
+`#collapsed-card-header` closed early and most of the panel's content ended
+up outside it. That is why the detail panel opened only a couple of inches
+and why two orphaned "CT" zone labels floated over the map. The template
+still rendered, still returned 200, and every suite passed — an unbalanced
+div is not a syntax error, it is a different document.
+
+A div-balance check existed and was run against the SHEET edit in 1.12.0.
+It was not run against this one. It is cheap and it belongs after any edit
+that removes markup.
+
+**The sheet is fixed in place.** Two snap points plus a drag was three ways
+to end up somewhere you did not mean. No drag, no toggle, no second
+height; the list scrolls inside it. The grab bar became a real "Flights"
+header, because a handle advertising a gesture that does nothing is worse
+than no handle.
+
+**The row dropdown and "Show on map" are both gone.** The dropdown opened
+a second, smaller detail view inside the row — its own renderer, its own
+label/value list, its own map link — while a row tap now opens the full
+panel. Two detail views for one flight is the thing this rebuild set out
+to stop. `renderLegDetail`, `.row-detail`, `.rd-skeleton` and `.row-caret`
+go with it.
+
+**The whole-trip outline is removed, one release after adding it.**
+Recorded rather than quietly reverted: it was reasonable when nothing else
+drew a leg, and wrong the moment tapping a row redrew the map — every
+other leg stayed underneath the one being looked at, so "where is he"
+competed with four faint lines that answered nothing. Owner's call.
+
+**Strip layout.** The two ends sat at opposite edges of the row to line up
+with a progress track that ran between them; that track left with the hero
+card, so the split was leaving a lake of white space and putting the
+arrival time as far from the departure as the screen allowed. They read as
+one phrase now. Status pills moved beside the flight number where the eye
+already is, and the live dot went: the blue edge down the row already says
+which flight is happening.
+
+Tests: 1,151 → 1,140, all deletions.
+
+STILL OPEN: the expanded view has not been seen yet — it was unreachable
+until this release — so pass 3 waits on a look at it.
 
 ### 1.14.0 — tapping a flight means that flight
 

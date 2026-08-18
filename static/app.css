@@ -259,10 +259,14 @@
   display: inline-flex; align-items: center; gap: 0.3rem;
   flex: 0 0 auto;
 }
-/* The arrival end is pushed to the right so the two ends sit at opposite
-   edges, which is what makes the progress track below them line up with
-   the airports it runs between. */
-.fstrip-end.arr { margin-left: auto; }
+/* The two ends sit TOGETHER on the left (1.14.1). They used to be pushed
+   to opposite edges to line up with the progress track that ran between
+   them — and that track went with the hero card, so the only thing the
+   split still did was leave a lake of white space in the middle of every
+   row and put the arrival time as far from the departure time as the
+   screen allowed. Reading them as one phrase, "DFW 17:00 to VPS 19:03",
+   is the whole point of the row. */
+.fstrip-ends { gap: 0.25rem 1.1rem; }
 .fstrip-disc {
   display: inline-flex; align-items: center; justify-content: center;
   width: var(--fstrip-disc); height: var(--fstrip-disc);

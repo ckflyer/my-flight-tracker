@@ -732,15 +732,10 @@ def test_flight_sheet():
 
     # Dragging must be taken from the GRIP only. Listening on the sheet
     # would steal every scroll gesture inside the list.
-    for ev in ("touchstart", "touchmove", "touchend"):
-        check(f"the drag listens on the grip: {ev}",
-              f"grip.addEventListener('{ev}'" in html)
-    check("no drag handler is bound to the sheet body",
-          "body.addEventListener('touchmove'" not in html)
-    # An inline height left over from a drag outranks both CSS heights and
-    # would freeze the sheet wherever the finger let go.
-    check("the drag's inline height is cleared before the class decides",
-          "sheet.style.height = '';" in html)
+    check("no drag handlers survive on the grip",
+          "grip.addEventListener('touchstart'" not in html)
+    check("nothing sets an inline height on the sheet",
+          "sheet.style.height" not in html)
 
     # The scrim is gone entirely, not merely faded.
     code = re.sub(r"^\s*//.*$", "", html, flags=re.M)
@@ -752,35 +747,26 @@ def test_flight_sheet():
           ".scroll-scrim { opacity: 1 !important; }" not in html)
 
 
-def test_show_on_map_action():
-    """Tapping a row still expands in place; the map move is explicit."""
+def test_tapping_a_row_is_the_only_way_in():
+    """Show on map is gone; a row tap does both. (1.14.1)
+
+    It selected a leg and drew it on the map — which is now what tapping
+    the row itself does, on the way to opening the panel. A second control
+    for one action is a second thing to keep in step, and this was the one
+    that spent five releases dead outside every script block (1.12.0).
+    """
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
         html = fh.read()
-    check("each row offers Show on map", "data-show-on-map" in html)
-    check("...wired to selectLeg", "selectLeg(onMap.getAttribute('data-show-on-map'))" in html)
-    check("...and returns you to the map by lowering the sheet",
-          "window._ptSheetClose()" in html)
-    # THE CHECK THAT WOULD HAVE CAUGHT IT. This handler sat after the
-    # closing html tag — outside every script block — since at least
-    # 1.8.0, so it never ran once, and the assertions above passed the
-    # whole time because they grepped the template for their own text.
-    # A string being present in a file is not the same as it executing.
-    # For anything whose POSITION decides whether it runs, assert the
-    # position.
-    tail = html[html.rindex("</script>"):]
-    check("no code sits outside a script block",
-          "addEventListener" not in tail and "function" not in tail, tail[:120])
-    check("...and nothing at all follows the closing html tag",
-          html[html.rindex("</html>") + 7:].strip() == "")
-    # selectLeg is declared inside the polling IIFE and is not on window,
-    # so a handler calling it has to live inside that same IIFE.
-    check("the handler can actually see selectLeg",
-          html.index("function selectLeg(legId, opts)") < html.index("// SHOW ON MAP")
-          < html.index("    })();", html.index("// SHOW ON MAP")))
-    check("a bare row tap still only expands",
-          "It deliberately\n      // does NOT move the card or the map" in html
-          or "does NOT move the card" in html)
+    code = re.sub(r"^\s*//.*$", "", html, flags=re.M)
+    code = re.sub(r"\{#.*?#\}", "", code, flags=re.S)
+    check("the link is gone", "data-show-on-map" not in code)
+    check("the row dropdown is gone", 'class="row-detail"' not in code)
+    check("...and the caret that opened it",
+          "row-caret" not in re.sub(r"/\*.*?\*/", "", code, flags=re.S))
+    check("a row tap still selects the leg", "window._ptSelectLeg(id)" in html)
+    check("...and there is one selection path",
+          html.count("function selectLeg(legId, opts)") == 1)
 
 
 def test_settings_budget_saves():
@@ -893,9 +879,11 @@ def test_detail_panel_replaces_the_hero_card():
           html.count('id="detail-panel"') == 1)
 
     # A drag has to be meant, or every tap on the handle nudges the sheet.
-    check("the sheet drag has a threshold", "DRAG_MIN = 12" in html)
-    check("...and a sub-threshold move is left to the click handler",
-          "if (!moved) {" in html)
+    # The drag is gone (1.14.1): two snap points plus a drag was three
+    # ways to end up somewhere you did not mean. The sheet is fixed and
+    # the list scrolls inside it.
+    check("the sheet does not move", "sheet.classList.toggle('open'" not in html)
+    check("...and has no second height to snap to", ".sheet.open {" not in html)
 
 
 def test_detail_panels_slide_rather_than_snap():
@@ -956,10 +944,12 @@ def test_schedule_works_without_the_map():
         check("%s is defined before the Leaflet bail-out" % fn.split('(')[0].split()[-1],
               html.index(fn) < bail,
               "found at %d, bail-out at %d" % (html.index(fn), bail))
-    check("the row-detail click handler is outside the map block too",
-          html.index(".leg-head[data-detail-for]") < bail)
-    check("...and the map block still owns show-on-map",
-          html.index("data-show-on-map") > 0 and "selectLeg(" in html)
+    # The row-detail dropdown and Show-on-map both went in 1.14.1; a row
+    # tap now opens the shared panel. The LESSON stands and moves to the
+    # handler that replaced them: it must not sit inside the map block, or
+    # a missing Leaflet takes the schedule's only interaction with it.
+    check("the row tap handler is outside the map block",
+          html.index("sheet.addEventListener('click'") < bail)
     check("the shared time formatter is published for the map block",
           "window._ptTimeLineHTML" in html)
 
@@ -1735,37 +1725,23 @@ def test_row_tap_selects_the_leg_it_names():
           "renderMap(currentData, liveData, true)" in html)
 
 
-def test_whole_trip_is_outlined_on_the_map():
-    """The shape of the trip, behind the leg being tracked. (1.14.0)
+def test_only_the_selected_leg_is_drawn():
+    """The whole-trip outline is removed. (1.14.1, owner's call)
 
-    Drawn ONCE, outside renderMap's clear-and-redraw cycle, because a trip
-    does not change shape as an aeroplane moves along it — and because
-    anything inside that cycle gets torn down and rebuilt on every poll.
+    Added in 1.14.0, one release earlier. With a row tap now selecting a
+    leg and redrawing the map for it, the outline meant every OTHER leg
+    stayed drawn underneath the one being looked at — so the answer to
+    "where is he" competed with four faint lines that answered nothing.
+
+    Recorded rather than quietly reverted: it was a reasonable idea that
+    was wrong once tapping worked, and the pairing is the lesson.
     """
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
         html = fh.read()
-
-    check("the routes reach the page", "var tripRoutes = {{ trip_routes|tojson }};" in html)
-    check("drawn outside the redraw cycle",
-          html.index("var tripRoutes") < html.index("function renderMap"))
-    # FAINT AND STRAIGHT ON PURPOSE. These are pairs of airports joined by
-    # a line, not routes flown or planned; the solid heavy line stays
-    # reserved for a track that actually happened (invariant 9's spirit).
-    layer = html.split("var tripRoutes", 1)[1].split("function renderMap", 1)[0]
-    check("...dashed, not solid", "dashArray" in layer, layer[:160])
-    check("...faint", "opacity: 0.45" in layer, layer[:160])
-    check("...and untappable, so it cannot steal a tap from a real marker",
-          "interactive: false" in layer, layer[:160])
-
-    # The outline must describe exactly what the tracker lists. Two
-    # separate walks of the roster is how they come to disagree.
-    with open(os.path.join(here, "app", "main.py"), encoding="utf-8") as fh:
-        main = fh.read()
-    check("trip_routes is derived from the built groups",
-          "for g in groups for l in g[\"legs\"]" in main)
-    check("...skipping legs with no coordinates",
-          'l.get("origin_lat") is not None' in main)
+    code = re.sub(r"^\s*//.*$", "", html, flags=re.M)
+    check("no trip outline is drawn", "tripRoutes" not in code)
+    check("the map draws the selected leg", "function renderMap(cur, live, doFit)" in html)
 
 
 def test_map_remeasures():
@@ -1916,7 +1892,7 @@ def main():
     test_session_key_survives_redeploy()
     test_scheduled_time_line_is_marked_as_an_echo()
     test_flight_sheet()
-    test_show_on_map_action()
+    test_tapping_a_row_is_the_only_way_in()
     test_settings_budget_saves()
     test_no_hardcoded_palette_colours()
     test_flight_strip_is_one_component()
@@ -1935,7 +1911,7 @@ def main():
     test_strip_ends_cannot_overlap()
     test_gate_only_no_terminal_or_baggage()
     test_row_tap_selects_the_leg_it_names()
-    test_whole_trip_is_outlined_on_the_map()
+    test_only_the_selected_leg_is_drawn()
     test_map_remeasures()
     test_html_is_never_cached()
     test_overnight()
