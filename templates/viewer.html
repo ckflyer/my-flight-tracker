@@ -354,27 +354,89 @@
       border-radius: 0;
       box-shadow: none;
       padding: 0;
-      margin-bottom: 0.4rem;
+      margin-bottom: 0;
     }
     /* A hairline under the header so the title reads as a header rather
        than as the first thing in the list. */
     .sheet-grip { border-bottom: 1px solid var(--border); }
     /* Rows meet the sheet's edges; the sheet supplies the inset. */
     .sheet-body .list-item { padding-left: 0; padding-right: 0; }
+
+    /* THREE REGISTERS, NOT TWO (1.16.0).
+    
+       The day heading and the overnight label were the same object drawn
+       twice: both 0.75rem, both uppercase, both --muted, both letter-
+       spaced, one directly under the other with a few tenths of a rem
+       between them. So the end of a day printed as
+    
+           DFW 8:50 CT   AEX 10:11 CT
+           OVERNIGHT IN ALEXANDRIA - 12H 30M
+           DAY 2 - AUGUST 22
+    
+       — three lines of small grey capitals in a row, with nothing saying
+       which of them ENDS something and which BEGINS something. That is
+       what "everything runs together between days" is. It was never a
+       spacing problem; it was two different things wearing one costume.
+    
+       The fix is not more rules between them. Hairlines either side of
+       the overnight would add two more lines to a stack that is already
+       too busy, and the owner said as much before it was tried. Instead
+       the two are given jobs you can tell apart at a glance:
+    
+         DAY HEADING   sticky, small caps, sits ON the sheet colour. It
+                       is chrome. It labels what is under it and follows
+                       you down the scroll while that day is on screen,
+                       so a list two screens long never leaves you asking
+                       which day you are looking at.
+         FLIGHT        the loudest thing. Unchanged.
+         OVERNIGHT     an inset band in --rest, sentence case, with a
+                       moon. It is CONTENT — a thing he does between two
+                       flights — so it is drawn as an object in the list
+                       rather than as a label over one.
+    
+       Uppercase is now the day heading's alone, which is what makes it
+       readable as a heading without a rule under it. */
     .day-label {
-      font-size: 0.75rem;
+      position: sticky; top: 0; z-index: 2;
+      /* Full-bleed: cancels the sheet's 0.9rem inset so the sticky
+         background covers rows edge to edge as they pass under it,
+         then puts the inset back as padding. A sticky header with a
+         gutter of clear background either side shows slivers of the row
+         it is meant to be hiding. */
+      margin: 0 -0.9rem;
+      padding: 1.15rem 0.9rem 0.45rem;
+      background: var(--card);
+      font-size: 0.6875rem;
       font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.04em;
+      letter-spacing: 0.09em;
       color: var(--muted);
-      padding-bottom: 0.35rem;
     }
+    /* The first day needs no air above it — the sheet header supplies it. */
+    .day-card--first .day-label { padding-top: 0.35rem; }
+
     .overnight-label {
-      font-size: 0.75rem;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
+      display: flex; align-items: center; gap: 0.5rem;
+      margin: 0.7rem 0 0.1rem;
+      padding: 0.5rem 0.7rem;
+      border-radius: 10px;
+      background: var(--rest);
       color: var(--muted);
-      margin: -0.4rem 0.1rem 1rem;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+    .overnight-icon { flex: 0 0 auto; opacity: 0.7; }
+    .overnight-icon svg { display: block; width: 13px; height: 13px; }
+    .overnight-city { min-width: 0; overflow-wrap: anywhere; }
+    /* Pushed to the far end so the durations of several layovers line up
+       down the list instead of each starting wherever its city name
+       happened to stop. */
+    .overnight-dur {
+      margin-left: auto; flex: 0 0 auto;
+      font-weight: 500; opacity: 0.85;
+      font-variant-numeric: tabular-nums;
     }
     .trip-divider {
       border-top: 2px dashed var(--muted);
@@ -1027,7 +1089,7 @@
     {% if group.trip_start and not loop.first %}
     <div class="trip-divider {% if group.all_past %}is-past{% endif %}"></div>
     {% endif %}
-    <div class="card day-card {% if group.all_past %}is-past{% endif %}">
+    <div class="card day-card {% if loop.first %}day-card--first{% endif %} {% if group.all_past %}is-past{% endif %}">
       <div class="day-label">{{ group.date_label }}</div>
       {% for leg in group.legs %}
       <div class="upcoming-item {% if leg.is_past %}is-past{% endif %} {% if leg.is_current %}live-row{% endif %}">
@@ -1079,7 +1141,21 @@
       {% endfor %}
     </div>
     {% if group.overnight %}
-    <div class="overnight-label {% if group.all_past %}is-past{% endif %}">{% if group.overnight.nights > 1 %}{{ group.overnight.nights }} nights in{% else %}Overnight in{% endif %} {{ group.overnight.city }} &mdash; {{ group.overnight.duration }}</div>
+    {# THE LAYOVER, as an object in the list rather than a label over one
+       (1.16.0). It used to be a single line of small grey capitals sat
+       directly above the next day's heading, which was ALSO a line of
+       small grey capitals — so the end of one day and the start of the
+       next printed as one indistinguishable block. Sentence case and the
+       moon are what separate it from a heading; the band is what makes
+       it read as content. See .overnight-label.
+
+       The duration is its own element so it can sit at the far end and
+       line up with the one on the next layover down. #}
+    <div class="overnight-label {% if group.all_past %}is-past{% endif %}">
+      <span class="overnight-icon">{% include "partials/moon_glyph.html" %}</span>
+      <span class="overnight-city">{% if group.overnight.nights > 1 %}{{ group.overnight.nights }} nights in{% else %}Overnight in{% endif %} {{ group.overnight.city }}</span>
+      <span class="overnight-dur">{{ group.overnight.duration }}</span>
+    </div>
     {% endif %}
     {% endfor %}
   </div>

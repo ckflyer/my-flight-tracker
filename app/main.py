@@ -314,14 +314,19 @@ def trip_slices(all_legs: list) -> list:
 
 
 def tracker_window(all_legs: list, anchor_id: Optional[str]) -> Optional[set]:
-    """Which legs the TRACKER shows: the anchor's trip, and the one after.
+    """Which legs the TRACKER shows: the anchor's trip. ONE trip.
 
-    The tracker answers two questions — where is he now, and when does he
-    go again — and both are answered by this trip and the next one. It
-    used to render the entire 365-day roster and hide most of it behind a
-    button, which is a list that grows without bound pretending to be a
-    list that does not. Everything older lives on the calendar now, which
-    is what the calendar is for.
+    It used to keep the NEXT trip as well, on the reasoning that the page
+    answers two questions — where is he now, and when does he go again.
+    It does not. Appending the next trip put a second "Day 1 - August 28"
+    under the first trip's last overnight, so the list read as one
+    unbroken run of days that silently restarted its numbering, and the
+    only thing separating a leg he is flying tonight from one two weeks
+    out was a dashed line most people never saw. "When does he go again"
+    is a question about a date, and the calendar answers it.
+
+    The handover between trips is a matter of WHICH LEG anchors this
+    window, not of how many trips it holds — see tracker_anchor.
 
     Returning None means "no opinion, show everything" — used when the
     anchor cannot be placed, so a bug here degrades to the old behaviour
@@ -329,14 +334,64 @@ def tracker_window(all_legs: list, anchor_id: Optional[str]) -> Optional[set]:
     """
     if not anchor_id:
         return None
-    trips = trip_slices(all_legs)
-    for i, trip in enumerate(trips):
+    for trip in trip_slices(all_legs):
         if any(l.id == anchor_id for l in trip):
-            keep = list(trip)
-            if i + 1 < len(trips):
-                keep.extend(trips[i + 1])
-            return {l.id for l in keep}
+            return {l.id for l in trip}
     return None
+
+
+# How long a finished trip stays on the tracker before the next one takes
+# it over. TEN HOURS BECAUSE FAR 117 SAYS TEN HOURS: that is the minimum
+# rest between duty periods, so the next trip cannot legally begin inside
+# this window. It is not a guess at how long feels right — it is the
+# shortest gap the regulation permits, which makes it the longest a
+# finished trip can be held without ever hiding the next one.
+TRIP_HANDOVER = timedelta(hours=10)
+
+
+def tracker_anchor(info, now: datetime):
+    """The leg that decides WHICH TRIP the tracker is showing.
+
+    Three rules, in order:
+
+      1. A leg is live -> that leg. Nothing competes with this.
+      2. The last one landed less than TRIP_HANDOVER ago -> that leg.
+         This is the whole reason the rule exists. Without it the trip
+         disappears the instant the final leg goes past, and someone
+         opening the app while he is still in the crew van is shown a
+         trip in three weeks' time with no sign the one that just
+         finished ever happened.
+      3. Otherwise the next leg he flies.
+
+    Rule 2 is NOT capped at the next departure, and the ten hours is not
+    an arbitrary round number. FAR 117 requires a minimum of ten hours'
+    rest between duty periods, so a legal schedule cannot put the next
+    departure inside this window — and the report time before it puts the
+    real gap comfortably wider still. The window is sized to the rule the
+    pilot actually lives under.
+
+    A cap was written and then removed: it could only ever fire on an
+    illegal or mis-imported schedule, and rule 1 already covers that case
+    anyway, since the leg goes live twenty minutes before it pushes and
+    live beats everything.
+
+    Returns None on an empty schedule, which the caller reads as "no
+    opinion" and shows everything.
+    """
+    if info.current:
+        return info.current
+
+    landed = [l for l in info.past if l.arr_datetime_utc()]
+    latest = max(landed, key=lambda l: l.arr_datetime_utc()) if landed else None
+
+    if latest is not None and now < latest.arr_datetime_utc() + TRIP_HANDOVER:
+        return latest
+
+    # Falls through to the newest thing behind us if there is no schedule
+    # ahead, so a roster that has entirely run out still renders its last
+    # trip rather than an empty page.
+    return (info.upcoming[0] if info.upcoming else None) or latest \
+        or (info.past[-1] if info.past else None)
 
 
 def _route_nm(leg) -> Optional[int]:
@@ -961,12 +1016,23 @@ async def logout(request: Request):
 # Tracker (viewer) — pilot or valid share-code session
 # ---------------------------------------------------------------------------
 
-def resolve_selected_leg(info, leg_id: Optional[str]):
-    """Which flight is the map/collapsed card showing? Default: the
-    genuinely active flight if there is one, else the next upcoming one,
-    else the most recent past one. A leg_id (from tapping a flight in the
-    list) overrides that, as long as it's a real leg on this schedule."""
-    selected_leg = info.current or (info.upcoming[0] if info.upcoming else None) or (info.past[-1] if info.past else None)
+def resolve_selected_leg(info, leg_id: Optional[str], now: Optional[datetime] = None):
+    """Which flight is the map/collapsed card showing? Default: whatever
+    tracker_anchor picks, which is the same leg that decides which trip
+    the LIST is scoped to. A leg_id (from tapping a flight in the list)
+    overrides that, as long as it's a real leg on this schedule.
+
+    Sharing the anchor is not a tidiness argument. These two used to
+    compute their default separately from the same three fallbacks, which
+    agreed until the 10-hour handover was added on one side only — at
+    which point the list could be showing the trip that landed an hour
+    ago while the card above it showed the first leg of one a fortnight
+    out, and tapping the card's leg would have selected a flight the list
+    does not contain.
+    """
+    if now is None:
+        now = datetime.now(ZoneInfo("UTC"))
+    selected_leg = tracker_anchor(info, now)
     if leg_id:
         match = next((l for l in info.all_legs if l.id == leg_id), None)
         if match:
@@ -1032,16 +1098,15 @@ def build_flight_list(info, day_numbers: dict, now: datetime, time_format: str,
     past_ids = {l.id for l in info.past}
     current_id = info.current.id if info.current else None
 
-    # SCOPED TO THIS TRIP AND THE NEXT (1.11.0). The anchor is the live leg
-    # if there is one; between legs, and between trips, it is the next leg
-    # the pilot flies — which is also what the card falls back to, so the
-    # card and the list are always talking about the same trip.
+    # SCOPED TO ONE TRIP (1.16.0; was this trip and the next since 1.11.0).
+    # tracker_anchor picks which one, and the card above the list resolves
+    # its default through the same call, so the two cannot end up on
+    # different trips.
     #
     # Past legs of the CURRENT trip stay: "he has done three of today's
     # four" is the question this page exists to answer. Past legs of older
     # trips leave entirely; they are the calendar's job.
-    anchor = info.current or (info.upcoming[0] if info.upcoming else None) \
-        or (info.past[-1] if info.past else None)
+    anchor = tracker_anchor(info, now)
     window = tracker_window(info.all_legs, anchor.id if anchor else None)
     if window is not None:
         ordered = [l for l in ordered if l.id in window]
@@ -1097,7 +1162,7 @@ async def viewer(request: Request, leg: Optional[str] = None):
         if "pt_viewer_show_fr24" in request.cookies:
             show_fr24 = request.cookies.get("pt_viewer_show_fr24") == "1"
 
-    selected_leg, is_selected_live = resolve_selected_leg(info, leg)
+    selected_leg, is_selected_live = resolve_selected_leg(info, leg, now)
     tags_by_leg = tag_index(user_id)
     times_by_leg = time_index(user_id)
     selected = leg_view(selected_leg, now, tf, tags_by_leg)
@@ -2432,7 +2497,7 @@ async def api_selected(request: Request, leg: Optional[str] = None):
         cookie_tf = request.cookies.get("pt_viewer_tf")
         if cookie_tf in ("12", "24"):
             tf = cookie_tf
-    selected_leg, is_selected_live = resolve_selected_leg(info, leg)
+    selected_leg, is_selected_live = resolve_selected_leg(info, leg, now)
     if not selected_leg:
         return {"error": "no flight"}
     live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, settings.poll_seconds, tf)
@@ -2500,7 +2565,7 @@ async def api_leg(request: Request, leg_id: str):
         if cookie_tf in ("12", "24"):
             tf = cookie_tf
 
-    selected_leg, is_selected_live = resolve_selected_leg(info, leg_id)
+    selected_leg, is_selected_live = resolve_selected_leg(info, leg_id, now)
     if not selected_leg:
         return {"error": "no flight"}
 

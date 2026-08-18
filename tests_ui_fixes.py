@@ -1544,12 +1544,15 @@ def test_fold_and_refit_machinery_is_gone():
           "max-height" not in ends, ends)
 
 
-def test_tracker_is_scoped_to_this_trip_and_the_next():
-    """The tracker holds this trip and the next. Nothing else. (1.11.0)
+def test_tracker_is_scoped_to_one_trip():
+    """The tracker holds ONE trip. Nothing else. (1.16.0)
 
     It used to render the entire 365-day roster and hide most of it behind
     a button — a list that grows without bound, pretending to be a list
-    that does not. The scope is the fix; the button was the symptom.
+    that does not. 1.11.0 cut that to this trip and the next; 1.16.0 cuts
+    the next one too, because appending it put a second "Day 1" under the
+    first trip's last overnight and the list read as one unbroken run of
+    days that silently restarted its numbering.
     """
     from app.main import trip_slices, tracker_window
     from app.models import FlightLeg
@@ -1571,12 +1574,12 @@ def test_tracker_is_scoped_to_this_trip_and_the_next():
     check("...at the trip_start markers",
           [len(t) for t in trips] == [2, 3, 1, 1], str([len(t) for t in trips]))
 
-    # Anchored mid-trip: that whole trip, flown legs and all, plus the next.
+    # Anchored mid-trip: that whole trip, flown legs and all. Just it.
     w = tracker_window(roster, "b2")
     check("the anchor's whole trip is kept, including what is already flown",
-          {"b1", "b2", "b3"} <= w, str(w))
-    check("...and the next trip", "c1" in w, str(w))
-    check("...but not the one after that", "d1" not in w, str(w))
+          {"b1", "b2", "b3"} == w, str(w))
+    check("...and NOT the next trip", "c1" not in w, str(w))
+    check("...nor the one after that", "d1" not in w, str(w))
     check("...and nothing older", "a1" not in w and "a2" not in w, str(w))
 
     # The last trip on the roster has no successor and must not blow up.
@@ -1593,6 +1596,104 @@ def test_tracker_is_scoped_to_this_trip_and_the_next():
     # returning an empty set, which would render an empty tracker.
     check("an unplaceable anchor shows everything", tracker_window(roster, "zzz") is None)
     check("no anchor at all shows everything", tracker_window(roster, None) is None)
+
+
+def test_a_finished_trip_holds_the_tracker_for_ten_hours():
+    """Landing does not wipe the trip off the page. (1.16.0)
+
+    With the window cut to one trip, the anchor is the only thing left
+    deciding which trip that is — so the moment the last leg went past,
+    the tracker would have jumped to a trip a fortnight out and someone
+    opening the app while he was still in the crew van would have seen no
+    sign the flight that just landed ever happened.
+    """
+    from app.main import tracker_anchor, tracker_window, TRIP_HANDOVER
+    from app.models import CurrentFlightInfo
+
+    # Trip A finishes 21 Aug. Trip B starts 4 Sep.
+    a1 = leg("a1", date(2026, 8, 21), "AA100", "DFW", "AEX", "08:50", "10:11")
+    a2 = leg("a2", date(2026, 8, 21), "AA200", "AEX", "DFW", "18:00", "19:20")
+    a1.trip_start = True
+    b1 = leg("b1", date(2026, 9, 4), "AA300", "DFW", "OKC", "07:00", "08:00")
+    b1.trip_start = True
+    roster = [a1, a2, b1]
+
+    landed = a2.arr_datetime_utc()
+    info = CurrentFlightInfo(current=None, next=b1, past=[a1, a2],
+                             upcoming=[b1], all_legs=roster)
+
+    # An hour after the last landing: still his trip.
+    soon = landed + timedelta(hours=1)
+    check("an hour after the last landing the finished trip still anchors",
+          tracker_anchor(info, soon).id == "a2")
+    check("...so the list is still that trip",
+          tracker_window(roster, tracker_anchor(info, soon).id) == {"a1", "a2"})
+
+    # Just inside ten hours: still his trip. Just outside: the next one.
+    check("just inside the handover it is still the finished trip",
+          tracker_anchor(info, landed + TRIP_HANDOVER - timedelta(minutes=1)).id == "a2")
+    check("just outside it, the next trip takes over",
+          tracker_anchor(info, landed + TRIP_HANDOVER + timedelta(minutes=1)).id == "b1")
+    check("...and the list follows it there",
+          tracker_window(roster, "b1") == {"b1"})
+
+    # A live leg beats everything.
+    live_info = CurrentFlightInfo(current=a2, next=b1, past=[a1],
+                                  upcoming=[b1], all_legs=roster)
+    check("a live leg outranks the handover", tracker_anchor(live_info, soon).id == "a2")
+
+    # THE TEN HOURS IS FAR 117'S TEN HOURS. Minimum rest between duty
+    # periods, so a legal schedule cannot start the next trip inside the
+    # window. A cap at the next departure was written and removed: it
+    # could only fire on an illegal or mis-imported schedule, and rule 1
+    # already covers that, because the leg goes live twenty minutes
+    # before it pushes.
+    legal = leg("q1", date(2026, 8, 22), "AA400", "DFW", "OKC", "09:00", "10:00")
+    legal.trip_start = True
+    rest_hours = (legal.dep_datetime_utc() - landed).total_seconds() / 3600
+    check("the fixture respects the ten-hour rest minimum", rest_hours >= 10,
+          f"{rest_hours:.1f}h")
+    rest_info = CurrentFlightInfo(current=None, next=legal, past=[a1, a2],
+                                  upcoming=[legal], all_legs=[a1, a2, legal])
+    check("the handover expires before the next legal departure",
+          tracker_anchor(rest_info, landed + TRIP_HANDOVER + timedelta(minutes=1)).id == "q1")
+    check("...and a live leg would win regardless of the clock",
+          tracker_anchor(
+              CurrentFlightInfo(current=legal, next=None, past=[a1, a2],
+                                upcoming=[], all_legs=[a1, a2, legal]),
+              soon).id == "q1")
+
+    # An empty schedule must say "no opinion", not raise.
+    check("an empty schedule anchors nowhere",
+          tracker_anchor(CurrentFlightInfo(), soon) is None)
+
+
+def test_the_card_and_the_list_agree_on_the_trip():
+    """One anchor, two consumers. (1.16.0)
+
+    These used to compute their default from the same three fallbacks
+    separately. That agreed right up until the handover was added on one
+    side, at which point the card could be showing the first leg of a
+    trip the list does not contain.
+    """
+    from app.main import resolve_selected_leg, tracker_anchor
+    from app.models import CurrentFlightInfo
+
+    a1 = leg("a1", date(2026, 8, 21), "AA100", "DFW", "AEX", "08:50", "10:11")
+    a1.trip_start = True
+    b1 = leg("b1", date(2026, 9, 4), "AA300", "DFW", "OKC", "07:00", "08:00")
+    b1.trip_start = True
+    info = CurrentFlightInfo(current=None, next=b1, past=[a1],
+                             upcoming=[b1], all_legs=[a1, b1])
+    just_landed = a1.arr_datetime_utc() + timedelta(hours=2)
+
+    selected, _ = resolve_selected_leg(info, None, just_landed)
+    check("the card defaults to the same leg the list is anchored on",
+          selected.id == tracker_anchor(info, just_landed).id == "a1")
+
+    # An explicit tap still wins, as it always did.
+    tapped, _ = resolve_selected_leg(info, "b1", just_landed)
+    check("...but tapping a flight still selects that flight", tapped.id == "b1")
 
 
 def test_list_rows_carry_delay_state():
@@ -1907,7 +2008,9 @@ def main():
     test_map_cannot_steal_the_scroll()
     test_refit_glides_rather_than_snapping()
     test_fold_and_refit_machinery_is_gone()
-    test_tracker_is_scoped_to_this_trip_and_the_next()
+    test_tracker_is_scoped_to_one_trip()
+    test_a_finished_trip_holds_the_tracker_for_ten_hours()
+    test_the_card_and_the_list_agree_on_the_trip()
     test_list_rows_carry_delay_state()
     test_strip_ends_cannot_overlap()
     test_gate_only_no_terminal_or_baggage()

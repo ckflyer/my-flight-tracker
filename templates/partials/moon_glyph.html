@@ -1,0 +1,13 @@
+{#- The OVERNIGHT glyph. One file, same reasoning as the two arrows: a
+    second layover marker drawn somewhere else would drift, which is how
+    the aeroplane became three silhouettes before 1.7.0.
+
+    A crescent rather than a bed or a moon-and-stars, because it has to
+    read at 13px in --muted against --rest. Anything with interior detail
+    turns into a smudge at that size.
+
+    No width/height attributes — sized by CSS (.overnight-icon svg), so
+    the same file can serve a larger layover marker if the calendar ever
+    grows one. Stroke is lighter than the arrows': those are painted on a
+    saturated disc, this one sits on a quiet band and must not shout. -#}
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a6.6 6.6 0 0 0 10.5 10.5z"></path></svg>

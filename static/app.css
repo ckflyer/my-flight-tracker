@@ -38,6 +38,10 @@
   /* Was only ever declared inside settings.html's light block, so text
      inputs on settings and admin fell back to transparent in dark mode. */
   --input-bg: #131c28;
+  /* The layover band in the tracker list. One step off --card, not a
+     colour of its own: a rest period is a quieter object than a
+     flight, and giving it a hue would make it compete with one. */
+  --rest: #212c3d;
 }
 
 [data-theme="light"] {
@@ -52,6 +56,7 @@
   --border: #e2e8f0;
   --map-border: #cbd5e1;
   --input-bg: #f8fafc;
+  --rest: #f1f5f9;
 }
 
 @media (prefers-color-scheme: light) {
@@ -67,6 +72,7 @@
     --border: #e2e8f0;
     --map-border: #cbd5e1;
     --input-bg: #f8fafc;
+  --rest: #f1f5f9;
   }
 }
 

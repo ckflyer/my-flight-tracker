@@ -1,7 +1,7 @@
 # MyPilot
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.15.0.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.16.0.
 
 The version above was stale at 1.4.0 for five releases. `app/version.py`
 is the only authority; this line is a convenience and nothing reads it.
@@ -48,7 +48,7 @@ seriously.
 
 ## STATE
 
-**v1.15.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+**v1.16.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
 owner plus several FOs, who fly the same legs — hence shared flight rows
 (v5.1, retained).
 
@@ -69,7 +69,7 @@ page split (1.6.0–1.7.0). All three came out of the same problem — the app
 could not be OPERATED without SSH, and bugs could not be reproduced without
 flying a trip.
 
-Tests: **1,140**, eleven suites, all passing.
+Tests: **1,153**, eleven suites, all passing.
 
 **Current work: the UI chunks (1.9.0 onward).** Five agreed steps, owner's
 brief, reworking the tracker and calendar around one flight-strip
@@ -82,7 +82,7 @@ become the history browser before past flights could leave the tracker.
 |---|---|---|
 | 1 | the `.fstrip` component + the current flight card | **DONE 1.9.0** |
 | 2 | the expanded view, on the reference layout | **DONE 1.10.0-1.10.2** |
-| 3 | tracker list: current trip only, no past-flights toggle, positioned on the live leg | **DONE 1.11.0 + 1.12.0** |
+| 3 | tracker list: current trip only, no past-flights toggle, positioned on the live leg | **DONE 1.11.0 + 1.12.0, actually one trip 1.16.0** |
 | 3b | the row dropdown onto `.aptblock` (scroll position solved by the sheet) | after 4 |
 | 4 | calendar: expandable strips with history and a mini map | next |
 | 5 | regression pass across themes, time formats and the odd states | |
@@ -92,6 +92,15 @@ ends, the first leg of the NEXT trip takes the card, so the question "when
 do I leave again" is answered without navigating. And past flights leave
 the tracker entirely — they belong to step 4's calendar.
 
+**AMENDED 1.16.0, both halves.** The next trip does not take the card the
+instant the last leg ends — it takes it `TRIP_HANDOVER` (10h, FAR 117's
+rest minimum) after the final landing, because handing over immediately
+wipes the just-finished trip off the page while the pilot is still in the
+crew van. And the next trip is no longer in the LIST at all, only the
+card's eventual destination: showing it alongside the current one put a
+second "Day 1" under the first trip's last overnight. See WHICH TRIP THE
+TRACKER SHOWS.
+
 | Suite | N | Covers |
 |---|---|---|
 | `tests_flight_row.py` | 68 | write modes, both tag ladders, closure guards, shared crew, retention |
@@ -99,8 +108,8 @@ the tracker entirely — they belong to step 4's calendar.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, placeholder filter |
-| `tests_ui_fixes.py` | 527 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
-| `tests_app_shell.py` | 167 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
+| `tests_ui_fixes.py` | 539 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
+| `tests_app_shell.py` | 168 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
 | `tests_timezones.py` | 68 | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
 | `tests_closeout_sweep.py` | 42 | the abandonment cliff, the on-ground handover, the late gate-in chase and its cap |
 | `tests_import_merge.py` | 39 | additive import, month scoping, future-only reconciliation, the diff, manual add |
@@ -1089,6 +1098,53 @@ properly.
 cannot own the card indefinitely. A candidate that loses is appended to
 `past`, not dropped — it is behind the leg now flying.
 
+## WHICH TRIP THE TRACKER SHOWS
+
+Two functions, and keeping them apart is the point.
+
+`tracker_anchor(info, now)` picks ONE leg. `tracker_window(all_legs,
+anchor_id)` returns the trip that leg belongs to, and nothing else. The
+tracker renders that. So "which trip" is never computed — it is derived
+from a single leg, and there is exactly one place to look when it is
+wrong.
+
+The anchor, in order:
+
+  1. A live leg wins. Nothing competes.
+  2. Else the last leg to land, if it landed less than `TRIP_HANDOVER`
+     ago. Without this the trip vanishes the instant the final leg goes
+     past, and someone opening the app while he is still in the crew van
+     is shown a trip weeks away with no sign the one that just finished
+     happened.
+  3. Else the next leg he flies.
+
+**`TRIP_HANDOVER` is ten hours because FAR 117 is ten hours.** That is
+the minimum rest between duty periods, so the next trip cannot legally
+begin inside the window — which is what makes it safe to hold a finished
+trip that long without ever hiding the next one. Do not "round it up" to
+twelve for comfort: the number is load-bearing, and the moment it exceeds
+the legal rest minimum it can hide a trip the pilot is about to fly.
+
+There is deliberately NO cap at the next departure. It could only fire on
+an illegal or mis-imported schedule, and rule 1 already covers that,
+since a leg goes live twenty minutes before it pushes.
+
+**The card resolves its default through the same anchor** —
+`resolve_selected_leg` calls `tracker_anchor`. These used to compute the
+same thing from the same fallbacks in two places, which is a bug waiting
+for whichever one gets edited next: the card would show the first leg of
+a trip the list does not contain, and tapping it would select a flight
+that is not there.
+
+`tracker_window` returning None means "no opinion, show everything". Used
+when the anchor cannot be placed, so a bug here degrades to the old
+behaviour rather than to a blank page. A roster pasted without the blank
+lines the parser keys on is ONE trip containing everything, which
+degrades the same way.
+
+Older trips are the calendar's job. "When does he go again" is a question
+about a date; `/calendar` answers it. (1.16.0)
+
 ## PAGES
 
 | URL | What it is | Who |
@@ -1685,7 +1741,8 @@ reference app, screenshots in the owner's brief.
 | 4 | the strip itself: overlap, gate-only | **DONE 1.12.1** |
 | 1 | the two panels, the slide between them, hero card deleted | **DONE 1.13.0** |
 | 2 | selection drives the map; whole trip dashed at rest, active leg primary | **DONE 1.14.0** |
-| 3 | current trip only; leg drops 30 min after closeout; 10-hour handover | next |
+| 3a | current trip only; 10-hour handover; day/overnight separation | **DONE 1.16.0** |
+| 3b | leg drops 30 min after closeout | next |
 
 DECIDED, so it does not get re-litigated:
 
@@ -1710,6 +1767,93 @@ DECIDED, so it does not get re-litigated:
 
 
 ## VERSION HISTORY
+
+### 1.16.0 — one trip, and three registers instead of two
+
+Pass 3a. Two symptoms, and the second one was not the spacing problem it
+looked like.
+
+**The tracker holds ONE trip.** `tracker_window` kept the anchor's trip
+AND the one after it, deliberately, since 1.11.0 — the reasoning being
+that the page answers two questions, where is he now and when does he go
+again. It does not answer the second one. Appending the next trip put a
+second "Day 1 — September 4" directly under the first trip's last
+overnight, so the list read as one unbroken run of days that silently
+restarted its numbering, and the only thing dividing a leg he flies
+tonight from one a fortnight out was a dashed rule most people never
+noticed. "When does he go again" is a question about a date, and the
+calendar answers it.
+
+**A finished trip is held for ten hours.** Scoping to one trip alone
+would have been a regression: the moment the last leg went past, the
+tracker would jump to a trip weeks away, and someone opening the app
+while he is still in the crew van would see no sign the flight that just
+landed ever happened. `tracker_anchor` now holds the finished trip for
+`TRIP_HANDOVER`.
+
+Ten hours because FAR 117 says ten hours. That is the minimum rest
+between duty periods, so the next trip cannot legally start inside the
+window — which makes it the longest a finished trip can be held without
+ever hiding the next one. It is sized to the rule the pilot lives under,
+not to a guess at what feels right.
+
+A cap at the next departure was written and then removed before shipping.
+It could only ever fire on an illegal or mis-imported schedule, and rule
+1 already covers that case, because a leg goes live twenty minutes before
+it pushes and live beats everything. Recorded because the wrong version
+was argued for first, on an eight-hour example that cannot happen.
+
+**The card and the list now share one anchor.** They each computed their
+default leg separately from the same three fallbacks — identical logic in
+two places, agreeing right up until one of them changed. Adding the
+handover to the list only would have let the card show the first leg of a
+trip the list does not contain, and tapping it would have selected a
+flight that is not there. `resolve_selected_leg` calls `tracker_anchor`.
+This was latent, not observed; it is the kind of duplication that only
+becomes a bug on the next edit.
+
+**The day heading and the overnight were the same object drawn twice.**
+Both 0.75rem, both uppercase, both `--muted`, both letter-spaced, sitting
+a few tenths of a rem apart. So the end of a day printed as
+
+    DFW 8:50 CT   AEX 10:11 CT
+    OVERNIGHT IN ALEXANDRIA - 12H 30M
+    DAY 2 - AUGUST 22
+
+— three lines of small grey capitals in a row, with nothing saying which
+of them ENDS something and which BEGINS something. That is the reported
+"everything runs together between days". It was never a spacing problem
+and no margin would have fixed it: the eye was not reading a gap, it was
+reading two identical labels and giving up.
+
+More rules between them was the wrong answer too — hairlines either side
+of the overnight add two more lines to a stack already too busy, which
+the owner said before it was tried. The two are given jobs instead:
+
+- **Day heading** is now STICKY, small caps, on the sheet's own colour.
+  It is chrome. It follows you down while its day is on screen, so a list
+  two screens long never leaves you asking which day you are looking at.
+  Full-bleed via negative margins, because a sticky header with a gutter
+  either side shows slivers of the row it is meant to be covering.
+- **Overnight** is an inset band in the new `--rest`, sentence case, with
+  a moon glyph and the duration pushed to the far end so several layovers
+  line up down the list. It is CONTENT — a thing he does between two
+  flights — so it is drawn as an object in the list rather than a label
+  over one.
+
+Uppercase now belongs to the day heading alone, which is what lets it
+read as a heading without a rule under it.
+
+`--rest` is a real palette variable in all three theme blocks, not a
+one-off tint, so it themes with everything else. The moon is its own
+partial, same reasoning as the two arrows: one file, so a second layover
+marker cannot drift away from it.
+
+Div-balance check run against the markup edit, per 1.14.1. Balanced at 75.
+Tests: 1,140 → 1,153.
+
+STILL OPEN: pass 3b, the leg dropping 30 minutes after closeout. Held
+back deliberately so the trip scoping could be looked at on its own.
 
 ### 1.15.0 — one surface, not cards on a card
 
