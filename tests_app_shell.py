@@ -307,6 +307,88 @@ def main():
     check("the live update applies the same rule",
           "wrap.style.display = (known || phaseTag === 'Arrived')" in viewer)
 
+    # -- every form posts somewhere that EXISTS ---------------------------
+    #
+    # THE BUG THIS IS FOR (1.18.0): import_review.html's Confirm & Import
+    # button posted to /admin/import/confirm for nine releases after 1.7.0
+    # moved that route to /flights/import/confirm. The page rendered, the
+    # diff was right, every leg was listed, and the button dropped the
+    # pilot on FastAPI's bare {"detail":"Not Found"} — which does not read
+    # as "a route moved" unless you already know what it is.
+    #
+    # It survived because both halves were tested and the JOIN was not:
+    # the review page was checked by asserting on its markup, and the
+    # confirm route by calling it directly at the path the test author
+    # remembered. Nothing ever asked whether the button's action and the
+    # route agreed.
+    #
+    # So this walks the ACTION OFF EVERY FORM IN EVERY TEMPLATE and
+    # requires a registered route to match it. It is deliberately generic:
+    # the next rename gets caught for free.
+    print("\nEvery form action resolves to a route")
+    registered = []
+    for r in m.app.routes:
+        path = getattr(r, "path", None)
+        if path:
+            registered.append(path)
+
+    def resolves(action):
+        """Does a template's action match a registered route path?
+
+        Jinja expressions inside a path are stand-ins for a path
+        parameter — `/flights/delete/{{ row.id }}` is the route
+        `/flights/delete/{leg_id}` — so both sides are reduced to a
+        common shape before comparing.
+        """
+        shape = action.split("?")[0].split("#")[0]
+        shape = re.sub(r"\{\{.*?\}\}", "*", shape).rstrip("/") or "/"
+        for path in registered:
+            if re.sub(r"\{[^}]+\}", "*", path).rstrip("/") == shape.rstrip("/"):
+                return True
+        return False
+
+    seen_any = False
+    for path in templates:
+        name = os.path.basename(path)
+        src = open(path).read()
+        for action in re.findall(r'<form[^>]*\baction="([^"]+)"', src):
+            if action.startswith(("http://", "https://", "#")):
+                continue
+            # An action that is ENTIRELY a Jinja expression is supplied by
+            # the route (settings.html serves both /settings and
+            # /viewer-settings from one template, deliberately — see
+            # test_settings_is_one_page). There is nothing to resolve
+            # statically, so the VALUES are checked below instead.
+            if re.fullmatch(r"\{\{.*?\}\}", action.strip()):
+                continue
+            seen_any = True
+            check(f"{name}: form posts to {action}", resolves(action), action)
+    check("...and forms were actually found to check", seen_any)
+
+    # The one dynamic action, checked by its values rather than its shape.
+    # Skipping it entirely would leave the page that serves two audiences
+    # as the only form nothing verifies.
+    main_src = open(os.path.join(HERE, "app", "main.py")).read()
+    supplied = set(re.findall(r'post_to="([^"]+)"', main_src))
+    check("the settings template is handed at least one action", supplied)
+    for target in sorted(supplied):
+        check(f"...and post_to={target} is a real route", resolves(target), target)
+
+    # The old path stays reachable, because a phone with the review page
+    # still open from before the update posts to it. 307 and NOT 303:
+    # this POST carries the entire parsed schedule, and 303 turns it into
+    # a GET and silently drops every leg — a worse failure than the 404,
+    # because it looks like it worked.
+    legacy = [r for r in m.app.routes
+              if getattr(r, "path", None) == "/admin/import/confirm"]
+    check("the moved import route keeps a redirect", bool(legacy))
+    resp = client.post("/admin/import/confirm", data={}, follow_redirects=False)
+    check("...that preserves the POST", resp.status_code == 307,
+          str(resp.status_code))
+    check("...pointing at the route that exists",
+          resp.headers.get("location") == "/flights/import/confirm",
+          str(resp.headers.get("location")))
+
     print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
     return 1 if FAIL else 0
 

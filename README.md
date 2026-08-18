@@ -1,7 +1,7 @@
 # MyPilot
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.16.0.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.19.0.
 
 The version above was stale at 1.4.0 for five releases. `app/version.py`
 is the only authority; this line is a convenience and nothing reads it.
@@ -48,7 +48,7 @@ seriously.
 
 ## STATE
 
-**v1.16.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+**v1.19.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
 owner plus several FOs, who fly the same legs — hence shared flight rows
 (v5.1, retained).
 
@@ -69,7 +69,7 @@ page split (1.6.0–1.7.0). All three came out of the same problem — the app
 could not be OPERATED without SSH, and bugs could not be reproduced without
 flying a trip.
 
-Tests: **1,153**, eleven suites, all passing.
+Tests: **1,983**, twelve suites, all passing.
 
 **Current work: the UI chunks (1.9.0 onward).** Five agreed steps, owner's
 brief, reworking the tracker and calendar around one flight-strip
@@ -83,9 +83,9 @@ become the history browser before past flights could leave the tracker.
 | 1 | the `.fstrip` component + the current flight card | **DONE 1.9.0** |
 | 2 | the expanded view, on the reference layout | **DONE 1.10.0-1.10.2** |
 | 3 | tracker list: current trip only, no past-flights toggle, positioned on the live leg | **DONE 1.11.0 + 1.12.0, actually one trip 1.16.0** |
-| 3b | the row dropdown onto `.aptblock` (scroll position solved by the sheet) | after 4 |
-| 4 | calendar: expandable strips with history and a mini map | next |
-| 5 | regression pass across themes, time formats and the odd states | |
+| 3b | the row dropdown onto `.aptblock` | **SUPERSEDED** — the tracker's dropdown was deleted in 1.14.1 (a row tap opens the full panel). `.aptblock` went to the CALENDAR instead, 1.18.0 |
+| 4 | calendar: expandable strips with history and a mini map | **DONE 1.18.0** |
+| 5 | regression pass across themes, time formats and the odd states | **DONE 1.19.0** |
 
 Step 3 carries a DECIDED behaviour worth not re-litigating: once a trip
 ends, the first leg of the NEXT trip takes the card, so the question "when
@@ -108,8 +108,9 @@ TRACKER SHOWS.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, placeholder filter |
-| `tests_ui_fixes.py` | 539 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
-| `tests_app_shell.py` | 168 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
+| `tests_ui_fixes.py` | 578 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
+| `tests_regression_matrix.py` | 761 | every page x 6 odd states x 2 themes x 2 clocks, pilot and viewer |
+| `tests_app_shell.py` | 198 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
 | `tests_timezones.py` | 68 | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
 | `tests_closeout_sweep.py` | 42 | the abandonment cliff, the on-ground handover, the late gate-in chase and its cap |
 | `tests_import_merge.py` | 39 | additive import, month scoping, future-only reconciliation, the diff, manual add |
@@ -1145,6 +1146,28 @@ degrades the same way.
 Older trips are the calendar's job. "When does he go again" is a question
 about a date; `/calendar` answers it. (1.16.0)
 
+### Legs settling out of the list
+
+Inside the window, a leg leaves `LEG_SETTLE` (30 min) after its CLOSEOUT.
+Not after its scheduled arrival: closeout is a conclusion, a schedule is a
+guess, and a two-hour delay makes the guess a lie. `settled_out` in
+main.py.
+
+Two things it will not do, both deliberate:
+
+  * **A leg with no `closed_at` never drops**, however old. No closeout
+    means the app does not know how the flight ended; removing it quietly
+    would present that as resolved.
+  * **The last remaining leg never drops.** Otherwise the list empties
+    thirty minutes after the final landing and stays empty for the rest of
+    the ten-hour handover — the window in which someone is most likely to
+    open the app to check he got in.
+
+That second guard is why the function takes the whole list rather than
+being asked leg by leg. "Is this one still needed" cannot be answered
+without knowing what else is left. Applied AFTER `tracker_window`, so
+"last remaining" means last of this trip. (1.17.0)
+
 ## PAGES
 
 | URL | What it is | Who |
@@ -1164,7 +1187,10 @@ neither. Now the word means what it says.
 
 Redirects are kept for every moved URL — `/admin/diagnostics` →
 `/admin#diagnostics`, `/admin/debug` → `/admin#log`,
-`/settings/users/delete/{id}` → `/admin#people`. A phone with a page still
+`/settings/users/delete/{id}` → `/admin#people`,
+`/admin/import/confirm` → `/flights/import/confirm` (307, so the POST and
+its parsed schedule survive; added 1.18.0 after nine releases in which
+that one was missing and Import was dead). A phone with a page still
 open from before the update posts to the old path, and a 404 on a Delete
 button is the worst possible way to learn a route moved.
 
@@ -1689,18 +1715,19 @@ v4`, or `merged N per-user v5.0 rows into shared flights`.
 ## TESTS
 
 ```bash
-python tests_flight_row.py          #  68
-python tests_poller_end_to_end.py   #  47
-python tests_past_leg_detail.py     #  19
-python tests_budget_limit.py        #  17
-python tests_carrier_cap.py         #  13
-python tests_ui_fixes.py            # 527
-python tests_app_shell.py           # 167
-python tests_timezones.py           #  68
-python tests_closeout_sweep.py      #  42
-python tests_import_merge.py        #  39
-python tests_test_mode.py           # 133
-```                                  # 1140
+python tests_flight_row.py          #   68
+python tests_poller_end_to_end.py   #   47
+python tests_past_leg_detail.py     #   19
+python tests_budget_limit.py        #   17
+python tests_carrier_cap.py         #   13
+python tests_ui_fixes.py            #  578
+python tests_app_shell.py           #  198
+python tests_timezones.py           #   68
+python tests_closeout_sweep.py      #   42
+python tests_import_merge.py        #   39
+python tests_test_mode.py           #  133
+python tests_regression_matrix.py   #  761
+```                                  # 1983
 
 Each uses its own scratch DB via `PT_DB_FILE`. Read
 `tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
@@ -1742,7 +1769,7 @@ reference app, screenshots in the owner's brief.
 | 1 | the two panels, the slide between them, hero card deleted | **DONE 1.13.0** |
 | 2 | selection drives the map; whole trip dashed at rest, active leg primary | **DONE 1.14.0** |
 | 3a | current trip only; 10-hour handover; day/overnight separation | **DONE 1.16.0** |
-| 3b | leg drops 30 min after closeout | next |
+| 3b | leg drops 30 min after closeout; panel height pinned to the sheet | **DONE 1.17.0** |
 
 DECIDED, so it does not get re-litigated:
 
@@ -1767,6 +1794,267 @@ DECIDED, so it does not get re-litigated:
 
 
 ## VERSION HISTORY
+
+### 1.19.0 — the regression pass, as a matrix
+
+Step 5, and the end of the flight-strip rebuild. The roadmap called this
+"a regression pass across themes, time formats and the odd states",
+which describes a person clicking through the app once. That finds
+today's breakage and nothing after it. The same combinations run on every
+commit find it forever and cost seconds, so it is a suite:
+`tests_regression_matrix.py`, every page x 6 odd states x 2 themes x 2
+clocks, as a pilot and as a viewer.
+
+The odd states are the ones that have actually broken this app before,
+not general-purpose fuzz: an empty roster (a new account, the commonest
+first-run state and the one most often forgotten), a roster of nothing
+but past legs (the window `TRIP_HANDOVER` exists for), a single leg with
+no trip around it, a deadhead, and an airport the coordinate database
+does not know.
+
+It found two things on the first run.
+
+**`None` was being printed into the tracker.** `v-arr-note` rendered
+`{{ current.arr_line.note }}`, which is Python's `None` on any leg
+without a delay note — 16 of the 24 combinations. It was invisible,
+because the same element carries `display:none` when there is no note,
+and the poll script overwrites it correctly on first refresh. It is
+fixed anyway: it is one change to that style condition away from showing
+a person the word "None", and "invisible today" is not the same as
+"right".
+
+**A viewer's clock was ignored on the calendar.** The real find. The
+calendar DID call `viewer_display_overrides` — on its way OUT, to hand
+the template a theme. Every time on the page had already been formatted
+from `settings.time_format`, which is the PILOT's. So a viewer who chose
+a 12-hour clock got a light calendar full of 24-hour times: their theme
+honoured, their clock ignored, on one page.
+
+That is precisely the failure `viewer_display_overrides` was written for
+in 1.5.0 — applied to the wrong half of the route. The override is now
+resolved at the TOP of the route, before anything is formatted, and the
+resolved dict is the only thing read afterwards.
+
+**And the reason it was possible: the tracker had its own copy.** The
+tracker route re-implemented the whole override inline — cookie names,
+valid values and all — while the shared helper sat there being used for
+theme only. With the rule written out twice, fixing one did not fix the
+other. The tracker now calls the helper. One rule, one place.
+
+**Two of the checks I wrote first could not fail.** Worth recording,
+because a green test that cannot go red is worse than no test:
+
+- The theme check searched the whole document for `data-theme="light"`.
+  Any page with a theme toggle mentions both values in its script, so
+  the substring is present whichever theme is active. It now reads the
+  attribute off the `<html>` tag.
+- The clock scraper was picking up a fragment of the calendar's own
+  JavaScript — the code that BUILDS a time element — and counting it as
+  a time. Anything containing a quote or a brace is script, not a clock.
+
+Both were tightened and then verified against hand-made input, including
+the mixed-clock case the check exists to catch. They still pass, so the
+earlier passes were real rather than artifacts.
+
+**One older test was rewritten rather than adapted.** It asserted that
+`viewer_display_overrides` appeared near the calendar's render call —
+which the calendar satisfied while being wrong, since calling it at the
+end was the bug. It now asserts the pilot's raw `settings.time_format`
+and `settings.theme` are not read ANYWHERE in either route. Comments are
+stripped before that scan, on the same rule as `code_only()` in the
+strip tests: a note recording what a bug WAS must not read as the bug
+still being there, or documenting a fix becomes the thing that breaks the
+test proving it.
+
+Tests: 1,220 → 1,983, and eleven suites become twelve.
+
+### 1.18.0 — the calendar becomes the history browser, and Import was broken
+
+Step 4, plus a bug the owner hit that had been live for nine releases.
+
+**BUG: Confirm & Import posted into a 404.** 1.7.0 split `/admin` into
+`/flights` and `/admin` and moved every route with it. It did not move
+`import_review.html`'s form action, which went on pointing at
+`/admin/import/confirm` — a path that stopped existing. So pasting a
+schedule worked, the diff was correct, every leg was listed, and the
+button dropped the pilot on FastAPI's bare `{"detail":"Not Found"}`.
+Nothing could be imported at all. That JSON is what the owner reported as
+"a link to a dead page saying default not found", and it is worth noting
+that a raw 404 body is not recognisable as a missing route unless you
+already know what it is.
+
+**Why nine releases of tests missed it.** Both halves were covered and
+the JOIN was not. The review page was tested by rendering it and
+asserting on its markup; the confirm route was tested by calling it
+directly at the path the test author remembered. Neither ever asked
+whether the button's action and the route agreed — and a test that names
+the path itself cannot, by construction.
+
+The fix for the class, not the instance: `tests_app_shell.py` now walks
+the action off EVERY form in EVERY template and requires a registered
+route to match, reducing both sides to a common shape so
+`/flights/delete/{{ row.id }}` matches `/flights/delete/{leg_id}`. The
+next rename gets caught for free. The one deliberately dynamic action
+(`settings.html`'s `{{ post_to }}`, which serves both `/settings` and
+`/viewer-settings` from one template) is checked by its VALUES rather
+than skipped, so the page serving two audiences is not the only form
+nothing verifies.
+
+`/admin/import/confirm` is kept as a redirect, per the rule in PAGES that
+every moved URL keeps one — a phone with the review page still open from
+before the update posts there. **307, not 303:** this POST carries the
+entire parsed schedule, and 303 turns it into a GET and drops every leg.
+That failure is worse than the 404 because it looks like it worked.
+
+**A paste that parses to nothing now says so.** It has always redirected
+to `/flights?err=parse`, and that page has always ignored the parameter —
+so the box emptied, the roster did not change, and nothing said why.
+Silence is the worst possible answer to "did that work", because the
+pilot's next move is to paste it again. The banner restates the expected
+format rather than only naming the failure.
+
+---
+
+The calendar was the last page still drawing its own flight row, and the
+only one that could not answer what a flight actually did.
+
+**The agenda uses `.fstrip--sm`.** Invariant 25 named three surfaces that
+had each grown their own markup for "flight number, city pair, two
+times". The card and the tracker list were converted in 1.9.0; this one
+was not. `.agenda-leg` had its own arrow, its own time formatting and NO
+DELAY STATE AT ALL — so a leg that pushed forty minutes late read here
+exactly like one that ran to the minute. The page was printing the bid
+line back at you and calling it history.
+
+**The calendar now pays for a time index.** The strip renders
+`dep_line.state`, which is None unless the caller passes one, so the
+markup would have been decorative without this. It is ONE query for the
+whole month rather than one per leg, which is what makes it affordable on
+a page that can hold sixty legs — the same reasoning that put
+`tag_index` and `time_index` there in the first place. The comment on
+`leg_view` saying the calendar does not need these was true and is now
+wrong; it has been corrected rather than left to mislead.
+
+**Tapping a leg opens its history, in `.aptblock`.** The same per-airport
+blocks the tracker's detail panel uses: actual time, the scheduled time
+it displaced, the delay note, the gate. Not a fourth way of showing a
+flight's ending.
+
+This quietly closes roadmap item 3b, which read "the row dropdown onto
+`.aptblock`". That dropdown was DELETED in 1.14.1 — a row tap opens the
+full panel now — so the item had outlived the thing it described.
+`.aptblock` went to the calendar instead, which is where a detailed
+history actually belongs.
+
+**The mini map is a thumbnail, not a map you drive.** Leaflet, the same
+vendored copy and the same tiles as the tracker, because a second way of
+drawing a route is precisely the divergence invariant 25 exists to stop.
+Every interaction is off — `dragging`, `touchZoom`, `scrollWheelZoom`,
+`doubleClickZoom`, `keyboard`. A draggable map inside a scrolling page
+swallows the scroll meant for the page, which is the bug 1.10.2 and
+1.12.0 were largely spent on, and re-introducing it sixty times over on
+one screen would have been the worst version of it yet.
+
+Three things bound the cost, and all three are load-bearing:
+
+- **The panels ship EMPTY.** Rendering every leg's history and sixty map
+  containers into the document would make a month enormous to answer a
+  question about one flight. Markup arrives from the EXISTING
+  `/api/v1/leg/{id}` — no new endpoint — on first open.
+- **One row open at a time.** Opening a row tears down the previous
+  row's map. Sixty live Leaflet instances would be sixty sets of tile
+  requests and sixty sets of listeners on a phone.
+- **The fetch is cached, the map is not.** Re-opening a leg is instant
+  and free; the map is rebuilt because a Leaflet instance created in a
+  hidden container has no size and comes back blank.
+
+Leaflet is `defer`red here, unlike the tracker where the map IS the page.
+Most visits to a month never open a leg, and a render-blocking script for
+a feature most visits do not use slows every month view to buy nothing.
+
+**The glyphs come from the two shared partials via `<template>`.** The
+script builds its markup at runtime and cannot run a Jinja include, and
+writing an arrow character into the JavaScript would have been a third
+departure arrow in the codebase. Parked in the DOM and cloned instead.
+
+**A late response cannot repaint a row the user has closed.** Both the
+success and the error path check that the row is still the open one
+before touching it.
+
+**Found while writing the tests:** the redeclaration check was blunter
+than the rule it enforced. `.fstrip` must not be REDECLARED in a
+template, but a CONTEXTUAL override — `.cal-leg-head > .fstrip`, exactly
+as `.fstrip-head .status` already works — is explicitly allowed. The
+first version of the check matched the string anywhere and failed on a
+legitimate override. It now looks for a bare `.fstrip {` at the head of
+a selector, which is what the invariant actually says. The viewer's copy
+of this check has the same blind spot and passes only because viewer.html
+happens to have no contextual override.
+
+Verified in a real DOM (jsdom, not shipped): open, accordion-close,
+toggle-close and re-open, asserting live map instances never exceed one
+and a cached row does not refetch.
+
+Tests: 1,167 → 1,220.
+
+STILL OPEN: step 5, the regression pass across themes, time formats and
+the odd states.
+
+### 1.17.0 — the panel stops guessing its own size, and flown legs let go
+
+Pass 3b, and a sizing bug the owner caught on a real phone.
+
+**The detail panel is the sheet's height, not its content's.** It carried
+`max-height: 92vh` and no height at all, so it sized to whatever was in
+it. A leg with a gate, a closeout and live ADS-B came up nearly full
+screen; the same leg an hour earlier — no gate published, no position, no
+recorded times — came up a couple of inches. Same tap, same panel, two
+different windows, and the map jumped behind it on every move between
+legs. The panel now stands exactly where the list was standing, so
+opening a flight and closing it again does not move a pixel.
+
+Short content leaves space at the bottom. That is the trade and it is the
+right way round: a surface that is always in the same place beats one
+that snaps to its contents, which is the same argument that fixed the
+sheet in place in 1.14.1. Long content still scrolls inside.
+
+**A closed leg leaves the list thirty minutes after CLOSEOUT.** Not after
+its scheduled arrival — those are different instants and the difference
+is the point. Closeout is the app concluding the flight is genuinely over
+(see CLOSURE); a scheduled arrival is a guess that a two-hour delay makes
+a lie, and dropping on it would clear a leg while the aeroplane was still
+at altitude.
+
+Two guards, both load-bearing:
+
+- **A leg with no closeout timestamp never drops**, however old. No
+  closeout means the app does not know how the flight ended, and removing
+  it quietly would present that as resolved.
+- **The last remaining leg never drops.** Without this the list empties
+  itself thirty minutes after the final landing and stays empty for the
+  rest of the ten-hour handover — precisely the window in which someone
+  opens the app to check he got in. This is why `settled_out` takes the
+  whole list rather than being asked one leg at a time: "is this one
+  still needed" cannot be answered without knowing what else is left, and
+  the per-leg version of this rule would have emptied the page.
+
+The filter runs AFTER the trip window, not before, so "the last remaining
+leg" means the last of this trip rather than the last on the roster.
+
+`closed_at` rides along on `time_index`'s existing narrow SELECT rather
+than getting a query of its own — that statement already visits the same
+rows for the same list.
+
+**Two test bugs found while writing the tests, worth recording** because
+both would have passed while proving nothing. The threshold check used a
+single leg, so the never-empty guard refused the drop and the assertion
+was testing the guard rather than the boundary it was named after. And
+the end-to-end fixture called `write()` with a `mode=` keyword it does
+not take — caught only because it raised. A fixture that does not
+exercise the path it claims to is worse than no fixture, since it reports
+green.
+
+Tests: 1,153 → 1,167.
 
 ### 1.16.0 — one trip, and three registers instead of two
 

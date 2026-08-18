@@ -185,6 +185,22 @@
     .regen-icon-btn:hover { color: var(--text); background: rgba(127,127,127,0.12); }
     .share-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }
     .share-actions button { margin-top: 0; }
+    /* Reads as a correction, not an alarm: a tinted panel with the bad
+       news in the danger colour and the FIX in normal text, because the
+       format line is the part that is actually useful. */
+    .import-error {
+      border: 1px solid var(--bad); border-radius: 10px;
+      padding: 0.7rem 0.85rem; margin-bottom: 0.85rem;
+      font-size: 0.85rem; line-height: 1.5; color: var(--text);
+      background: rgba(248,113,113,0.10);
+    }
+    .import-error strong { display: block; color: var(--bad); margin-bottom: 0.25rem; }
+    .import-error code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.8rem; background: var(--input-bg);
+      padding: 0.1rem 0.3rem; border-radius: 4px;
+      white-space: nowrap;
+    }
     .ffdo-row { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 0.5rem; }
     .ffdo-help { position: relative; font-size: 0.85rem; flex-shrink: 0; }
     .ffdo-help summary {
@@ -240,6 +256,20 @@
 
   <div class="card">
     <form method="post" action="/flights/import">
+      {% if import_error %}
+      {# A paste that produced no legs used to bounce back here in
+         silence: box empty, roster unchanged, no reason given. The
+         format is the usual cause, so it is restated rather than just
+         named — being told "that did not parse" without being shown
+         what would is a dead end. #}
+      <div class="import-error" role="alert">
+        <strong>Nothing could be read from that paste.</strong>
+        Each line needs to look like
+        <code>08/22/2026 2673 DFW 1700 VPS 1903</code> —
+        date, flight number, origin, departure, destination, arrival.
+        Leave a blank line between trips.
+      </div>
+      {% endif %}
       <div class="ffdo-row">
         <label style="color:var(--muted); font-size:0.85rem; margin:0;">Copy and paste your FFDO below</label>
         <details class="ffdo-help">

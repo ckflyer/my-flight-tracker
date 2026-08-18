@@ -6,6 +6,13 @@
   <title>MyPilot · Calendar</title>
   {% include "partials/app_shell.html" %}
   <link rel="stylesheet" href="/static/app.css?v={{ version }}">
+  {# Leaflet, vendored, for the mini map inside an opened leg. DEFERRED,
+     unlike the tracker's copy: there the map IS the page and has to be up
+     before anything renders, whereas here nothing needs it until somebody
+     taps a flight. A render-blocking script for a feature most visits
+     never use would slow every month view to buy nothing. #}
+  <link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css?v={{ version }}" />
+  <script defer src="/static/vendor/leaflet/leaflet.js?v={{ version }}"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html { scroll-behavior: smooth; }
@@ -95,29 +102,59 @@
       padding-top: 1rem;
     }
     .agenda-label { font-size: 0.8rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 0.5rem; }
-    /* One line per flight, always. The times used to carry their zone
-       suffix ("5:15 PM MST"), which on a phone pushed the row past the
-       card width and wrapped the route onto a second line. Zones live on
-       the tracker card's tap bubble now, so the agenda can use the short
-       form. The flight side truncates before the times do — a clipped
-       city pair is readable, a wrapped row is not. */
-    .agenda-leg {
-      display: flex; justify-content: space-between; align-items: baseline;
-      gap: 0.5rem; padding: 0.3rem 0; font-size: 0.9rem;
+    /* THE EXPANDABLE ROW (1.18.0). The strip itself is .fstrip--sm from
+       the shared stylesheet — see invariant 25. Everything here is the
+       surface around it: the tap target, the caret, the panel it opens.
+
+       A <button>, not a div with a click handler. It is a real control:
+       it takes keyboard focus, it announces its expanded state, and it
+       works before the script has run. */
+    .cal-leg { border-top: 1px solid var(--border); }
+    .cal-leg:first-of-type { border-top: none; }
+    .cal-leg-head {
+      display: flex; align-items: center; gap: 0.5rem;
+      width: 100%; margin: 0; padding: 0.55rem 0;
+      background: none; border: none; color: var(--text);
+      text-align: left; cursor: pointer; font: inherit;
+      -webkit-tap-highlight-color: transparent;
     }
-    .agenda-leg-main {
-      min-width: 0; flex: 1 1 auto;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    .cal-leg-head > .fstrip { flex: 1 1 auto; min-width: 0; }
+    .cal-caret {
+      flex: 0 0 auto; color: var(--muted); font-size: 1.1rem; line-height: 1;
+      transition: transform 200ms ease;
     }
-    .agenda-route { color: var(--muted); font-weight: 600; }
-    .agenda-leg-times {
-      flex: 0 0 auto; white-space: nowrap;
-      font-size: 0.78rem; font-variant-numeric: tabular-nums;
+    .cal-leg.open .cal-caret { transform: rotate(90deg); }
+    @media (prefers-reduced-motion: reduce) { .cal-caret { transition: none; } }
+
+    /* The panel. `hidden` does the hiding, so a row that never opens costs
+       one empty div — no height animation, because the content arrives
+       asynchronously and animating to a height you do not know yet is the
+       jump this codebase has fixed three times already (1.10.1, 1.10.2,
+       1.12.0). It appears; it does not perform. */
+    .cal-detail { padding: 0 0 0.85rem; }
+    .cal-detail[hidden] { display: none; }
+    .cal-detail-loading { color: var(--muted); font-size: 0.8125rem; padding: 0.4rem 0; }
+    .cal-detail-error { color: var(--bad); font-size: 0.8125rem; padding: 0.4rem 0; }
+
+    /* THE MINI MAP. Leaflet, the same library and the same tiles as the
+       tracker, because a second way of drawing a route is exactly the
+       divergence invariant 25 exists to stop.
+
+       ONE AT A TIME: opening a row tears down the previous row's map (see
+       the script). Sixty live map instances on a month view would be
+       sixty tile fetches and sixty sets of event listeners, which is the
+       cost this page cannot pay. */
+    .cal-map {
+      height: 150px; margin: 0.5rem 0 0.15rem;
+      border-radius: 10px; overflow: hidden;
+      border: 1px solid var(--map-border);
+      background: var(--input-bg);
     }
-    @media (max-width: 430px) {
-      .agenda-leg { font-size: 0.85rem; }
-      .agenda-leg-times { font-size: 0.72rem; }
-      .agenda-leg-main strong { font-size: 0.85rem; }
+    .cal-map-missing {
+      height: 150px; margin: 0.5rem 0 0.15rem;
+      border-radius: 10px; border: 1px dashed var(--border);
+      display: flex; align-items: center; justify-content: center;
+      color: var(--muted); font-size: 0.8125rem;
     }
     .agenda-empty { color: var(--muted); font-size: 0.85rem; }
     /* Sits AFTER the route, not between the flight number and it. In front
@@ -202,12 +239,51 @@
     <div class="agenda-label">{{ day.label }}</div>
     {% if day.legs %}
       {% for leg in day.legs %}
-      <div class="agenda-leg">
-        <div class="agenda-leg-main">
-          <strong>{{ leg.callsign }}</strong>
-          <span class="agenda-route">{{ leg.origin }} &rarr; {{ leg.destination }}</span>{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}
-        </div>
-        <div class="meta agenda-leg-times">{{ leg.dep_short or leg.dep }}&ndash;{{ leg.arr_short or leg.arr }}{% if leg.same_zone and leg.dep_zone %} <span class="tz" aria-hidden="true">{{ leg.dep_zone }}</span>{% elif leg.dep_zone %} <span class="tz" aria-hidden="true">{{ leg.dep_zone }}/{{ leg.arr_zone }}</span>{% endif %}</div>
+      {# THE SHARED STRIP, small size (1.18.0). This row used to be
+         bespoke markup — its own flight number, its own arrow, its own
+         times, and NO delay state at all, so a leg that went two hours
+         late read here exactly like one that ran to the minute. Invariant
+         25 named this page as one of the three that had diverged; it was
+         the last one still doing so. #}
+      <div class="cal-leg" data-leg-row>
+        <button class="cal-leg-head" type="button"
+                data-leg-toggle data-leg-id="{{ leg.id }}"
+                aria-expanded="false" aria-controls="cal-detail-{{ leg.id }}">
+          <div class="fstrip fstrip--sm">
+            <div class="fstrip-head">
+              <div class="fstrip-num">{{ leg.callsign }}{% if leg.is_deadhead %}<span class="dh">DH</span>{% endif %}</div>
+              {% if leg.status_tag or leg.phase_tag %}
+              <span class="pills fstrip-tags">
+                {% if leg.status_tag %}<span class="status {{ leg.status_tag|lower|replace(' ', '-') }}">{{ leg.status_tag }}</span>{% endif %}
+                {% if leg.phase_tag %}<span class="status phase {{ 'arrived' if leg.phase_tag == 'Arrived' else '' }}">{{ leg.phase_tag }}</span>{% endif %}
+              </span>
+              {% endif %}
+            </div>
+            <div class="fstrip-ends">
+              <span class="fstrip-end dep">
+                <span class="fstrip-disc {{ leg.dep_line.state if leg.dep_line else '' }}" aria-hidden="true">{% include "partials/arrow_out.html" %}</span>
+                <span class="fstrip-code">{{ leg.origin }}</span>
+                <span class="fstrip-time {{ leg.dep_line.state if leg.dep_line else '' }}">{{ (leg.dep_line.time_short if leg.dep_line else None) or leg.dep_short or leg.dep }}{% if leg.dep_line and leg.dep_line.zone %}<span class="tz" aria-hidden="true">{{ leg.dep_line.zone }}</span>{% endif %}</span>
+              </span>
+              <span class="fstrip-end arr">
+                <span class="fstrip-disc {{ leg.arr_line.state if leg.arr_line else '' }}" aria-hidden="true">{% include "partials/arrow_in.html" %}</span>
+                <span class="fstrip-code">{{ leg.destination }}</span>
+                <span class="fstrip-time {{ leg.arr_line.state if leg.arr_line else '' }}">{{ (leg.arr_line.time_short if leg.arr_line else None) or leg.arr_short or leg.arr }}{% if leg.arr_line and leg.arr_line.zone %}<span class="tz" aria-hidden="true">{{ leg.arr_line.zone }}</span>{% endif %}</span>
+              </span>
+            </div>
+          </div>
+          <span class="cal-caret" aria-hidden="true">&#8250;</span>
+        </button>
+        {# EMPTY UNTIL TAPPED. A month can hold sixty legs; rendering every
+           one's history and sixty map containers into the document would
+           make the page enormous to answer a question about one flight.
+           The markup arrives from /api/leg/{id} on first open and is then
+           kept, so a second open is instant and costs nothing. #}
+        <div class="cal-detail" id="cal-detail-{{ leg.id }}" hidden
+             data-lat1="{{ leg.origin_lat if leg.origin_lat is not none else '' }}"
+             data-lon1="{{ leg.origin_lon if leg.origin_lon is not none else '' }}"
+             data-lat2="{{ leg.dest_lat if leg.dest_lat is not none else '' }}"
+             data-lon2="{{ leg.dest_lon if leg.dest_lon is not none else '' }}"></div>
       </div>
       {% endfor %}
     {% else %}
@@ -219,6 +295,207 @@
 
   <div class="footer-version">v{{ version }}</div>
   {% include "partials/tabbar.html" %}
+  {# THE GLYPHS, from the same two files the tracker and the strips use.
+     The script builds this panel's markup at runtime and cannot run a
+     Jinja include, so the two SVGs are parked here and cloned. Writing
+     an arrow character into the JavaScript instead would be a third
+     departure arrow in the codebase, which is the drift invariant 25 and
+     the ONE AEROPLANE rule both exist to stop. #}
+  <template id="glyph-out">{% include "partials/arrow_out.html" %}</template>
+  <template id="glyph-in">{% include "partials/arrow_in.html" %}</template>
+  <script>
+    // EXPANDABLE AGENDA ROWS (1.18.0).
+    //
+    // One row open at a time. That is not a style choice — it is what
+    // bounds the cost of this page. A month can hold sixty legs, and
+    // sixty live Leaflet instances would be sixty sets of tile requests
+    // and sixty sets of event listeners on a phone. Opening a row tears
+    // the previous one's map down.
+    //
+    // The DETAIL is fetched once per leg and then kept, so re-opening is
+    // instant and free. The MAP is rebuilt each time, because a Leaflet
+    // instance in a hidden container has no size and comes back blank.
+    (function() {
+      var openRow = null, openMap = null;
+
+      function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
+          return { '&': '&amp;', '<': '&lt;', '>': '&gt;',
+                   '"': '&quot;', "'": '&#39;' }[c];
+        });
+      }
+
+      // The tracker reads data-theme alone, so with no explicit choice it
+      // serves dark tiles to a light-mode phone. Here the OS preference is
+      // the fallback, which is what every other themed thing in this app
+      // already does. (Worth doing the same on the tracker.)
+      function tileTheme() {
+        var t = document.documentElement.getAttribute('data-theme');
+        if (t === 'light') return 'light_all';
+        if (t === 'dark') return 'dark_all';
+        return (window.matchMedia &&
+                window.matchMedia('(prefers-color-scheme: light)').matches)
+                ? 'light_all' : 'dark_all';
+      }
+
+      function timeHtml(line, fallback) {
+        if (!line) return esc(fallback || '');
+        var out = esc(line.time_short || '');
+        if (line.zone) out += '<span class="tz" aria-hidden="true">' + esc(line.zone) + '</span>';
+        return out;
+      }
+
+      function glyph(dir) {
+        var t = document.getElementById(dir === 'dep' ? 'glyph-out' : 'glyph-in');
+        return t ? t.innerHTML : '';
+      }
+
+      function aptBlock(dir, code, name, line, gate) {
+        var arrow = glyph(dir);
+        var h = '<div class="aptblock"><div class="aptblock-head">';
+        h += '<span class="aptblock-disc ' + esc(line && line.state || '') + '" aria-hidden="true">' + arrow + '</span>';
+        h += '<span class="aptblock-code">' + esc(code) + '</span>';
+        h += '<span class="aptblock-name">' + esc(name || '') + '</span>';
+        h += '</div><div class="aptblock-row"><div class="aptblock-when">';
+        h += '<span class="aptblock-time ' + esc(line && line.state || '') + '">' + timeHtml(line) + '</span>';
+        if (line && line.was_short) {
+          h += '<span class="aptblock-was">' + esc(line.was_short) + '</span>';
+        }
+        if (line && line.note) {
+          h += '<div class="aptblock-note ' + esc(line.state || '') + '">' + esc(line.note) + '</div>';
+        }
+        h += '</div><div class="aptblock-facts">';
+        if (gate) {
+          h += '<span class="aptblock-badge">' + arrow + esc(gate) + '</span>';
+        }
+        h += '</div></div></div>';
+        return h;
+      }
+
+      function render(panel, data) {
+        var c = (data && data.current) || {};
+        var gates = c.gates || {};
+        var h = '';
+        h += aptBlock('dep', c.origin, c.origin_name || c.origin_city,
+                      c.dep_line, gates.origin_gate);
+        if (c.block_time || c.route_nm) {
+          h += '<div class="aptblock-mid"><span class="aptblock-mid-text">' +
+               esc(c.block_time || '') +
+               (c.block_time && c.route_nm ? ' &middot; ' : '') +
+               (c.route_nm ? esc(c.route_nm) + ' nm' : '') +
+               '</span></div>';
+        }
+        h += aptBlock('arr', c.destination, c.dest_name || c.dest_city,
+                      c.arr_line, gates.dest_gate);
+
+        var lat1 = panel.getAttribute('data-lat1'), lon1 = panel.getAttribute('data-lon1');
+        var lat2 = panel.getAttribute('data-lat2'), lon2 = panel.getAttribute('data-lon2');
+        if (lat1 && lat2) {
+          h += '<div class="cal-map" data-cal-map></div>';
+        } else {
+          // Says WHY rather than leaving a gap. An airport this app has no
+          // coordinates for is a real and visible thing on an obscure
+          // outstation, and a blank space reads as a broken map.
+          h += '<div class="cal-map-missing">No position for this route</div>';
+        }
+
+        if (c.arrival_source_text) {
+          h += '<div class="aptblock-meta"><div class="detail-row">' +
+               '<span class="k">Arrival time from</span>' +
+               '<span class="v">' + esc(c.arrival_source_text) + '</span>' +
+               '</div></div>';
+        }
+        panel.innerHTML = h;
+      }
+
+      function buildMap(panel) {
+        var el = panel.querySelector('[data-cal-map]');
+        if (!el || typeof L === 'undefined') return;
+        var a = [parseFloat(panel.getAttribute('data-lat1')),
+                 parseFloat(panel.getAttribute('data-lon1'))];
+        var b = [parseFloat(panel.getAttribute('data-lat2')),
+                 parseFloat(panel.getAttribute('data-lon2'))];
+        if (!isFinite(a[0]) || !isFinite(b[0])) return;
+
+        // A THUMBNAIL, NOT A MAP YOU DRIVE. Every interaction is off:
+        // a draggable map inside a scrolling page swallows the scroll
+        // meant for the page, which is the exact bug 1.10.2 and 1.12.0
+        // were spent on. There is a full map on the tracker for anyone
+        // who wants to move one.
+        var map = L.map(el, {
+          dragging: false, touchZoom: false, scrollWheelZoom: false,
+          doubleClickZoom: false, boxZoom: false, keyboard: false,
+          zoomControl: false, attributionControl: false
+        });
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/' + tileTheme() + '/{z}/{x}/{y}{r}.png',
+                    { maxZoom: 18 }).addTo(map);
+        L.polyline([a, b], { color: '#3b82f6', weight: 3, opacity: 0.9 }).addTo(map);
+        [a, b].forEach(function(p) {
+          L.circleMarker(p, { radius: 4, color: '#3b82f6', fillColor: '#fff',
+                              fillOpacity: 1, weight: 2 }).addTo(map);
+        });
+        map.fitBounds(L.latLngBounds([a, b]).pad(0.35));
+        // Leaflet measures on creation, and the container was display:none
+        // one frame ago. Without this it renders a single tile in the
+        // corner — the same 0x0 trap the tracker guards against.
+        setTimeout(function() { map.invalidateSize(); }, 60);
+        openMap = map;
+      }
+
+      function closeOpen() {
+        if (openMap) { openMap.remove(); openMap = null; }
+        if (openRow) {
+          var p = openRow.querySelector('.cal-detail');
+          var btn = openRow.querySelector('[data-leg-toggle]');
+          if (p) p.hidden = true;
+          if (btn) btn.setAttribute('aria-expanded', 'false');
+          openRow.classList.remove('open');
+          openRow = null;
+        }
+      }
+
+      document.addEventListener('click', function(ev) {
+        var btn = ev.target.closest ? ev.target.closest('[data-leg-toggle]') : null;
+        if (!btn) return;
+        var row = btn.closest('[data-leg-row]');
+        var panel = row.querySelector('.cal-detail');
+        if (!panel) return;
+
+        if (row === openRow) { closeOpen(); return; }
+        closeOpen();
+
+        openRow = row;
+        row.classList.add('open');
+        btn.setAttribute('aria-expanded', 'true');
+        panel.hidden = false;
+
+        if (panel.getAttribute('data-loaded') === '1') {
+          buildMap(panel);
+          return;
+        }
+        panel.innerHTML = '<div class="cal-detail-loading">Loading&hellip;</div>';
+        fetch('/api/v1/leg/' + encodeURIComponent(btn.getAttribute('data-leg-id')),
+              { headers: { 'Accept': 'application/json' } })
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            // A row the user has already closed must not paint itself back
+            // in when its response lands.
+            if (openRow !== row) return;
+            if (!data || data.error) {
+              panel.innerHTML = '<div class="cal-detail-error">Could not load this flight.</div>';
+              return;
+            }
+            render(panel, data);
+            panel.setAttribute('data-loaded', '1');
+            buildMap(panel);
+          })
+          .catch(function() {
+            if (openRow !== row) return;
+            panel.innerHTML = '<div class="cal-detail-error">Could not load this flight.</div>';
+          });
+      });
+    })();
+  </script>
 {% include "partials/sw_register.html" %}
 </body>
 </html>

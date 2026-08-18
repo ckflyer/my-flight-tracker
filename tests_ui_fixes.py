@@ -808,14 +808,42 @@ def test_viewer_theme_is_consistent_across_pages():
     check("the clock format follows the same path",
           _vdo(_Req({"pt_viewer_tf": "12"}), None, base)["time_format"] == "12")
 
-    # Every page a viewer can reach must go through the one helper.
+    # EVERY PAGE A VIEWER CAN REACH GOES THROUGH THE ONE HELPER, AND
+    # RESOLVES IT BEFORE FORMATTING ANYTHING.
+    #
+    # This used to look for the helper's name near the render call, which
+    # the calendar satisfied while still being wrong: it applied the
+    # override on the way OUT, to hand the template a theme, after every
+    # time on the page had already been formatted from the PILOT's
+    # time_format. A viewer on a 12-hour clock got a light calendar full
+    # of 24-hour times. The check now asks the question that catches
+    # that — is the pilot's raw setting used ANYWHERE in the route.
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, "app", "main.py"), encoding="utf-8") as fh:
         src = fh.read()
-    cal = src[src.index("calendar.html"):]
-    cal = cal[:cal.index(")))") + 3] if ")))" in cal[:800] else cal[:800]
-    check("the calendar applies viewer overrides",
-          "viewer_display_overrides" in cal)
+
+    for marker, end, name in (
+            ("async def calendar_page", 'jinja_env.get_template("calendar.html")', "calendar"),
+            ("async def viewer_page", 'jinja_env.get_template("viewer.html")', "tracker")):
+        if marker not in src:
+            continue
+        body = src[src.index(marker):]
+        body = body[:body.index(end)] if end in body else body[:6000]
+        check(f"the {name} resolves viewer overrides",
+              "viewer_display_overrides" in body)
+        # CODE ONLY. A comment recording what the bug WAS must not read as
+        # the bug still being there — otherwise documenting a fix is what
+        # breaks the test that proves it, and the note gets deleted to get
+        # to green. Same rule as code_only() in the strip tests.
+        body = re.sub(r"#.*$", "", body, flags=re.M)
+        body = re.sub(r'"""(.*?)"""', "", body, flags=re.S)
+        # The raw pilot setting must not survive alongside the override.
+        # Reading it is how the two fell out of step.
+        check(f"...and the {name} never formats from the pilot's clock",
+              "settings.time_format" not in body,
+              "settings.time_format still read")
+        check(f"...nor paints from the pilot's theme",
+              "settings.theme" not in body, "settings.theme still read")
 
 
 def test_detail_panel_replaces_the_hero_card():
@@ -829,11 +857,12 @@ def test_detail_panel_replaces_the_hero_card():
     resize, rotation, every ResizeObserver tick and every open and close.
 
     The panel is fixed to the bottom of the screen and moved with a
-    transform. It cannot outgrow the screen because max-height says so; it
-    cannot disturb the map because it shares no coordinate system with it;
-    its bottom edge cannot drift because it is bottom: 0. The bugs those
-    tests were written after are not fixed so much as made unreachable, so
-    the tests are replaced rather than adapted.
+    transform. It cannot outgrow the screen because its height is the
+    sheet's height; it cannot disturb the map because it shares no
+    coordinate system with it; its bottom edge cannot drift because it is
+    bottom: 0. The bugs those tests were written after are not fixed so
+    much as made unreachable, so the tests are replaced rather than
+    adapted.
     """
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, "templates", "viewer.html"), encoding="utf-8") as fh:
@@ -841,7 +870,18 @@ def test_detail_panel_replaces_the_hero_card():
     css_block = html.split(".detail-panel {", 1)[1].split("}", 1)[0]
 
     check("the panel is fixed to the bottom", "bottom: 0" in css_block, css_block)
-    check("...and cannot outgrow the screen", "max-height: 92vh" in css_block, css_block)
+    # THE PANEL IS THE SHEET'S HEIGHT, NOT ITS CONTENT'S (1.17.0). It
+    # carried max-height and no height, so it sized to whatever was in it:
+    # a leg with a gate, a closeout and live ADS-B came up nearly full
+    # screen, and the same leg before pushback came up a couple of inches.
+    # Same tap, two different windows. Tying it to the sheet means opening
+    # a flight and closing it again moves nothing on screen.
+    check("...and stands exactly as tall as the list it covers",
+          "height: var(--sheet-peek)" in css_block, css_block)
+    check("...so it cannot size itself to its contents",
+          "max-height" not in css_block, css_block)
+    check("...and scrolls inside when the content is longer",
+          "overflow-y: auto" in css_block, css_block)
     # transform, not height. Every height-driven animation in this file has
     # cost a bug, twice over the same one.
     check("it slides on a transform, not a height",
@@ -1668,6 +1708,222 @@ def test_a_finished_trip_holds_the_tracker_for_ten_hours():
           tracker_anchor(CurrentFlightInfo(), soon) is None)
 
 
+def test_the_calendar_draws_flights_with_the_shared_strip(uid):
+    """The last page still drawing its own flight row. (1.18.0)
+
+    Invariant 25 named three surfaces that had each grown their own
+    markup for "flight number, city pair, two times". The tracker card
+    and the tracker list were converted in 1.9.0; the calendar agenda was
+    not, and kept a bespoke `.agenda-leg` with its own arrow, its own
+    times and NO delay state at all — so a leg that went two hours late
+    read here exactly like one that ran to the minute.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "calendar.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    def code_only(text):
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+        text = re.sub(r"\{#.*?#\}", "", text, flags=re.S)
+        text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+        return re.sub(r"^\s*//.*$", "", text, flags=re.M)
+
+    code = code_only(html)
+    check("the calendar draws flights with the shared strip",
+          "fstrip fstrip--sm" in code)
+    check("...and the bespoke row is gone", ".agenda-leg-main" not in code)
+    # Same rule the viewer is held to: USING the class is the point,
+    # DECLARING it in a template is the regression. A CONTEXTUAL override
+    # — `.cal-leg-head > .fstrip`, the way `.fstrip-head .status` works —
+    # is explicitly allowed and stays with the surface that needs it. So
+    # the check is for a BARE `.fstrip {` at the head of a selector, not
+    # for the string appearing in one.
+    bare = re.search(r"(?:^|[,{}])\s*\.fstrip(--\w+)?\s*\{", code, re.M)
+    check("...without redeclaring the component", bare is None,
+          bare.group(0) if bare else "")
+    # The arrows must come from the two shared files even though the
+    # script builds its markup at runtime — an arrow character written
+    # into the JavaScript would be a third departure glyph.
+    check("the panel's glyphs come from the shared partials",
+          'partials/arrow_out.html' in code and 'partials/arrow_in.html' in code)
+
+    # Leaflet is DEFERRED here, unlike the tracker where the map is the
+    # page. Most visits to a month never open a leg.
+    check("leaflet does not block the month view",
+          'defer src="/static/vendor/leaflet/leaflet.js' in code)
+
+    # THE ROUTE MUST ACTUALLY PAY FOR THE HISTORY. The strip renders
+    # `leg.dep_line.state`, which is None unless the caller passed a bulk
+    # time index — so the markup above is decorative until this holds.
+    with open(os.path.join(here, "app", "main.py"), encoding="utf-8") as fh:
+        src = fh.read()
+    route = src[src.index("async def calendar_page"):src.index("template = jinja_env.get_template(\"calendar.html\")")]
+    check("the calendar builds a time index", "times_by_leg = time_index(user_id)" in route)
+    check("...and hands it to every agenda row", "times_by_leg)" in route)
+    check("...in ONE query for the month, not one per leg",
+          route.count("time_index(") == 1, str(route.count("time_index(")))
+
+    # END TO END on the data the strip reads: a late leg must produce a
+    # late STATE, or the row renders plain however good the markup is.
+    from app.flights import replace_schedule, write
+    day = date(2026, 5, 14)
+    legs = [leg("k1", day, "AA10", "DFW", "OKC", "07:00", "08:10")]
+    legs[0].trip_start = True
+    replace_schedule(uid, legs)
+    write("k1", always={
+        "out_actual_api": (legs[0].dep_datetime_utc() + timedelta(minutes=40)).isoformat(),
+        "in_actual_api": (legs[0].arr_datetime_utc() + timedelta(minutes=52)).isoformat(),
+    })
+    now = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+    row = app_main.leg_view(legs[0], now, "24", app_main.tag_index(uid),
+                            app_main.time_index(uid))
+    check("a late leg carries a late departure state",
+          row["dep_line"] and row["dep_line"]["state"] == "late", str(row["dep_line"]))
+    check("...and a late arrival state",
+          row["arr_line"] and row["arr_line"]["state"] == "late", str(row["arr_line"]))
+    check("...and the time it actually went, not the one it was given",
+          row["dep_line"]["was_short"] and
+          row["dep_line"]["time_short"] != row["dep_line"]["was_short"],
+          str(row["dep_line"]))
+
+
+def test_the_calendar_row_opens_one_at_a_time(uid):
+    """A month can hold sixty legs; it must not hold sixty maps. (1.18.0)"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "calendar.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    # The panel ships EMPTY. Rendering every leg's history and map
+    # container into the document would make a month enormous to answer a
+    # question about one flight.
+    check("detail panels ship empty and hidden",
+          re.search(r'class="cal-detail"[^>]*hidden[^>]*>\s*</div>', html) is not None)
+    check("...and are filled from the existing leg endpoint",
+          "/api/v1/leg/" in html)
+    # Opening a row must tear the previous map down, or they accumulate.
+    check("opening a row closes the one before it", "closeOpen()" in html)
+    check("...and removes its map", "openMap.remove()" in html)
+    # A thumbnail, not a map you drive: a draggable map inside a
+    # scrolling page swallows the page's scroll (1.10.2, 1.12.0).
+    for opt in ("dragging: false", "touchZoom: false", "scrollWheelZoom: false"):
+        check(f"the mini map sets {opt}", opt in html)
+    # A response landing after the user closed the row must not paint it
+    # back in.
+    check("a late response cannot reopen a closed row",
+          html.count("if (openRow !== row) return;") >= 2)
+
+    # The row is a real control, not a div with a handler.
+    check("the row is a button", "<button class=\"cal-leg-head\"" in html)
+    check("...that announces its state", 'aria-expanded="false"' in html)
+
+    # The endpoint it calls must answer for a PAST leg — the whole point
+    # of a history browser — and resolve_selected_leg is what decides
+    # that. It matches against info.all_legs, so any leg still inside
+    # retention resolves however old it is.
+    from app.flights import replace_schedule
+    from app.schedule import get_current_info
+    old = date(2026, 2, 3)
+    legs = [leg("h1", old, "AA77", "DFW", "SGF", "09:00", "10:20")]
+    legs[0].trip_start = True
+    replace_schedule(uid, legs)
+    now = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+    info = get_current_info(uid, now)
+    picked, _ = app_main.resolve_selected_leg(info, "h1", now)
+    check("an old leg still resolves months later", picked.id == "h1", str(picked))
+    view = app_main.leg_view(picked, now, "24", app_main.tag_index(uid))
+    check("...and carries the route facts the panel prints",
+          view["route_nm"] is not None and view["block_time"] is not None,
+          str((view["route_nm"], view["block_time"])))
+
+
+def test_a_closed_leg_settles_out_after_thirty_minutes():
+    """A flown leg leaves the list half an hour after it closes. (1.17.0)
+
+    Pass 3b. The list is about the trip you are ON; a four-leg day should
+    not end as four rows about the past and one about the present.
+    """
+    from app.main import settled_out, LEG_SETTLE
+
+    now = datetime(2026, 8, 21, 18, 0, tzinfo=timezone.utc)
+
+    def row(closed, closed_at=None):
+        return {"closed": 1 if closed else 0,
+                "closed_at": closed_at.isoformat() if closed_at else None}
+
+    # dict.keys() is what the real sqlite3.Row exposes, and settled_out
+    # probes with `in row.keys()` — so the fixture must answer the same
+    # way or the test proves nothing about the real path.
+    long_ago = now - LEG_SETTLE - timedelta(minutes=5)
+    just_now = now - timedelta(minutes=5)
+
+    times = {
+        "a": row(True, long_ago),    # closed and settled -> goes
+        "b": row(True, just_now),    # closed, still settling -> stays
+        "c": row(False),             # not closed -> stays
+        "d": row(True, None),        # closed with NO timestamp -> stays
+    }
+    drop = settled_out(["a", "b", "c", "d"], times, now)
+    check("a leg closed over thirty minutes ago leaves", "a" in drop, str(drop))
+    check("...one closed five minutes ago stays", "b" not in drop, str(drop))
+    check("...an open leg stays however old", "c" not in drop, str(drop))
+    check("...and a closeout with no timestamp never drops", "d" not in drop, str(drop))
+
+    # THE BOUNDARY. Exactly thirty minutes drops; a second under does not.
+    # TWO legs, not one: with a single leg the never-empty guard refuses
+    # the drop and the fixture would be testing that guard instead of the
+    # threshold it names. `keep` is a live leg, so it never drops itself.
+    def at(delta):
+        return settled_out(["x", "keep"],
+                           {"x": row(True, now - delta), "keep": row(False)}, now)
+    check("the rule fires exactly at the threshold", at(LEG_SETTLE) == {"x"})
+    check("...and not a second before",
+          at(LEG_SETTLE - timedelta(seconds=1)) == set())
+
+    # THE ONE THAT MATTERS. If every leg has settled, the list would empty
+    # itself and STAY empty for the rest of the ten-hour handover — the
+    # exact window in which someone opens the app to check he got in.
+    all_done = {"p": row(True, long_ago), "q": row(True, long_ago)}
+    drop = settled_out(["p", "q"], all_done, now)
+    check("the last leg of a finished trip never drops", "q" not in drop, str(drop))
+    check("...but the ones before it still do", "p" in drop, str(drop))
+
+    # Degrade safely: no times at all means drop nothing, never everything.
+    check("a missing time index drops nothing", settled_out(["a"], None, now) == set())
+    check("...and so does an empty one", settled_out(["a"], {}, now) == set())
+
+
+def test_the_settled_leg_rule_cannot_empty_the_tracker(uid):
+    """End to end: a fully-flown trip still renders. (1.17.0)
+
+    settled_out is unit-tested above; this checks the rule as the page
+    actually applies it, because the guard depends on the filter running
+    AFTER the trip window rather than before.
+    """
+    from app.main import build_flight_list, _assign_trip_day_numbers
+    from app.schedule import get_current_info
+    from app.flights import replace_schedule, write
+
+    day = date(2026, 3, 10)
+    legs = [leg("s1", day, "AA1", "DFW", "OKC", "08:00", "09:00"),
+            leg("s2", day, "AA2", "OKC", "DFW", "11:00", "12:00")]
+    legs[0].trip_start = True
+    replace_schedule(uid, legs)
+
+    # Both flown and closed well over the settle window.
+    closed_at = datetime(2026, 3, 10, 18, 0, tzinfo=timezone.utc)
+    for lid in ("s1", "s2"):
+        write(lid, always={"closed": 1, "closed_at": closed_at.isoformat()})
+
+    now = closed_at + timedelta(hours=2)
+    info = get_current_info(uid, now)
+    groups = build_flight_list(info, _assign_trip_day_numbers(info.all_legs), now,
+                               "24", app_main.tag_index(uid), {},
+                               app_main.time_index(uid))
+    shown = [r["id"] for g in groups for r in g["legs"]]
+    check("a wholly-settled trip still shows its last leg", shown == ["s2"], str(shown))
+    check("...and the tracker is never empty", len(shown) >= 1, str(shown))
+
+
 def test_the_card_and_the_list_agree_on_the_trip():
     """One anchor, two consumers. (1.16.0)
 
@@ -2010,6 +2266,10 @@ def main():
     test_fold_and_refit_machinery_is_gone()
     test_tracker_is_scoped_to_one_trip()
     test_a_finished_trip_holds_the_tracker_for_ten_hours()
+    test_the_calendar_draws_flights_with_the_shared_strip(create_user("caltest", "pw-not-used"))
+    test_the_calendar_row_opens_one_at_a_time(create_user("caltest2", "pw-not-used"))
+    test_a_closed_leg_settles_out_after_thirty_minutes()
+    test_the_settled_leg_rule_cannot_empty_the_tracker(create_user("settletest", "pw-not-used"))
     test_the_card_and_the_list_agree_on_the_trip()
     test_list_rows_carry_delay_state()
     test_strip_ends_cannot_overlap()

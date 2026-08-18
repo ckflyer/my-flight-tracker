@@ -279,6 +279,12 @@ def time_index(user_id: int) -> dict:
     flights table is wide, and a list row uses six timestamps and two
     flags. Legs with no flights record simply do not appear, and
     strip_lines treats a missing row as "nothing published yet".
+
+    `closed_at` rides along for the settle rule (see settled_out), not for
+    the strip. It is here rather than in its own query because this one
+    already visits the same rows for the same list, and a second SELECT to
+    fetch one more column off the same table is a round trip bought for
+    nothing.
     """
     from .db import get_connection
     conn = get_connection()
@@ -286,7 +292,7 @@ def time_index(user_id: int) -> dict:
         return {r["id"]: r for r in conn.execute(
             "SELECT f.id, f.out_actual_api, f.out_observed, f.out_estimated, "
             "       f.in_actual_api, f.in_observed, f.in_estimated, "
-            "       f.cancelled, f.closed "
+            "       f.cancelled, f.closed, f.closed_at "
             "FROM roster r JOIN flights f ON f.id = r.flight_id "
             "WHERE r.user_id = ?", (user_id,))}
     finally:
@@ -510,8 +516,10 @@ def leg_view(leg: Optional[FlightLeg], now: datetime, time_format: str = "24",
         "dest_city": di.city if di else leg.destination,
         # The strip's two times, WITH state, so a list row and the card
         # above it cannot disagree about whether a flight is late. Absent
-        # unless the caller supplied a bulk time index — the calendar and
-        # the import pages do not need them and should not pay for them.
+        # unless the caller supplied a bulk time index — the import pages
+        # do not need them and should not pay for them. The calendar DOES
+        # ask for them as of 1.18.0: it is the history browser, and
+        # without these it printed the schedule back at you.
         "dep_line": dep_line,
         "arr_line": arr_line,
         # The airport's own NAME, for the expanded view's per-airport
@@ -1071,6 +1079,63 @@ def compute_live_payload(user_id: int, selected_leg, is_selected_live: bool,
     return live, payload
 
 
+# How long a closed leg stays in the list after it closes out. Half an
+# hour is roughly the walk off the aeroplane and down the concourse: long
+# enough that someone who got the landing notification and reached for
+# their phone still finds the flight they came to look at, short enough
+# that a four-leg day does not end as four rows about the past and one
+# about the present.
+LEG_SETTLE = timedelta(minutes=30)
+
+
+def settled_out(leg_ids: list, times_by_leg: Optional[dict], now: datetime) -> set:
+    """Which legs have finished settling and should leave the list.
+
+    A leg drops LEG_SETTLE after its CLOSEOUT, not after its scheduled
+    arrival. Those are different instants and the difference is the whole
+    point: closeout is the app concluding the flight is genuinely over
+    (see CLOSURE), whereas a scheduled arrival is a guess that a two-hour
+    delay makes a lie. Dropping on the schedule would clear a leg off the
+    list while the aeroplane was still at altitude.
+
+    A leg with no closeout NEVER drops, however old. The absence of a
+    closeout means the app does not know how the flight ended, and
+    quietly removing it would present that as resolved.
+
+    THE LAST REMAINING LEG NEVER DROPS. If it did, the list would empty
+    itself thirty minutes after the final landing and stay empty for the
+    rest of the ten-hour handover — the exact window in which someone is
+    most likely to open the app to check he got in. This is why the
+    function takes the whole list rather than being asked leg by leg: "is
+    this one still needed" cannot be answered without knowing what else
+    is left, and a per-leg version of this rule would have emptied the
+    page.
+    """
+    if not times_by_leg:
+        return set()
+    drop = set()
+    for lid in leg_ids:
+        row = times_by_leg.get(lid)
+        if row is None or not row["closed"]:
+            continue
+        closed_at = _parse_iso(row["closed_at"] if "closed_at" in row.keys() else None)
+        if closed_at is None:
+            continue
+        # A stored timestamp with no zone is UTC — that is what closure.py
+        # writes. Comparing it to an aware `now` raises rather than
+        # returning False, so this cannot be left to chance.
+        if closed_at.tzinfo is None:
+            closed_at = closed_at.replace(tzinfo=ZoneInfo("UTC"))
+        if now - closed_at >= LEG_SETTLE:
+            drop.add(lid)
+    # Never empty the list. Give back the newest thing dropped rather than
+    # picking an arbitrary survivor, so what remains is the leg he most
+    # recently finished.
+    if drop and len(drop) == len(leg_ids):
+        drop.discard(leg_ids[-1])
+    return drop
+
+
 def build_flight_list(info, day_numbers: dict, now: datetime, time_format: str,
                       tags_by_leg, overnights: dict,
                       times_by_leg: Optional[dict] = None) -> list:
@@ -1111,6 +1176,14 @@ def build_flight_list(info, day_numbers: dict, now: datetime, time_format: str,
     if window is not None:
         ordered = [l for l in ordered if l.id in window]
 
+    # SETTLED LEGS LEAVE (1.17.0). Applied AFTER the trip window, not
+    # before, so "the last remaining leg" means the last one of this trip
+    # rather than the last on the roster. The live leg is never dropped
+    # because a live leg is not closed.
+    dropped = settled_out([l.id for l in ordered], times_by_leg, now)
+    if dropped:
+        ordered = [l for l in ordered if l.id not in dropped]
+
     groups = group_legs_by_day(ordered, day_numbers, now, time_format,
                                tags_by_leg, overnights, times_by_leg)
     for group in groups:
@@ -1144,23 +1217,14 @@ async def viewer(request: Request, leg: Optional[str] = None):
     settings = load_settings(user_id)
     info = get_current_info(user_id)
     now = datetime.now(ZoneInfo("UTC"))
-    tf = settings.time_format
-    display_theme = settings.theme
-    show_fa = settings.show_flightaware
-    show_fr24 = settings.show_fr24
-    if not pilot:
-        # Viewers can override display prefs for themselves via cookies set
-        # from /viewer-settings — never touches the pilot's actual account.
-        cookie_tf = request.cookies.get("pt_viewer_tf")
-        if cookie_tf in ("12", "24"):
-            tf = cookie_tf
-        cookie_theme = request.cookies.get("pt_viewer_theme")
-        if cookie_theme in ("dark", "light"):
-            display_theme = cookie_theme
-        if "pt_viewer_show_fa" in request.cookies:
-            show_fa = request.cookies.get("pt_viewer_show_fa") == "1"
-        if "pt_viewer_show_fr24" in request.cookies:
-            show_fr24 = request.cookies.get("pt_viewer_show_fr24") == "1"
+    # ONE PLACE, not a second copy of it (1.19.0). This block used to
+    # re-implement viewer_display_overrides inline, line for line —
+    # cookie names, valid values and all. Which is how the CALENDAR ended
+    # up honouring a viewer's theme and ignoring their clock: with the
+    # rule written out in two routes, fixing one did not fix the other,
+    # and the shared function existed the whole time.
+    display = viewer_display_overrides(request, pilot, settings.model_dump())
+    tf = display["time_format"]
 
     selected_leg, is_selected_live = resolve_selected_leg(info, leg, now)
     tags_by_leg = tag_index(user_id)
@@ -1169,10 +1233,7 @@ async def viewer(request: Request, leg: Optional[str] = None):
     live, extra = compute_live_payload(user_id, selected_leg, is_selected_live, now, settings.poll_seconds, tf)
     if selected:
         selected.update(extra)
-    settings_dict = settings.model_dump()
-    settings_dict["theme"] = display_theme
-    settings_dict["show_flightaware"] = show_fa
-    settings_dict["show_fr24"] = show_fr24
+    settings_dict = display
     day_numbers = _assign_trip_day_numbers(info.all_legs)
     # Over the WHOLE schedule, so a layover straddling the past/upcoming
     # split still gets a label. See overnight_index().
@@ -1290,6 +1351,20 @@ async def calendar_page(request: Request, month: Optional[str] = None):
         return RedirectResponse(url="/login", status_code=303)
 
     settings = load_settings(user_id)
+    # THE VIEWER'S OWN DISPLAY PREFERENCES, RESOLVED ONCE, BEFORE ANYTHING
+    # IS FORMATTED (1.19.0). This route already called
+    # viewer_display_overrides — but only on its way OUT, to hand the
+    # template a theme. Every time on the page had already been formatted
+    # from `settings.time_format`, which is the PILOT's. So a viewer who
+    # chose a 12-hour clock got a light calendar full of 24-hour times:
+    # their theme honoured, their clock ignored, on the same page.
+    #
+    # That is the exact failure viewer_display_overrides was written for
+    # in the first place — applied to the wrong half of the route. The
+    # override now happens before it can be read wrong, and the display
+    # settings are the ONLY ones used below.
+    display = viewer_display_overrides(request, pilot, settings.model_dump())
+    time_format = display["time_format"]
     now = datetime.now(ZoneInfo("UTC"))
     # An INSTANT is fine in UTC and compares correctly against anything.
     # A CALENDAR DAY is not: turning an instant into a date needs a zone,
@@ -1302,10 +1377,19 @@ async def calendar_page(request: Request, month: Optional[str] = None):
 
     legs = load_schedule(user_id)
     tags_by_leg = tag_index(user_id)
+    # THE CALENDAR NOW PAYS FOR THIS (1.18.0). It is the history browser,
+    # and history is exactly what these columns hold — what a leg actually
+    # did, as against what the bid line said it would. Without it the
+    # agenda printed the schedule back at you and a leg that went two
+    # hours late read identical to one that ran to the minute.
+    #
+    # ONE query for the whole month, not one per leg: see time_index. That
+    # is what makes it affordable here, where a month can hold sixty legs.
+    times_by_leg = time_index(user_id)
     by_date = {}
     for leg in legs:
         by_date.setdefault(leg.date, []).append(leg)
-    trips = build_trip_spans(legs, settings.time_format)
+    trips = build_trip_spans(legs, time_format)
 
     def trip_for_day(d):
         for trip in trips:
@@ -1384,7 +1468,9 @@ async def calendar_page(request: Request, month: Optional[str] = None):
                 "iso": d.isoformat(),
                 "label": d.strftime("%A, %B %d").replace(" 0", " "),
                 "is_today": d == today,
-                "legs": [leg_view(l, now, settings.time_format, tags_by_leg) for l in day_legs],
+                "legs": [leg_view(l, now, time_format, tags_by_leg,
+                                  times_by_leg)
+                         for l in day_legs],
                 "in_trip": trip is not None,
                 "trip_is_start": bool(trip and d == trip["start_date"]),
                 "trip_is_end": bool(trip and d == trip["end_date"]),
@@ -1412,7 +1498,7 @@ async def calendar_page(request: Request, month: Optional[str] = None):
         month_choices=[{"value": k,
                         "label": datetime.strptime(k, "%Y-%m").strftime("%B %Y")}
                        for k in reversed(available)],
-        settings=viewer_display_overrides(request, pilot, settings.model_dump()),
+        settings=display,
         is_pilot=pilot is not None,
     ))
 
@@ -1880,7 +1966,8 @@ async def admin_debug_clear(request: Request):
 
 
 @app.get("/flights", response_class=HTMLResponse)
-async def flights_page(request: Request, month: Optional[str] = None):
+async def flights_page(request: Request, month: Optional[str] = None,
+                       err: Optional[str] = None):
     """One pilot's SCHEDULE. Renamed from /admin in 1.7.0.
 
     The tab bar had called this page "Flights" since v7.5 while its URL
@@ -1959,6 +2046,12 @@ async def flights_page(request: Request, month: Optional[str] = None):
                             if active_month else None),
         active_tab="flights", is_admin=bool(pilot["is_admin"]), is_pilot=True,
         settings=settings.model_dump(), share_code=pilot["share_code"],
+        # A paste that parsed to nothing has always redirected here with
+        # ?err=parse, and this page has always ignored it — so the paste
+        # box emptied itself, the roster did not change, and NOTHING said
+        # why. Silence is the worst answer to "did that work", because
+        # the pilot's next move is to paste it again.
+        import_error=(err == "parse"),
     ))
 
 
@@ -2055,6 +2148,32 @@ async def admin_import_confirm(request: Request):
         # to prevent.
         remove_legs(pilot["id"], [r for r in removals if r in offered])
     return RedirectResponse(url="/flights", status_code=303)
+
+
+@app.post("/admin/import/confirm")
+async def admin_import_confirm_legacy(request: Request):
+    """Moved to /flights/import/confirm in 1.7.0. Kept as a redirect.
+
+    THIS WAS NOT KEPT AT THE TIME, and that is the whole bug. 1.7.0 split
+    /admin into /flights and /admin and moved every route with it, but
+    import_review.html's form action was left pointing at the old path.
+    The page rendered, the diff was correct, every leg was listed — and
+    Confirm & Import posted into a 404. What the pilot saw was FastAPI's
+    bare `{"detail":"Not Found"}`, which is not recognisable as a missing
+    route unless you already know what it is.
+
+    It survived nine releases because nothing exercised the button: the
+    tests rendered the review page and asserted on its markup, and the
+    confirm route was tested by calling it directly. Each half passed
+    while the join between them was broken. There is now a test that
+    posts to the action the TEMPLATE names rather than to the path the
+    test author remembers.
+
+    307, not 303: this is a POST carrying the entire parsed schedule, and
+    303 would turn it into a GET and silently drop every leg. That is a
+    worse failure than the 404, because it looks like it worked.
+    """
+    return RedirectResponse(url="/flights/import/confirm", status_code=307)
 
 
 @app.post("/flights/delete/{leg_id}")

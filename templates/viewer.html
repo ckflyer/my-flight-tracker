@@ -562,12 +562,27 @@
 
        Above the sheet (30), below nothing. It covers the sheet completely
        by design: the reference app does the same, and a half-covered list
-       behind a detail view is just something else to mis-tap. */
+       behind a detail view is just something else to mis-tap.
+
+       HEIGHT IS THE SHEET'S HEIGHT (1.17.0), not the content's. It used
+       to carry `max-height: 92vh` and no height at all, so it grew to fit
+       whatever was in it: a leg with a gate, a closeout and live ADS-B
+       came up nearly full screen, and the same leg before pushback — no
+       gate published, no position, no times — came up a couple of inches.
+       Same tap, same panel, two different windows, and the map jumped
+       behind it every time you moved between legs.
+
+       Tying it to --sheet-peek means opening a flight and closing it
+       again does not move a single pixel of the screen: the panel lands
+       exactly where the list was standing. Short content leaves space at
+       the bottom, which is the correct trade — a stable, predictable
+       surface beats one that snaps to its contents. Long content scrolls
+       inside, which it already did. */
     .detail-panel {
       position: fixed;
       left: 0; right: 0; bottom: 0;
       z-index: 40;
-      max-height: 92vh;
+      height: var(--sheet-peek);
       background: var(--card);
       border-radius: 18px 18px 0 0;
       box-shadow: 0 -10px 34px rgba(0,0,0,0.34);
@@ -966,7 +981,7 @@
               <div class="aptblock-when">
                 <span class="aptblock-time {{ current.arr_line.state if current.arr_line else '' }}" id="v-arr-time">{%- if current.arr_line %}{{ current.arr_line.time_short }}{% if current.arr_line.zone %}<span class="tz" aria-hidden="true">{{ current.arr_line.zone }}</span>{% endif %}{% endif %}</span>
                 <span class="aptblock-was" id="v-arr-was" style="{{ '' if (current.arr_line and current.arr_line.was_short) else 'display:none' }}">{%- if current.arr_line and current.arr_line.was_short %}{{ current.arr_line.was_short }}{% if current.arr_line.zone %}<span class="tz" aria-hidden="true">{{ current.arr_line.zone }}</span>{% endif %}{% endif %}</span>
-                <div class="aptblock-note {{ current.arr_line.state if current.arr_line else '' }}" id="v-arr-note" style="{{ '' if (current.arr_line and current.arr_line.note) else 'display:none' }}">{{ current.arr_line.note if current.arr_line else '' }}</div>
+                <div class="aptblock-note {{ current.arr_line.state if current.arr_line else '' }}" id="v-arr-note" style="{{ '' if (current.arr_line and current.arr_line.note) else 'display:none' }}">{{ (current.arr_line.note if current.arr_line else '') or '' }}</div>
               </div>
               <div class="aptblock-facts">
                 <span class="aptblock-badge" id="v-arr-gate" style="{{ '' if (current.gates and current.gates.dest_gate) else 'display:none' }}">{% include "partials/arrow_in.html" %}<span id="v-arr-gate-text">{{ current.gates.dest_gate if current.gates else '' }}</span></span>
