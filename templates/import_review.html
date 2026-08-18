@@ -90,6 +90,44 @@
     .sec-changed .sign { color: var(--warn, #f59e0b); }
     .sec-removed .diff-row { border-left-color: var(--danger, #ef4444); }
     .sec-removed .sign { color: var(--danger, #ef4444); }
+    /* Deliberately NOT the danger colour. Nothing in this section happens
+       unless the pilot ticks it, and painting it red would make the
+       ordinary case — pasting one trip, which says nothing about the rest
+       of the month — look like a threat every single time. */
+    .sec-flown .diff-row { border-left-color: var(--muted); }
+    .sec-flown .diff-head { color: var(--muted); }
+    .flown-actions { display: flex; align-items: center; gap: 0.5rem; margin: 0.15rem 0 0.6rem; }
+    .flown-actions button {
+      font: inherit; font-size: 0.78rem; padding: 0.3rem 0.65rem;
+      border-radius: 999px; border: 1px solid var(--border);
+      background: var(--input-bg); color: var(--text); cursor: pointer;
+      min-height: 32px;
+    }
+    .flown-count { font-size: 0.78rem; color: var(--muted); }
+    .flown-item { display: flex; align-items: flex-start; gap: 0.5rem; }
+    .flown-item .body { flex: 1 1 auto; min-width: 0; }
+    /* The checkbox stays in the tab order and on the accessibility tree —
+       display:none would remove it from both and leave the X, which is a
+       <button> with no state, as the only way in. */
+    .flown-check {
+      position: absolute; width: 1px; height: 1px;
+      margin: -1px; padding: 0; overflow: hidden;
+      clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+    }
+    .flown-x {
+      flex: 0 0 auto; width: 30px; height: 30px; line-height: 1;
+      border-radius: 8px; border: 1px solid var(--border);
+      background: none; color: var(--muted); font-size: 1.05rem;
+      cursor: pointer;
+    }
+    /* Marked rows are struck through and stay ON THE PAGE, same as a
+       dropped leg above: "I marked that" must not look like "the parser
+       missed it". */
+    .flown-item.marked { opacity: 0.55; }
+    .flown-item.marked strong, .flown-item.marked .meta { text-decoration: line-through; }
+    .flown-item.marked .flown-x {
+      color: var(--danger, #ef4444); border-color: var(--danger, #ef4444);
+    }
     .diff-row label { display: flex; gap: 0.55rem; align-items: flex-start; cursor: pointer; width: 100%; }
     .diff-row input[type="checkbox"] { margin-top: 0.2rem; flex-shrink: 0; width: 18px; height: 18px; }
     .scope {
@@ -184,7 +222,66 @@
     </div>
     {% endif %}
 
-    {% if not added and not changed and not removed %}
+    {% if removed_flown %}
+    {# FLOWN LEGS THIS PASTE DOES NOT MENTION (1.20.0, reworked 1.21.0).
+
+       The paste is the authority on what was yours, so if a trip came off
+       your line and somebody else flew it, this is where you say so. The
+       old rule — "already flown, never removable" — gave you no way to.
+
+       NOTHING HERE IS PRE-SELECTED, and that is the whole safety
+       mechanism, not a style choice. The help text invites pasting "one
+       trip or all of them", so a single-trip paste routinely says nothing
+       about the rest of the month. Pre-selecting these would make the
+       ordinary act of importing one trip delete a month of logbook by
+       default. Upcoming legs above ARE pre-selected, because there the
+       paste positively contradicts them.
+
+       The X is the same control as on the legs being imported, doing the
+       same thing in the same direction: it marks a row for exclusion and
+       is reversible without re-pasting. It works by toggling the
+       CHECKBOX, so the form still submits exactly what it always did —
+       there is no second removal mechanism to keep in step with the
+       first. #}
+    <div class="diff-sec sec-flown">
+      <div class="diff-head">
+        Already flown &mdash; not in this paste <span class="n">{{ removed_flown|length }}</span>
+      </div>
+      <p class="sub">
+        Did you fly these? This paste covers {{ scope_label }} but does not
+        mention them &mdash; which is normal if you pasted a single trip.
+        <strong>Nothing here is removed unless you mark it.</strong>
+        Mark a flight only if you did not fly it.
+      </p>
+      <div class="flown-actions">
+        <button type="button" class="flown-all" data-flown-all>Remove all</button>
+        <button type="button" class="flown-none" data-flown-none>Keep all</button>
+        <span class="flown-count" data-flown-count></span>
+      </div>
+      {% for r in removed_flown %}
+      <div class="diff-row flown-item">
+        <span class="body">
+          <strong>{{ r.callsign }}</strong>{% if r.is_deadhead %}<span class="dh">DH</span>{% endif %} {{ r.route }}
+          <span class="meta" style="display:block">{{ r.date_label }} &middot; {{ r.dep }} &ndash; {{ r.arr }}{% if r.same_zone and r.dep_zone %} <span class="tz" aria-hidden="true">{{ r.dep_zone }}</span>{% elif r.dep_zone %} <span class="tz" aria-hidden="true">{{ r.dep_zone }}/{{ r.arr_zone }}</span>{% endif %}</span>
+        </span>
+        {# The checkbox is the actual form control and stays reachable by
+           keyboard and screen reader; the X drives it. Visually hidden
+           rather than display:none, which would take it out of the tab
+           order and off the accessibility tree entirely. #}
+        <label class="flown-check">
+          <input type="checkbox" name="remove_id" value="{{ r.id }}" data-flown-box>
+          <span>Remove {{ r.callsign }} on {{ r.date_label }}</span>
+        </label>
+        <button type="button" class="flown-x" data-flown-x
+                title="I did not fly this &mdash; remove it"
+                aria-label="Remove {{ r.callsign }} on {{ r.date_label }}">&times;</button>
+        <input type="hidden" name="removable_id" value="{{ r.id }}">
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if not added and not changed and not removed and not removed_flown %}
     <p class="nothing">Nothing would change — every flight in this paste is already on your schedule exactly as pasted.</p>
     {% endif %}
     {% if unchanged_count %}
@@ -321,6 +418,65 @@
         form.appendChild(input);
       });
     });
+
+    // FLOWN-LEG REMOVAL (1.21.0). Its OWN listener on the document, not a
+    // branch inside the break-list handler: those rows are not in the
+    // break list, so a click there never reaches it — which is exactly
+    // the bug the first version of this shipped with. Separate IIFE too,
+    // so if the drag-and-drop library above fails to load, the controls
+    // that delete data still work.
+    (function () {
+      function flownCount() {
+        var el = document.querySelector('[data-flown-count]');
+        if (!el) { return; }
+        var n = document.querySelectorAll('.flown-item [data-flown-box]:checked').length;
+        el.textContent = n ? (n + ' marked for removal') : 'None marked';
+      }
+
+      function mark(item, on) {
+        var box = item.querySelector('[data-flown-box]');
+        if (!box) { return; }
+        box.checked = on;
+        item.classList.toggle('marked', on);
+        var x = item.querySelector('[data-flown-x]');
+        if (x) {
+          x.innerHTML = on ? '\u21BB' : '\u00D7';
+          x.title = on ? 'Keep this flight after all'
+                       : 'I did not fly this \u2014 remove it';
+        }
+      }
+
+      document.addEventListener('click', function (e) {
+        var x = e.target.closest ? e.target.closest('[data-flown-x]') : null;
+        if (x) {
+          var item = x.closest('.flown-item');
+          mark(item, !item.querySelector('[data-flown-box]').checked);
+          flownCount();
+          return;
+        }
+        var bulk = e.target.closest
+          ? e.target.closest('[data-flown-all], [data-flown-none]') : null;
+        if (bulk) {
+          var on = bulk.hasAttribute('data-flown-all');
+          document.querySelectorAll('.flown-item').forEach(function (fi) {
+            mark(fi, on);
+          });
+          flownCount();
+        }
+      });
+
+      // The checkbox is still a real control for keyboard and screen
+      // reader users, so the row must follow it when it is driven
+      // directly rather than through the X.
+      document.addEventListener('change', function (e) {
+        if (e.target.hasAttribute && e.target.hasAttribute('data-flown-box')) {
+          mark(e.target.closest('.flown-item'), e.target.checked);
+          flownCount();
+        }
+      });
+
+      flownCount();
+    })();
   </script>
 {% include "partials/sw_register.html" %}
 </body>

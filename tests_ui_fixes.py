@@ -1130,8 +1130,17 @@ def test_flight_strip_is_one_component():
     # regression — that is how eleven copies of the palette happened. A
     # contextual override (.fstrip-head .status) is fine and stays with
     # the surface that needs it; a redeclared .fstrip or .fstrip--lg is not.
-    check("no template redeclares the strip or its sizes",
-          not re.search(r"\.fstrip(--\w+)?\s*\{", html_code))
+    #
+    # MATCHED AT THE HEAD OF A SELECTOR ONLY (1.19.0). This used to look
+    # for the string anywhere, which meant it did not enforce the rule
+    # above — it enforced a stricter one nobody agreed to, and would have
+    # rejected exactly the contextual override the comment permits. It
+    # passed only because viewer.html happened not to have one. The
+    # calendar grew one in 1.18.0 (`.cal-leg-head > .fstrip`) and tripped
+    # the identical check there, which is how this was found.
+    bare = re.search(r"(?:^|[,{}])\s*\.fstrip(--\w+)?\s*\{", html_code, re.M)
+    check("no template redeclares the strip or its sizes", bare is None,
+          bare.group(0) if bare else "")
     # If a size modifier ever has to restate a layout rule rather than a
     # variable, the component has stopped being one component.
     for size in ("lg", "md", "sm"):
@@ -1422,12 +1431,22 @@ def test_arrival_source_is_in_english():
     so the page and the poll cannot word it differently.
     """
     from app.view import ARRIVAL_SOURCE_TEXT
-    check("airline reads as the airline",
-          ARRIVAL_SOURCE_TEXT["airline"] == "the airline")
-    check("observed reads as our own tracking",
-          ARRIVAL_SOURCE_TEXT["observed"] == "our own tracking")
-    check("estimated is admitted as an estimate",
-          ARRIVAL_SOURCE_TEXT["estimated"] == "an estimate")
+    # LABELS, NOT SENTENCE FRAGMENTS (1.20.0). These used to read "the
+    # airline" / "an estimate", which only worked while the sole place
+    # they appeared completed the phrase "Arrival time from ...". They
+    # are shown as a VALUE beside a key — in a two-column row on the
+    # tracker, and again in the calendar's history panel since 1.18.0 —
+    # where a lower-case fragment starting with "the" reads as a typo.
+    check("airline reads as a label",
+          ARRIVAL_SOURCE_TEXT["airline"] == "Airline")
+    check("observed still says whose tracking it is",
+          ARRIVAL_SOURCE_TEXT["observed"] == "Our own tracking")
+    check("estimated is still admitted as an estimate",
+          ARRIVAL_SOURCE_TEXT["estimated"] == "Estimate")
+    check("none of them is a sentence fragment",
+          all(v[:1].isupper() and not v.lower().startswith(("the ", "an ", "a "))
+              for v in ARRIVAL_SOURCE_TEXT.values()),
+          str(list(ARRIVAL_SOURCE_TEXT.values())))
     # The distinction is kept, not smoothed away: the logbook export (N3)
     # may use only airline-confirmed times, so the card must not present
     # the three as interchangeable.
@@ -1834,6 +1853,186 @@ def test_the_calendar_row_opens_one_at_a_time(uid):
     check("...and carries the route facts the panel prints",
           view["route_nm"] is not None and view["block_time"] is not None,
           str((view["route_nm"], view["block_time"])))
+
+
+def test_late_is_measured_from_the_airlines_own_schedule(uid):
+    """The FFDO is not a schedule once the leg is flown. (1.21.0)
+
+    The owner found this in real use: the FFDO RESTATES a flown leg at
+    the time it actually went. So a leg pushed at 12:35 against a 12:29
+    line comes back from a post-flight paste reading 12:35 — and if it
+    was not already on the roster when it flew, 12:35 goes in as its
+    scheduled time and the six minutes are gone for good. It reads on
+    time forever. Legs added mid-trip and imported afterwards hit this
+    every time.
+
+    `out_scheduled` is immune: enrichment.py writes it ONCE, the first
+    time AeroAPI sees the flight, and a delay moves `out_estimated` and
+    `out_actual_api` instead. It has been stored since 1.4.0 and nothing
+    ever read it back.
+    """
+    from app.flights import merge_schedule, write, get_flight
+    from app.view import strip_lines, build
+    from app import tags
+
+    d = date(2026, 7, 10)
+    # The paste already carries the ACTUAL time, which is the bug.
+    l = leg("sb1", d, "AA2673", "DFW", "OKC", "12:35", "13:40")
+    l.trip_start = True
+    merge_schedule(uid, [l])
+    sched = datetime(2026, 7, 10, 17, 29, tzinfo=timezone.utc)   # true 12:29
+    actual = datetime(2026, 7, 10, 17, 35, tzinfo=timezone.utc)  # went 12:35
+
+    # WITHOUT the API, nothing is invented: it falls back to the FFDO and
+    # says "scheduled", not "on time". Unreported is not on time.
+    dep, _ = strip_lines(l, get_flight("sb1"), tags.PHASE_ARRIVED, False, True, "24")
+    check("with no airline data it falls back to the pasted time",
+          dep["time_short"] == "12:35" and dep["state"] == "scheduled", str(dep))
+
+    write("sb1", always={"out_actual_api": actual.isoformat(),
+                         "out_scheduled": sched.isoformat()})
+    dep, _ = strip_lines(l, get_flight("sb1"), tags.PHASE_ARRIVED, False, True, "24")
+    check("the airline's own schedule recovers the lost six minutes",
+          dep["state"] == "late" and dep["minutes"] == 6, str(dep))
+    check("...and the row shows what it displaced",
+          dep["was_short"] == "12:29", str(dep))
+
+    # A DELAY MUST NOT MOVE THE BASELINE — the owner's question. It cannot:
+    # out_scheduled is in enrichment's `once` block, delays are `latest`.
+    write("sb1", always={"out_estimated": (sched + timedelta(minutes=90)).isoformat(),
+                         "out_actual_api": (sched + timedelta(minutes=90)).isoformat()})
+    row = get_flight("sb1")
+    check("a delay does not touch out_scheduled",
+          row["out_scheduled"] == sched.isoformat(), str(row["out_scheduled"]))
+    dep, _ = strip_lines(l, row, tags.PHASE_ARRIVED, False, True, "24")
+    check("...so a 90 minute delay reads as 90 minutes, not as a new schedule",
+          dep["minutes"] == 90 and dep["was_short"] == "12:29", str(dep))
+
+    # ONE BASELINE, TWO SURFACES. build() kept its own copy of this pair,
+    # so the card and the list could measure "late" from different times —
+    # the split strip_lines was extracted to close.
+    v = build(row, l, l.arr_datetime_utc(), "24")
+    check("the card agrees with the list",
+          v["dep_line"]["minutes"] == dep["minutes"] and
+          v["dep_line"]["was_short"] == dep["was_short"], str(v["dep_line"]))
+
+
+def test_flown_legs_are_removed_by_hand_never_by_default():
+    """Remove all, individual X, nothing pre-selected. (1.21.0)"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "import_review.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    # Sliced to the section's own closing tag, not to the first
+    # {% endif %} — that one belongs to the inline deadhead conditional
+    # INSIDE the first row, so the slice stopped before the X button and
+    # three assertions passed on an empty-ish string.
+    sec = html.split('class="diff-sec sec-flown"', 1)[1].split("</div>\n    {% endif %}", 1)[0]
+    # NOTHING PRE-SELECTED. This is the safety mechanism, not a style
+    # choice: pasting one trip says nothing about the rest of the month,
+    # so a pre-ticked list would delete a month of logbook by default.
+    check("no flown leg is pre-selected for removal", "checked" not in sec, sec[:200])
+    check("...while an upcoming leg still is",
+          "checked" in html.split('class="diff-sec sec-removed"', 1)[1][:900])
+    check("the section asks whether they were flown", "Did you fly these?" in sec)
+    check("there is a remove-all", "data-flown-all" in sec)
+    check("...and a way back", "data-flown-none" in sec)
+    check("each flight has its own X", "data-flown-x" in sec)
+
+    # ONE PIECE OF FORM STATE. The X drives the checkbox rather than
+    # replacing it, so there is no second removal mechanism to keep in
+    # step with the first.
+    check("the X drives the real checkbox", "data-flown-box" in sec)
+    check("...which is still the submitted control", 'name="remove_id"' in sec)
+    # Visually hidden, NOT display:none, which would take it out of the
+    # tab order and off the accessibility tree and leave the X — a button
+    # with no state — as the only way in.
+    css = html.split(".flown-check {", 1)[1].split("}", 1)[0]
+    check("the checkbox stays reachable by keyboard", "display: none" not in css, css)
+
+    # ITS OWN LISTENER ON THE DOCUMENT. The first version of this put the
+    # branch inside the break-list handler, where a click on a flown row
+    # never reaches it.
+    check("the handler is not trapped in the break-list listener",
+          "breakList.addEventListener" not in
+          html.split("FLOWN-LEG REMOVAL", 1)[1].split("})();", 1)[0])
+    check("a change on the checkbox itself still updates the row",
+          "addEventListener('change'" in html)
+
+
+def test_the_mini_map_says_whether_it_knows_the_path(uid):
+    """Solid means observed. Dashed means guessed. (1.20.0)
+
+    The mini map drew a straight solid line between the two airports in
+    every case. On a leg with a recorded track that threw the track away;
+    on a leg without one it stated a flight path the app never observed,
+    quietly turning "nothing was tracked" into "flew direct". Storing
+    positions for a year is only worth the rows if something reads them
+    back, and this is that something.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "calendar.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    check("the map reads the leg's recorded track", "data-track" in html)
+    check("...and dashes the line when there is none", "dashArray" in html)
+    # The dash must belong to the no-track branch. A dashArray applied to
+    # both would make the distinction decorative.
+    branch = html.split("if (track.length >= 2) {", 1)[1]
+    solid, dashed = branch.split("} else {", 1)
+    dashed = dashed.split("fitTo = [a, b];", 1)[0]
+    check("...the tracked path is NOT dashed", "dashArray" not in solid, solid[:160])
+    check("...and the untracked one is", "dashArray" in dashed, dashed[:160])
+    # Anchored to the airports, so a track that starts late still reads as
+    # a journey between two fields rather than a line in open country.
+    check("the flown path is anchored to both airports",
+          "[a].concat(track, [b])" in html)
+
+    # The endpoint the panel reads must actually carry the track for an
+    # OLD leg — the live payload hands back an empty breadcrumb for one
+    # that finished months ago, which is exactly what the calendar asks
+    # about.
+    from app.flights import merge_schedule
+    from app.track import record_position, get_breadcrumb
+    from app.schedule import get_current_info
+    day = date(2026, 4, 2)
+    legs = [leg("mm1", day, "AA55", "DFW", "OKC", "08:00", "09:00")]
+    legs[0].trip_start = True
+    merge_schedule(uid, legs)
+    base = datetime(2026, 4, 2, 13, 0, tzinfo=timezone.utc)
+    for i, (la, lo) in enumerate([(32.9, -97.0), (34.0, -97.4), (35.4, -97.6)]):
+        record_position("mm1", la, lo, base + timedelta(minutes=i * 10))
+    check("positions are recorded against the leg", len(get_breadcrumb("mm1")) == 3)
+    check("...and survive to be read back months later",
+          get_breadcrumb("mm1")[0] == [32.9, -97.0], str(get_breadcrumb("mm1")[:1]))
+
+
+def test_an_open_calendar_row_stops_repeating_itself():
+    """The strip's times give way to the panel's. (1.20.0)
+
+    On the tracker this never arises: the detail panel covers the list.
+    On the calendar the row stays on screen above its own expansion, so
+    the same two times were printed twice, three lines apart — once small
+    on the strip and once properly in .aptblock with what they displaced.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "calendar.html"), encoding="utf-8") as fh:
+        html = fh.read()
+    check("an open row hides the strip's times",
+          ".cal-leg.open .fstrip-ends { display: none; }" in html)
+    # The flight number and pills must NOT be hidden: they are the row's
+    # identity and are not restated in the panel below.
+    check("...but not the row's identity",
+          ".cal-leg.open .fstrip-head" not in html)
+
+    # The provenance row needs its own layout here. .detail-row is
+    # declared inside viewer.html's <style>, so on this page the key and
+    # value had none and printed as "Arrival time fromAirline".
+    check("the calendar lays out its own provenance row",
+          ".cal-detail .detail-row {" in html)
+    check("...as two columns, not one run-on string",
+          "justify-content: space-between" in
+          html.split(".cal-detail .detail-row {", 1)[1].split("}", 1)[0])
 
 
 def test_a_closed_leg_settles_out_after_thirty_minutes():
@@ -2268,6 +2467,10 @@ def main():
     test_a_finished_trip_holds_the_tracker_for_ten_hours()
     test_the_calendar_draws_flights_with_the_shared_strip(create_user("caltest", "pw-not-used"))
     test_the_calendar_row_opens_one_at_a_time(create_user("caltest2", "pw-not-used"))
+    test_late_is_measured_from_the_airlines_own_schedule(create_user("sbtest", "pw-not-used"))
+    test_flown_legs_are_removed_by_hand_never_by_default()
+    test_the_mini_map_says_whether_it_knows_the_path(create_user("mmtest", "pw-not-used"))
+    test_an_open_calendar_row_stops_repeating_itself()
     test_a_closed_leg_settles_out_after_thirty_minutes()
     test_the_settled_leg_rule_cannot_empty_the_tracker(create_user("settletest", "pw-not-used"))
     test_the_card_and_the_list_agree_on_the_trip()

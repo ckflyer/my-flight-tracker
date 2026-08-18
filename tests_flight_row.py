@@ -146,10 +146,20 @@ write(LEG.id, always={"out_estimated": DEP.isoformat()})
 status, _, _ = tags.compute_status(get_flight(LEG.id), LEG, DEP)
 check("pulling the time back clears the pill (status moves both ways)", status is None)
 
-# Out 12 min late, but the airline never moved anything.
+# Out 12 min late, but the airline never moved anything: no revision to
+# `out_estimated`, so no pill — while the note stays honest about the clock.
+#
+# FIXTURE CORRECTED (1.21.0). It used to set `out_scheduled` to the ACTUAL
+# time as well, which the lateness note ignored while it measured against
+# the FFDO. The note now prefers the airline's published time (see
+# view._baseline), so that fixture asserts two things that cannot both be
+# true: the airline planned this flight for 12:12 AND it went 12 minutes
+# late. `out_scheduled` is a snapshot of the ORIGINAL published time —
+# enrichment.py writes it once and never again, and a delay moves
+# `out_estimated`, not this — so the realistic value is the original.
 write(LEG.id, always={"out_estimated": None,
                            "out_actual_api": (DEP + timedelta(minutes=12)).isoformat(),
-                           "out_scheduled": (DEP + timedelta(minutes=12)).isoformat()})
+                           "out_scheduled": DEP.isoformat()})
 status, _, _ = tags.compute_status(get_flight(LEG.id), LEG, DEP)
 check("out 12 min late with no airline push shows no Delayed pill", status is None)
 v = build(get_flight(LEG.id), LEG, ARR, "24")
@@ -291,12 +301,36 @@ check("the FO sees the leg on his schedule",
       LEG.id in {l.id for l in load_schedule(UID2)})
 
 # A deadhead for one pilot is a working leg for the other. Same aeroplane.
-dh = make_leg()
+# The flag lives on ROSTER, not on flights, which is the point here.
+#
+# ON A LEG NOT YET FLOWN. It used to use the shared fixture leg, which is
+# dated in the past — and since 1.22.0 a flown leg is frozen against
+# imports outright, flag included, so that version of this test was
+# asserting the per-person rule and the absence of the freeze at once.
+FUTURE_DH = date.today() + timedelta(days=30)
+dh_id = f"{FUTURE_DH.isoformat()}-3729-DFW-OKC"
+dh = make_leg(leg_id=dh_id, on=FUTURE_DH)
 dh.is_deadhead = True
-replace_schedule(UID2, [dh])
+plain = make_leg(leg_id=dh_id, on=FUTURE_DH)
+replace_schedule(UID, [LEG, plain])
+replace_schedule(UID2, [make_leg(), dh])
+def _dh_of(uid_):
+    return {l.id: l.is_deadhead for l in load_schedule(uid_)}.get(dh_id)
 check("deadheading is per-person, not per-flight",
-      [l.is_deadhead for l in load_schedule(UID2)] == [True]
-      and [l.is_deadhead for l in load_schedule(UID)][0] is False)
+      _dh_of(UID2) is True and _dh_of(UID) is False,
+      f"UID2={_dh_of(UID2)} UID={_dh_of(UID)}")
+
+# AND THE FREEZE (1.22.0). Re-importing a leg that has already been flown
+# changes nothing about it — not the times, not this flag. The import
+# still decides WHETHER a flown leg is yours (the review page can remove
+# it); it has no say in what that leg WAS.
+before_flags = {l.id: l.is_deadhead for l in load_schedule(UID2)}
+flown_flipped = make_leg()
+flown_flipped.is_deadhead = not before_flags[LEG.id]
+replace_schedule(UID2, [flown_flipped, dh])
+check("a flown leg's deadhead flag is frozen against re-import",
+      {l.id: l.is_deadhead for l in load_schedule(UID2)}[LEG.id] == before_flags[LEG.id],
+      str({l.id: l.is_deadhead for l in load_schedule(UID2)}))
 
 # One pilot dropping the leg must not delete the other's flight.
 from app.flights import delete_leg                                   # noqa: E402

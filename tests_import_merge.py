@@ -134,11 +134,47 @@ check("the unchanged September leg is reported as unchanged",
 aug_paste = [leg(AUG_SOON, "3901", "DFW", "SGF")]
 d2 = build_diff(aug_paste, load_schedule(UID), NOW)
 rem = {e["leg"].flight_number for e in d2[REMOVED]}
-check("FUTURE ONLY: the upcoming August leg is proposed for removal",
+# THE IMPORT HAS THE FINAL SAY, BUT NEVER SILENTLY (owner's call, 1.20.0,
+# replacing "future only"). A flown leg the paste omits IS offered now —
+# the old rule left no way to say "that trip came off my line and someone
+# else flew it". What keeps it safe is the `flown` flag: the review page
+# ticks upcoming removals and leaves flown ones unticked, because pasting
+# a single trip routinely says nothing about the rest of the month.
+check("the upcoming August leg is proposed for removal",
       "3900" in rem, str(rem))
-check("...and the two already-flown August legs are not",
-      "3729" not in rem and "3566" not in rem, str(rem))
-check("...history is not revisable by a paste", len(rem) == 1, str(rem))
+check("...and so are the two already-flown ones",
+      "3729" in rem and "3566" in rem, str(rem))
+by_num = {e["leg"].flight_number: e for e in d2[REMOVED]}
+check("...but the flown ones are FLAGGED as flown",
+      by_num["3729"]["flown"] and by_num["3566"]["flown"])
+check("...and the upcoming one is not",
+      not by_num["3900"]["flown"])
+
+# A FLOWN LEG IS NEVER MODIFIED (owner's call, 1.20.0; made absolute in
+# 1.22.0). Not its times, not its deadhead flag, not its trip break. The
+# FFDO time is the SCHEDULE and a flown flight's schedule is set in stone;
+# what actually happened lives in the OOOI columns. Re-pasting a month
+# used to report every flown leg as "changed" because the airline's record
+# had settled to what occurred — noise on every re-import, describing an
+# edit the confirm step did not even make.
+#
+# 1.20.0 kept ONE exception, for the deadhead flag, on the strength of a
+# logbook that is no longer being built. The exception is gone: the diff
+# has to agree with what merge will do, and merge freezes flown legs
+# outright, so listing one as "changed" would promise an edit the confirm
+# step declines to make.
+flown_retimed = [leg(AUG_PAST, "3729", "DFW", "OKC", dep="09:31", arr="10:44")]
+flown_retimed[0].is_deadhead = not flown_retimed[0].is_deadhead
+d3 = build_diff(flown_retimed, load_schedule(UID), NOW)
+check("a flown leg with different pasted times is NOT reported as changed",
+      not any(e["leg"].flight_number == "3729" for e in d3[CHANGED]),
+      str([e["leg"].flight_number for e in d3[CHANGED]]))
+check("...it is reported as unchanged",
+      any(e["leg"].flight_number == "3729" for e in d3[UNCHANGED]),
+      str([e["leg"].flight_number for e in d3[UNCHANGED]]))
+check("...and a flipped deadhead flag does not change that either",
+      not any(e["leg"].flight_number == "3729" for e in d3[CHANGED]),
+      str([e["leg"].flight_number for e in d3[CHANGED]]))
 
 
 # ---------------------------------------------------------------------------

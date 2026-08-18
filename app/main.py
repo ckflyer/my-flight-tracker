@@ -778,6 +778,14 @@ def build_diff_rows(entries: list, time_format: str = "24") -> list:
             "arr_zone": tz_abbr(leg, "arr"),
             "same_zone": tz_abbr(leg, "dep") == tz_abbr(leg, "arr"),
             "is_deadhead": leg.is_deadhead,
+            # Whether this leg has already been flown. The review page
+            # holds flown removals back from the default tick (1.20.0) —
+            # see the removed section there for why that distinction is
+            # the whole safety mechanism.
+            "flown": bool(entry.get("flown")),
+            # A flown leg whose only difference is the deadhead flag. Its
+            # times are settled and are not being restated.
+            "dh_only": bool(entry.get("dh_only")),
             "was": None,
         }
         if was is not None:
@@ -2090,7 +2098,15 @@ async def admin_import(request: Request, text: str = Form(...)):
         scope_label=month_labels(months_covered(legs)),
         added=build_diff_rows(diff[ADDED], settings.time_format),
         changed=build_diff_rows(diff[CHANGED], settings.time_format),
-        removed=build_diff_rows(diff[REMOVED], settings.time_format),
+        # SPLIT, because they are two different statements. An upcoming
+        # leg missing from the paste is the paste CONTRADICTING it, and is
+        # ticked. A flown leg missing from the paste is the paste being
+        # SILENT about it — routine, since one trip can be pasted on its
+        # own — so it is offered unticked. See app/importer.py.
+        removed=[r for r in build_diff_rows(diff[REMOVED], settings.time_format)
+                 if not r["flown"]],
+        removed_flown=[r for r in build_diff_rows(diff[REMOVED], settings.time_format)
+                       if r["flown"]],
         unchanged_count=len(diff[UNCHANGED]),
     ))
 
@@ -2697,5 +2713,14 @@ async def api_leg(request: Request, leg_id: str):
         "is_selected_live": is_selected_live,
         "current_leg_id": info.current.id if info.current else None,
         "live": live,
+        # THE PATH IT ACTUALLY FLEW (1.20.0). Read straight from the
+        # positions table rather than out of the live payload, because
+        # that payload is about a flight in progress and hands back an
+        # empty breadcrumb for a leg that finished months ago — which is
+        # exactly the leg the calendar is asking about.
+        #
+        # Recording tracks for a year is only worth the rows if something
+        # reads them back. This is that something.
+        "breadcrumb": get_breadcrumb(selected_leg.id),
         "current": view,
     }

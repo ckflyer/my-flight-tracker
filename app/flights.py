@@ -53,6 +53,10 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 # ------------------------------------------------------------------ read
 def get_flight(leg_id: str):
     """The shared row. Takes no user_id — there is only one."""
@@ -245,10 +249,26 @@ def _upsert_leg(conn, user_id: int, leg: FlightLeg, now_iso: str) -> None:
     this user joins the existing row and immediately sees whatever has
     already been observed or paid for.
 
-    Schedule fields are written only when the flight is NEW. If another
-    pilot already created it, their FFDO times stand: they describe the
-    same aeroplane, and overwriting them on every import would let two bid
-    lines fight over one row.
+    Schedule fields are written when the flight is NEW, and RE-WRITTEN on
+    a re-import if the leg has not departed yet (1.20.0).
+
+    That second half is a fix, not a loosening. Before it, INSERT OR
+    IGNORE meant an existing flight's times could never change — so the
+    review page listed a retimed departure under "changed", the pilot
+    approved it, and nothing happened. The diff described an edit the
+    confirm step was incapable of making, which is the worst kind of
+    wrong: it looks like it worked.
+
+    Only the FUTURE is rewritten. A flown leg's scheduled times are
+    settled and an import must not restate them; what actually happened
+    lives in the OOOI columns and is untouched by any of this.
+
+    The row is shared, so a retime lands for every crew member on that
+    flight. That is right — it is one aeroplane and the airline moved it.
+    The old worry about "two bid lines fighting over one row" only bites
+    if two FFDOs disagree about the same future flight, in which case the
+    later paste winning is both self-correcting and the only rule that
+    can be stated simply.
     """
     fid = flight_key(leg.id)
     conn.execute(
@@ -259,13 +279,49 @@ def _upsert_leg(conn, user_id: int, leg: FlightLeg, now_iso: str) -> None:
          leg.destination, leg.dep_time_local.isoformat(),
          leg.arr_time_local.isoformat(), leg.operator_callsign, now_iso),
     )
-    conn.execute(
-        "INSERT INTO roster (user_id, flight_id, sort_index, is_deadhead, "
-        "trip_start, added_at) VALUES (?,?,0,?,?,?) "
-        "ON CONFLICT(user_id, flight_id) DO UPDATE SET "
-        "is_deadhead = excluded.is_deadhead, trip_start = excluded.trip_start",
-        (user_id, fid, int(leg.is_deadhead), int(leg.trip_start), now_iso),
-    )
+    # A FLOWN LEG IS NEVER MODIFIED BY AN IMPORT (1.22.0). One sentence,
+    # no exceptions, and it governs both statements below.
+    #
+    # 1.20.0 froze the TIMES and left `is_deadhead` and `trip_start` being
+    # overwritten on every re-import, so the rule was true of the fields
+    # anyone happened to look at and false in general. A rule with a
+    # carve-out is a rule you have to remember; this one you do not.
+    #
+    # The import still has the final say on WHETHER a flown leg is yours —
+    # the review page can remove it, which is the owner's case of a trip
+    # coming off the line and somebody else flying it. It has no say on
+    # what that leg WAS.
+    dep = leg.dep_datetime_utc()
+    flown = dep is None or dep <= _utc_now()
+
+    if not flown:
+        conn.execute(
+            "UPDATE flights SET dep_time_local = ?, arr_time_local = ? "
+            "WHERE id = ?",
+            (leg.dep_time_local.isoformat(), leg.arr_time_local.isoformat(),
+             fid),
+        )
+
+    if flown:
+        # DO NOTHING, not DO UPDATE. A flown leg that is already on the
+        # roster keeps exactly what it had. One that is NOT yet on it is
+        # still inserted with the paste's values — adding history is not
+        # rewriting it, and that INSERT is how a leg flown before the app
+        # knew about it gets recorded at all.
+        conn.execute(
+            "INSERT INTO roster (user_id, flight_id, sort_index, is_deadhead, "
+            "trip_start, added_at) VALUES (?,?,0,?,?,?) "
+            "ON CONFLICT(user_id, flight_id) DO NOTHING",
+            (user_id, fid, int(leg.is_deadhead), int(leg.trip_start), now_iso),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO roster (user_id, flight_id, sort_index, is_deadhead, "
+            "trip_start, added_at) VALUES (?,?,0,?,?,?) "
+            "ON CONFLICT(user_id, flight_id) DO UPDATE SET "
+            "is_deadhead = excluded.is_deadhead, trip_start = excluded.trip_start",
+            (user_id, fid, int(leg.is_deadhead), int(leg.trip_start), now_iso),
+        )
 
 
 def _resequence(conn, user_id: int) -> None:

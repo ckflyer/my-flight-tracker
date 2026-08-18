@@ -124,6 +124,15 @@
       transition: transform 200ms ease;
     }
     .cal-leg.open .cal-caret { transform: rotate(90deg); }
+    /* THE SUMMARY GIVES WAY TO THE DETAIL (1.20.0). The strip's small
+       codes-and-times row says the same thing the opened .aptblock says
+       properly, with the actual time, what it displaced and the gate. On
+       the tracker this never arises because the detail panel covers the
+       list; here the row stays on screen above its own expansion, so
+       without this the times are simply printed twice, three lines apart.
+       The flight number and status pills stay — those are the row's
+       identity and are not repeated below. */
+    .cal-leg.open .fstrip-ends { display: none; }
     @media (prefers-reduced-motion: reduce) { .cal-caret { transition: none; } }
 
     /* The panel. `hidden` does the hiding, so a row that never opens costs
@@ -149,6 +158,21 @@
       border-radius: 10px; overflow: hidden;
       border: 1px solid var(--map-border);
       background: var(--input-bg);
+    }
+    /* The provenance row inside an opened leg. .detail-row is declared in
+       viewer.html's own <style>, so on THIS page it had no layout and the
+       key ran straight into the value: "Arrival time fromthe airline".
+       Declared here rather than moved to app.css because the two pages
+       want different spacing around it; the shared rule would be one line
+       of flex serving neither well. */
+    .cal-detail .detail-row {
+      display: flex; justify-content: space-between; align-items: baseline;
+      gap: 0.75rem; padding: 0.35rem 0; font-size: 0.8125rem;
+    }
+    .cal-detail .detail-row .k { color: var(--muted); }
+    .cal-detail .detail-row .v { text-align: right; }
+    .cal-detail .aptblock-meta {
+      border-top: 1px solid var(--border); margin-top: 0.5rem; padding-top: 0.15rem;
     }
     .cal-map-missing {
       height: 150px; margin: 0.5rem 0 0.15rem;
@@ -325,10 +349,20 @@
         });
       }
 
-      // The tracker reads data-theme alone, so with no explicit choice it
-      // serves dark tiles to a light-mode phone. Here the OS preference is
-      // the fallback, which is what every other themed thing in this app
-      // already does. (Worth doing the same on the tracker.)
+      // Falls back to the OS preference when data-theme is absent.
+      //
+      // On THIS page that fallback cannot fire: settings.theme is always
+      // "dark" or "light" (settings.py defaults it, and the picker offers
+      // nothing else), so the attribute is always set. It is here because
+      // the pre-auth pages DO render without data-theme and rely on the
+      // `:root:not([data-theme])` block in app.css, and if a map ever
+      // appears on one of those this reads the same source the CSS does
+      // rather than silently serving dark tiles onto a light page.
+      //
+      // An earlier version of this comment claimed the tracker's
+      // equivalent line was buggy for reading data-theme alone. It is
+      // not, for the reason above, and the claim was made without
+      // checking. Left recorded so the "fix" is not attempted later.
       function tileTheme() {
         var t = document.documentElement.getAttribute('data-theme');
         if (t === 'light') return 'light_all';
@@ -391,6 +425,10 @@
         var lat1 = panel.getAttribute('data-lat1'), lon1 = panel.getAttribute('data-lon1');
         var lat2 = panel.getAttribute('data-lat2'), lon2 = panel.getAttribute('data-lon2');
         if (lat1 && lat2) {
+          // The track rides on the container, so buildMap does not need
+          // the response again when a cached row is re-opened.
+          var bc = (data && data.breadcrumb) || [];
+          panel.setAttribute('data-track', bc.length ? JSON.stringify(bc) : '');
           h += '<div class="cal-map" data-cal-map></div>';
         } else {
           // Says WHY rather than leaving a gap. An airport this app has no
@@ -429,12 +467,43 @@
         });
         L.tileLayer('https://{s}.basemaps.cartocdn.com/' + tileTheme() + '/{z}/{x}/{y}{r}.png',
                     { maxZoom: 18 }).addTo(map);
-        L.polyline([a, b], { color: '#3b82f6', weight: 3, opacity: 0.9 }).addTo(map);
+
+        // WHAT IT FLEW, OR WHAT IT WAS SUPPOSED TO (1.20.0).
+        //
+        // A solid line is a CLAIM: this is where the aeroplane went, from
+        // recorded positions. A dashed line is the absence of one — the
+        // two airports joined up, because nothing was tracked. Drawing
+        // the straight line solid in both cases, which is what this did
+        // first, states a flight path the app never observed and quietly
+        // turns "no data" into "flew direct".
+        //
+        // Same distinction the tracker draws for the same reason: dashed
+        // is the plan, solid is the fact.
+        var track = [];
+        try {
+          var raw = panel.getAttribute('data-track');
+          if (raw) track = JSON.parse(raw);
+        } catch (e) { track = []; }
+
+        var fitTo;
+        if (track.length >= 2) {
+          // Anchored to the two airports so a track that starts late or
+          // stops early still reads as a journey between them rather
+          // than a line beginning in open country.
+          var path = [a].concat(track, [b]);
+          L.polyline(path, { color: '#3b82f6', weight: 3, opacity: 0.95 }).addTo(map);
+          fitTo = path;
+        } else {
+          L.polyline([a, b], { color: '#3b82f6', weight: 2.5, opacity: 0.75,
+                               dashArray: '5 7' }).addTo(map);
+          fitTo = [a, b];
+        }
+
         [a, b].forEach(function(p) {
           L.circleMarker(p, { radius: 4, color: '#3b82f6', fillColor: '#fff',
                               fillOpacity: 1, weight: 2 }).addTo(map);
         });
-        map.fitBounds(L.latLngBounds([a, b]).pad(0.35));
+        map.fitBounds(L.latLngBounds(fitTo).pad(0.15));
         // Leaflet measures on creation, and the container was display:none
         // one frame ago. Without this it renders a single tile in the
         // corner — the same 0x0 trap the tracker guards against.

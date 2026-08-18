@@ -47,10 +47,16 @@ ON_TIME_TOLERANCE_MIN = 0
 # time the airline reported and a time this app inferred are different
 # kinds of claim, and the logbook export (N3) is allowed to use only the
 # first — so the card should not present them as interchangeable either.
+# Reads as a LABEL, not as the tail of a sentence (1.20.0). These used to
+# be sentence fragments — "the airline", "our own tracking" — because the
+# only place they appeared completed the phrase "Arrival time from ...".
+# They are now shown as a value beside a key, in a two-column row on the
+# tracker and again in the calendar's history panel, where a lower-case
+# fragment beginning with "the" reads as a mistake.
 ARRIVAL_SOURCE_TEXT = {
-    "airline": "the airline",
-    "observed": "our own tracking",
-    "estimated": "an estimate",
+    "airline": "Airline",
+    "observed": "Our own tracking",
+    "estimated": "Estimate",
 }
 
 
@@ -180,15 +186,47 @@ def _span(minutes: int) -> str:
     return f"{amount // 60}h {amount % 60:02d}m" if amount >= 60 else f"{amount} min"
 
 
+def _baseline(api_scheduled, ffdo_time):
+    """What "late" is measured FROM. (1.21.0)
+
+    The airline's own published time if we have it, the FFDO time if
+    not. That order is a correction, not a preference.
+
+    It used to be the FFDO always, on the reasoning that the pilot
+    flies his bid line and that is what late means to him. The
+    reasoning was sound and the premise was wrong: THE FFDO DOES NOT
+    STAY A SCHEDULE. Once a leg is flown, it restates that leg at the
+    time it actually went — so a leg pushed at 12:35 against a 12:29
+    line comes back from a post-flight paste reading 12:35, and if it
+    was not already on the roster when it flew, 12:35 is stored as
+    its scheduled time. The six minutes are then unrecoverable and
+    the leg reads on time forever. That is the case a mid-trip
+    schedule change produces every time: legs added while away,
+    imported after the fact.
+
+    `out_scheduled` cannot drift that way. enrichment.py snapshots it
+    the FIRST time AeroAPI sees the flight and never overwrites it —
+    it is in the `once` block, not `latest`. A DELAY does not touch
+    it: a delay moves `*_estimated` and eventually `*_actual_api`,
+    which are the other two arguments here. That is the whole point
+    of having stored it, and until now nothing read it back.
+
+    Falls back to the FFDO, so a leg the API has never seen — no key,
+    budget spent, deadhead on another carrier — behaves exactly as
+    before rather than losing its times.
+    """
+    return _parse(api_scheduled) or ffdo_time
+
+
 def _variance(baseline: Optional[datetime], actual, observed, estimate,
               tz_name: Optional[str], time_format: str,
               verb_future: str, verb_past: str,
               settled_override: Optional[bool] = None) -> Optional[Dict[str, Any]]:
     """The "12 min late" note, and which time to print.
 
-    `baseline` is the FFDO time — the pilot's own bid line, not the
-    airline's published schedule. Those differ by a couple of minutes
-    routinely, and he flies the bid line, so that is what late means here.
+    `baseline` is the ORIGINAL scheduled time — see `_baseline` in
+    strip_lines for which of the two available answers that is, and why
+    the FFDO on its own is no longer safe to trust for it.
 
     NOTE THIS IS NOT THE DELAYED PILL. The pill needs the airline to have
     actually pushed something (see tags.compute_status). This note is
@@ -334,22 +372,25 @@ def strip_lines(leg, row, phase_tag, cancelled, closed, time_format="24"):
     def _c(name):
         return _col(row, name) if row is not None else None
 
+    dep_base = _baseline(_c("out_scheduled"), leg.dep_datetime_utc())
+    arr_base = _baseline(_c("in_scheduled"), leg.arr_datetime_utc())
+
     departed = phase_tag in (tags.PHASE_IN_AIR, tags.PHASE_LANDING,
                              tags.PHASE_TAXI_IN, tags.PHASE_ARRIVED)
     dep_delay = _variance(
-        leg.dep_datetime_utc(), _c("out_actual_api"), _c("out_observed"),
+        dep_base, _c("out_actual_api"), _c("out_observed"),
         _c("out_estimated"), o_tz, time_format, "Departing", "Departed",
         settled_override=True if departed else None)
     arr_delay = _variance(
-        leg.arr_datetime_utc(), _c("in_actual_api"), _c("in_observed"),
+        arr_base, _c("in_actual_api"), _c("in_observed"),
         _c("in_estimated"), d_tz, time_format, "Arrives", "Arrived",
         settled_override=True if (phase_tag == tags.PHASE_ARRIVED or closed)
         else None)
     if cancelled:
         arr_delay = {"state": "cancelled", "minutes": 0, "settled": True,
                      "time": None, "original": None, "text": "Cancelled"}
-    return (_time_line(dep_delay, leg.dep_datetime_utc(), o_tz, time_format),
-            _time_line(arr_delay, leg.arr_datetime_utc(), d_tz, time_format))
+    return (_time_line(dep_delay, dep_base, o_tz, time_format),
+            _time_line(arr_delay, arr_base, d_tz, time_format))
 
 
 def build(row, leg, now: datetime, time_format: str = "24",
@@ -378,12 +419,18 @@ def build(row, leg, now: datetime, time_format: str = "24",
 
     departed_flag = phase_tag in (tags.PHASE_IN_AIR, tags.PHASE_LANDING,
                                   tags.PHASE_TAXI_IN, tags.PHASE_ARRIVED)
+    # SAME BASELINE AS THE LIST (1.21.0). build() kept its own copy of
+    # this pair, so before the helper existed the card and the row could
+    # measure "late" from two different times — which is the exact split
+    # strip_lines was extracted to close.
+    dep_base = _baseline(_col(row, "out_scheduled"), leg.dep_datetime_utc())
+    arr_base = _baseline(_col(row, "in_scheduled"), leg.arr_datetime_utc())
     dep_delay = _variance(
-        leg.dep_datetime_utc(), _col(row, "out_actual_api"), _col(row, "out_observed"),
+        dep_base, _col(row, "out_actual_api"), _col(row, "out_observed"),
         _col(row, "out_estimated"), o_tz, time_format, "Departing", "Departed",
         settled_override=True if departed_flag else None)
     arr_delay = _variance(
-        leg.arr_datetime_utc(), _col(row, "in_actual_api"), _col(row, "in_observed"),
+        arr_base, _col(row, "in_actual_api"), _col(row, "in_observed"),
         _col(row, "in_estimated"), d_tz, time_format, "Arrives", "Arrived",
         settled_override=True if phase_tag == tags.PHASE_ARRIVED or closed else None)
     if cancelled:
@@ -429,8 +476,8 @@ def build(row, leg, now: datetime, time_format: str = "24",
             "position_age_s": _col(row, "last_fix_age_s"),
         }
 
-    dep_line = _time_line(dep_delay, leg.dep_datetime_utc(), o_tz, time_format)
-    arr_line = _time_line(arr_delay, leg.arr_datetime_utc(), d_tz, time_format)
+    dep_line = _time_line(dep_delay, dep_base, o_tz, time_format)
+    arr_line = _time_line(arr_delay, arr_base, d_tz, time_format)
     if cancelled and arr_line:
         arr_line = dict(arr_line, note="cancelled", state="cancelled")
 

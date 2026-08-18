@@ -14,10 +14,32 @@ reasons:
   nothing whatever about August. Reconciling outside its own months would
   let a partial paste delete a whole month it never mentioned.
 
-  ONLY THE FUTURE IS RECONCILED. A re-paste is the pilot correcting what
-  is COMING. A leg that already departed happened, and an import must not
-  be able to revise history — that is the difference between a schedule
-  and a logbook.
+  THE IMPORT HAS THE FINAL SAY, BUT NEVER SILENTLY. (Owner's call,
+  1.20.0, replacing "only the future is reconciled".) The old rule said a
+  departed leg could never be removed by an import. The hole in it is the
+  one the owner found: if a trip is dropped from your line and you forget
+  to remove it, and somebody else flies it, the app has a flight you did
+  not fly and no way to say so. The paste is the authority on what was
+  yours.
+
+  So a flown leg the paste does not mention IS offered for removal — but
+  UNTICKED, in its own section, while an upcoming one stays ticked. That
+  distinction is the whole safety mechanism. The help text invites
+  pasting "one trip or all of them", so a one-trip paste routinely says
+  nothing about the rest of the month; if flown legs arrived pre-ticked,
+  the ordinary act of importing one trip would delete a month of logbook
+  by default. Ticked means "the paste positively contradicts this";
+  unticked means "the paste is silent, look at it yourself".
+
+  A FLOWN LEG IS NEVER MODIFIED. (Owner's call, 1.20.0; made absolute in
+  1.22.0.) Not its times, not its deadhead flag, not its trip break. The
+  FFDO time is the SCHEDULE, and the schedule for a flight that already
+  happened is set in stone. What actually happened is a different fact,
+  it lives in the OOOI columns, and it is not what a paste is talking
+  about. Re-pasting a month used to list every flown leg as "changed"
+  because the airline's record had settled to what actually occurred —
+  noise on every single re-import, describing a change the confirm step
+  did not even make.
 
   And nothing is applied silently. This module only DESCRIBES the change;
   `main.admin_import_confirm` applies whatever the pilot approves. The
@@ -66,9 +88,10 @@ def _departed(leg: FlightLeg, now: datetime) -> bool:
 
     Resolved through the airport's zone (models does this via
     timezones.py), never by comparing local clock times. On the rare leg
-    whose airport will not resolve, treat it as PAST — the safe direction,
-    because the consequence of being wrong is that an import declines to
-    delete something rather than deleting something it should not have.
+    whose airport will not resolve, treat it as PAST — still the safe
+    direction under the 1.20.0 rules: a leg wrongly called past keeps its
+    stored times and arrives UNTICKED, so the failure is that the pilot
+    is asked rather than that something is deleted or overwritten.
     """
     dep = leg.dep_datetime_utc()
     return True if dep is None else dep <= now
@@ -94,21 +117,35 @@ def build_diff(pasted: List[FlightLeg], current: List[FlightLeg],
         have = current_by_id.get(fid)
         if have is None:
             out[ADDED].append({"leg": leg})
+        elif _departed(have, now):
+            # FLOWN, so NOTHING about it changes — not the times, not the
+            # deadhead flag (1.22.0, simplified from 1.20.0, which made an
+            # exception for the flag on the strength of a logbook that is
+            # no longer being built).
+            #
+            # The diff has to agree with what the merge will actually do,
+            # and merge freezes flown legs outright. Listing a flown leg
+            # as "changed" would promise an edit the confirm step declines
+            # to make — the same false promise `INSERT OR IGNORE` was
+            # making before 1.20.0, reintroduced in a smaller place.
+            out[UNCHANGED].append({"leg": leg})
         elif _shape(have) != _shape(leg):
             out[CHANGED].append({"leg": leg, "was": have})
         else:
             out[UNCHANGED].append({"leg": leg})
 
-    # The two guards. A roster leg is only ever a candidate for removal if
-    # the paste covers its month AND it has not departed yet.
+    # SCOPE IS STILL THE MONTH. A paste says nothing about a month it does
+    # not mention, and reconciling outside its own months would let a
+    # partial paste delete a month it never referred to.
+    #
+    # Departed legs are now offered too, but flagged, so the page can hold
+    # them back from the default. See the docstring.
     for fid, leg in current_by_id.items():
         if fid in paste_by_id:
             continue
         if leg.date.strftime("%Y-%m") not in scope:
             continue          # different month; this paste says nothing
-        if _departed(leg, now):
-            continue          # already flown; history is not revisable
-        out[REMOVED].append({"leg": leg})
+        out[REMOVED].append({"leg": leg, "flown": _departed(leg, now)})
 
     for key in out:
         out[key].sort(key=lambda e: (e["leg"].date,

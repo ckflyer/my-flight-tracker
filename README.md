@@ -1,7 +1,7 @@
 # MyPilot
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.19.0.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.22.0.
 
 The version above was stale at 1.4.0 for five releases. `app/version.py`
 is the only authority; this line is a convenience and nothing reads it.
@@ -48,7 +48,7 @@ seriously.
 
 ## STATE
 
-**v1.19.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+**v1.22.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
 owner plus several FOs, who fly the same legs — hence shared flight rows
 (v5.1, retained).
 
@@ -59,22 +59,22 @@ if you are about to change the shared stylesheet, the tab bar, or the light
 theme, read the code, because this file cannot tell you why they are the way
 they are.
 
-**Current work: see `## NEXT UP`.** N1 is DONE (1.5.0). N2 (logbook) is
+**Current work: see `## NEXT UP`.** N1 is DONE (1.5.0). N4 (invites) is
 next and is now unblocked: flights accumulate, the roster is month-filtered
 and chronologically ordered, `in_actual_api` is chased rather than lost, and
-simulated legs are flagged so the logbook has something to exclude.
+simulated legs are flagged so nothing rehearsed is ever mistaken for flown.
 
 Not on any list, done along the way: test mode, a second admin, and the
 page split (1.6.0–1.7.0). All three came out of the same problem — the app
 could not be OPERATED without SSH, and bugs could not be reproduced without
 flying a trip.
 
-Tests: **1,983**, twelve suites, all passing.
+Tests: **2,017**, twelve suites, all passing.
 
 **Current work: the UI chunks (1.9.0 onward).** Five agreed steps, owner's
 brief, reworking the tracker and calendar around one flight-strip
 component modelled on a reference consumer app. This is NOT a detour
-around NEXT UP — N2 (logbook) still follows — but the tracker had grown
+around NEXT UP — N4 (invites) still follows — but the tracker had grown
 three different ways of drawing the same thing and the calendar had to
 become the history browser before past flights could leave the tracker.
 
@@ -103,20 +103,21 @@ TRACKER SHOWS.
 
 | Suite | N | Covers |
 |---|---|---|
-| `tests_flight_row.py` | 68 | write modes, both tag ladders, closure guards, shared crew, retention |
+| `tests_flight_row.py` | 69 | write modes, both tag ladders, closure guards, shared crew, retention |
 | `tests_poller_end_to_end.py` | 47 | full flight gate-to-gate, scripted ADS-B feed |
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, placeholder filter |
-| `tests_ui_fixes.py` | 578 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
+| `tests_ui_fixes.py` | 607 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
 | `tests_regression_matrix.py` | 761 | every page x 6 odd states x 2 themes x 2 clocks, pilot and viewer |
 | `tests_app_shell.py` | 198 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
 | `tests_timezones.py` | 68 | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
 | `tests_closeout_sweep.py` | 42 | the abandonment cliff, the on-ground handover, the late gate-in chase and its cap |
-| `tests_import_merge.py` | 39 | additive import, month scoping, future-only reconciliation, the diff, manual add |
-| `tests_test_mode.py` | 133 | simulator isolation (no spend, no ADS-B, no logbook), each scenario, admin promotion + password gate, the one-aeroplane rule |
+| `tests_import_merge.py` | 43 | additive import, month scoping, future-only reconciliation, the diff, manual add |
+| `tests_test_mode.py` | 133 | simulator isolation (no spend, no ADS-B, no real writes), each scenario, admin promotion + password gate, the one-aeroplane rule |
 
 ## OPEN
+
 
 - **AeroAPI field mapping verified only against a synthetic record.** Wiring
   confirmed end-to-end (gates, times, tail, Delayed pill all land). If
@@ -200,10 +201,20 @@ Verified in the v7.4 tree, listed here so nobody "fixes" them twice:
 
 ## NEXT UP — the agreed build order
 
-These five are COMMITTED, in this order, and the order is a dependency
-chain rather than a preference. Everything after N1 assumes flights
-accumulate instead of rolling over, so building any of N2–N5 first means
-building it twice.
+**SCOPE CUT, 1.22.0 (owner).** N2 (logbook view) and N3 (CSV export) are
+DROPPED, along with the pay calculator that was recorded against N3 in
+1.20.0. They are a different product: a legal-record/pay tool aimed at
+the pilot, bolted onto an app whose whole purpose is letting a family see
+where he is. Keeping them on the roadmap was quietly shaping decisions
+here — the deadhead carve-out in 1.20.0's import rules existed only to
+serve a logbook, and dropping it made the import rule a single sentence
+instead of a sentence with an exception.
+
+The retained numbering is deliberate: N4 and N5 keep their names so the
+version history above, which refers to them by number, stays readable.
+
+What remains is the dependency chain from N1: flights accumulate rather
+than rolling over, so N4 and N5 both assume it.
 
 This section is the working plan. P0/P1 below remain the standing backlog.
 
@@ -215,7 +226,7 @@ This section is the working plan. P0/P1 below remain the standing backlog.
 leg not present in the new paste has its roster row deleted. Pasting
 September therefore erases August from that pilot's view. Combined with the
 old 30-day retention this made the app a rolling window, which is exactly
-what a logbook cannot be.
+what a record cannot be.
 
 Note what is NOT broken: flight ROWS are shared and adopted, never
 duplicated (v5.1). Only the roster LINK is pruned. So this is a small
@@ -269,68 +280,6 @@ this the roster could not exceed about a month:
 
 ---
 
-### N2 — logbook view
-
-**Why it needs its own surface.** ~46 legs/month is ~550/year and ~2,750 in
-five years. A flat list dies well before that. The tracker must stay small
-FOREVER — its whole job is a family member opening it and instantly seeing
-where the pilot is. It shows current trip and next trip, and never becomes
-a history browser.
-
-**Blocked on nothing as of 1.7.0.** N1 gave it accumulation; the closeout
-sweep and gate-in chase gave it actual times worth exporting; `simulated`
-gives it the one flag it must filter on. See invariant 20 — a rehearsal in
-a logbook would be a fiction in a legal record.
-
-**Three views, ONE database.** (An earlier version of this discussion said
-"separate databases" — that was a misreading and would break the shared
-flight row design that keeps one AeroAPI query serving every crew member on
-a leg. One database, three ways of looking at it.)
-
-| View | Job | Scope |
-|---|---|---|
-| Tracker | where are they right now | current + next trip |
-| Calendar | browse by month | one month |
-| **Logbook** | the archive | everything, paged |
-
-**The change.** New pilot-only page. Paged (never render 2,750 rows),
-grouped by month, searchable by date range, tail, airport and flight
-number. Columns are the logbook fields: date, flight number, tail,
-origin/destination, OOOI, block, flight time.
-
----
-
-### N3 — CSV export
-
-**Everything actual, from the API.** Owner's call, and the right one. Each
-OOOI event is stored twice — `*_actual_api` (the airline's figure) and
-`*_observed` (what we watched). The export uses the API value. Where it is
-absent the row is INCOMPLETE, not filled in from observation: a logbook is
-a legal record and a derived time must never masquerade as a reported one.
-Carry a source column anyway so the distinction survives the export.
-
-**Deadheads excluded.** `roster.is_deadhead` already knows. You do not log
-a deadhead as flight time.
-
-**Leg verification before export.** The owner's refinement, and better than
-what was originally proposed. Legs must be CONFIRMED as flown before they
-can be exported. This is the mechanism that makes the diversion problem
-tractable: rather than the app inferring what happened, the pilot ticks off
-what actually did. It also bounds the AeroAPI backfill — only confirmed
-legs need their missing OOOI values fetched, so reconciliation cannot run
-away with the budget.
-
-**Format.** A plain spreadsheet. Good logbook apps accept an arbitrary CSV
-and let the user map columns, so a clean, well-named sheet beats guessing
-at one vendor's schema. Both UTC and local for every time, block AND flight
-time as separate columns.
-
-**Depends on 1.1.0/1.2.0.** These exports are built from resolved instants.
-Shipping this before the timezone work would have written hour-wrong OOOI
-times into a real pilot's logbook twice a year.
-
----
-
 ### N4 — per-viewer named invites
 
 **The problem.** One share code per pilot means the family is one
@@ -375,7 +324,7 @@ question well and the second one barely.
 **Template split happens here.** Pilot and viewer currently share
 `viewer.html` (2,333 lines) with `is_pilot` toggles. The owner's proposed
 trigger — split on whether the visitor is signed in as a pilot — is the
-right line, and N2 plus N5 make it unavoidable. Do the split as part of
+right line, and N5 makes it unavoidable. Do the split as part of
 N5, not before: splitting an unchanged file achieves nothing, and doing it
 alongside a behaviour change makes a regression impossible to attribute.
 
@@ -648,8 +597,8 @@ Listed so nobody "discovers" them as oversights:
 - **No push infrastructure.** The poller already knows the moments worth
   notifying (wheels-down, gate-in, delay published, diversion); nothing
   records them yet. ROADMAP P1-6.
-- **Leg confirmation does not exist yet.** The logbook export depends on a
-  pilot confirming which legs actually flew (NEXT UP / N3). Until that
+- **Leg confirmation does not exist yet.** Any future record-keeping would depend on a
+  pilot confirming which legs actually flew. Until that
   lands, nothing should export flight times anywhere.
 - **Migrations are column-level and idempotent, not numbered.**
   `SCHEMA_VERSION` makes numbering possible; nothing needs it yet. When a
@@ -822,7 +771,7 @@ Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
 20. **A simulated leg never spends, never asks ADS-B, and never counts.**
     `flights.simulated` is checked at the top of `enrichment.refresh` and
     `backfill_gate_in` before the API key is read, in `poller` before
-    `live_state`, and in the gate-in sweep's own SQL. Any logbook or export
+    `live_state`, and in the gate-in sweep's own SQL. Any export
     added later MUST filter it too. Beyond the money: a real flight
     somewhere may share an invented callsign, and one leak mixes invention
     with fact in a single row with no way to tell them apart afterwards.
@@ -1044,7 +993,7 @@ Attempts are recorded BEFORE the call goes out, the `carrier.py` lesson, so
 a timeout still counts. A silent airline costs exactly three queries no
 matter how many thousand sweeps run — under two cents, enforced by test.
 
-This matters more for the logbook (N2/N3) than for the tracker:
+This matters more for any future record-keeping than for the tracker:
 `in_actual_api` is what an export is allowed to use, because an observed
 time must never masquerade as a reported one in a legal record.
 
@@ -1263,7 +1212,7 @@ simulator that wrote `closed = 1` directly would prove nothing.
 |---|---|
 | Never spend | `flights.simulated = 1` checked at the top of `enrichment.refresh` AND `backfill_gate_in`, before the key is read |
 | Never ask ADS-B | `poller` routes a simulated leg to `simulator.state_for`, so the shared rate limiter is untouched |
-| Never count | excluded from the gate-in sweep; **must** be excluded from the logbook and any export (N2/N3) |
+| Never count | excluded from the gate-in sweep; **must** be excluded from any export |
 
 Beyond the money, the first rule matters because a real flight somewhere
 may share an invented callsign, and letting its data into a simulated row
@@ -1469,7 +1418,7 @@ no prize for using them.
 **One exception, added 1.5.0: the late gate-in chase.** The rule above is
 right for the LIVE allowance — once a leg is closed there is nothing left
 to watch. But it also meant `in_actual_api` could be permanently missing on
-any leg whose airline reported late, and that is the one figure a logbook
+any leg whose airline reported late, and that is the one figure a record
 export is allowed to use. So a closed leg that is still missing gate-in
 gets up to three attempts on a SEPARATE allowance (`gatein_tries`, not
 `api_queries_used`) at +90 min / +6 h / +18 h. Two different questions, so
@@ -1715,19 +1664,19 @@ v4`, or `merged N per-user v5.0 rows into shared flights`.
 ## TESTS
 
 ```bash
-python tests_flight_row.py          #   68
+python tests_flight_row.py          #   69
 python tests_poller_end_to_end.py   #   47
 python tests_past_leg_detail.py     #   19
 python tests_budget_limit.py        #   17
 python tests_carrier_cap.py         #   13
-python tests_ui_fixes.py            #  578
+python tests_ui_fixes.py            #  607
 python tests_app_shell.py           #  198
 python tests_timezones.py           #   68
 python tests_closeout_sweep.py      #   42
-python tests_import_merge.py        #   39
+python tests_import_merge.py        #   43
 python tests_test_mode.py           #  133
 python tests_regression_matrix.py   #  761
-```                                  # 1983
+```                                  # 2017
 
 Each uses its own scratch DB via `PT_DB_FILE`. Read
 `tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
@@ -1794,6 +1743,254 @@ DECIDED, so it does not get re-litigated:
 
 
 ## VERSION HISTORY
+
+### 1.22.0 — one sentence instead of a sentence with an exception
+
+**SCOPE CUT (owner): the logbook view and the CSV export are dropped**,
+and the pay calculator recorded against them in 1.20.0 with them. They
+are a different product — a legal-record and pay tool aimed at the pilot
+— bolted onto an app whose purpose is letting a family see where he is.
+
+Cutting them was not just tidying the roadmap. **A feature nobody is
+building was still shaping decisions.** The one exception in 1.20.0's
+import rules — flown legs frozen EXCEPT for the deadhead flag — existed
+solely because a logbook needs to know which column an hour lands in.
+With the logbook gone the exception has nothing to justify it, and
+removing it turns the rule into a single sentence.
+
+**A FLOWN LEG IS NEVER MODIFIED BY AN IMPORT.** Not its times, not its
+deadhead flag, not its trip break. No exceptions.
+
+That rule was ALREADY TRUE OF THE FIELDS ANYONE HAD LOOKED AT and false
+in general. 1.20.0 froze the times in the `flights` table and left
+`is_deadhead` and `trip_start` being overwritten on the `roster` row by
+every re-import, because those live in a different statement and the fix
+only touched the first one. Anyone reading the 1.20.0 note would have
+believed history was safe; two of four fields were not.
+
+The roster upsert now does `DO NOTHING` on a flown leg instead of
+`DO UPDATE`. A flown leg NOT yet on the roster is still inserted with the
+paste's values — adding history is not rewriting it, and that INSERT is
+the only way a leg flown before the app knew of it gets recorded at all.
+
+The diff was changed to match in the same commit, because the two must
+agree: `build_diff` no longer reports a flown leg as CHANGED for any
+reason. A flown leg listed as changed would promise an edit the confirm
+step declines to make — the same false promise `INSERT OR IGNORE` was
+making before 1.20.0, reintroduced in a smaller place.
+
+The import still has the final say on WHETHER a flown leg is yours: the
+review page can remove it, which is the owner's case of a trip coming off
+the line and somebody else flying it. It has no say on what that leg WAS.
+
+**Kept from the cut work, because it is not logbook work:** the
+`out_scheduled` baseline from 1.21.0. That fixes what the FAMILY sees on
+the tracker — a leg that went six minutes late reading as on time — and
+would be worth having if a logbook had never been discussed.
+
+**One existing test was rewritten, not deleted.** "Deadheading is
+per-person, not per-flight" used the shared fixture leg, which is dated
+in the past, so under the new rule it was asserting the per-person rule
+and the ABSENCE of the freeze at the same time. It now proves the
+per-person point on a leg that has not flown, and separately proves the
+freeze on one that has.
+
+**A historical entry was edited and then reverted.** 1.3.1 records five
+committed features, two of which are now cut. Rewriting it to match
+today's decision destroys the only thing a version history is for; a
+parenthetical was added instead saying what later happened.
+
+Tests: 2,015 → 2,017.
+
+### 1.21.0 — "late" stops being measured from a moving target
+
+**THE FFDO IS NOT A SCHEDULE ONCE THE LEG IS FLOWN.** The owner found
+this in real use and it invalidates a premise this app has held since
+1.4.0. Every delay was measured against `leg.dep_datetime_utc()` — the
+pasted FFDO time — on the reasoning that the pilot flies his bid line, so
+that is what late means to him. Sound reasoning; false premise. The FFDO
+RESTATES a flown leg at the time it actually went.
+
+So a leg pushed at 12:35 against a 12:29 line comes back from a
+post-flight paste reading 12:35. If it was already on the roster, 1.20.0
+protects it. If it was NOT — which is exactly what a mid-trip schedule
+change produces, legs added while away and imported afterwards — then
+12:35 is stored as its scheduled time, the six minutes are unrecoverable,
+and the leg reads on time forever.
+
+**The fix was already in the database, unused.** `out_scheduled` /
+`in_scheduled` hold the AIRLINE's published times. enrichment.py writes
+them in the `once` block — first time AeroAPI sees the flight, never
+again — precisely so that "was 11:55" stays answerable when airlines
+amend. Nothing had ever read them back. `view._baseline` now prefers them
+and falls back to the FFDO, so a leg the API has never seen (no key,
+budget spent, another carrier's deadhead) behaves exactly as before
+rather than losing its times.
+
+To the owner's question — **does a delay corrupt the baseline?** No, and
+it cannot: a delay moves `*_estimated` and eventually `*_actual_api`,
+which are `latest` columns. `out_scheduled` is `once`. Verified by
+pushing a leg 90 minutes and confirming the snapshot held and the note
+read 90 minutes late rather than quietly re-basing.
+
+**`build()` had its own copy of the baseline pair**, so the card and the
+list could have measured late from two different times — the exact split
+`strip_lines` was extracted to close. Lifted to one module-level helper
+both call.
+
+**Flown-leg removal reworked** to what the owner asked for: the section
+asks "Did you fly these?", each flight has its own X, and there is a
+Remove all with a way back and a running count. NOTHING IS PRE-SELECTED,
+which remains the safety mechanism rather than a style choice — pasting
+one trip says nothing about the rest of the month, so a pre-ticked list
+would delete a month of logbook by default. Upcoming legs stay ticked,
+because there the paste positively contradicts them.
+
+The X drives the CHECKBOX rather than replacing it, so there is one piece
+of form state and no second removal mechanism to keep in step. The
+checkbox is visually hidden, not `display:none`, which would take it out
+of the tab order and leave a stateless button as the only way in.
+
+**Three of my own mistakes, all caught before shipping and worth
+recording:**
+
+- The removal handler was first written as a branch inside the
+  break-list's click listener. Flown rows are not in the break list, so
+  no click ever reached it. It now has its own delegated listener on the
+  document, in its own IIFE, so a failure in the drag-and-drop library
+  cannot take the controls that delete data down with it.
+- `flownCount` was never defined — the insertion point did not match and
+  the failure was silent until the DOM test ran.
+- A new test sliced the section at the first `{% endif %}`, which belongs
+  to the inline deadhead conditional inside the first row. Three
+  assertions were passing against a truncated string.
+
+**One existing fixture was corrected, not adapted.** A flight_row test
+set `out_scheduled` to the ACTUAL time while asserting the leg went 12
+minutes late. Harmless while the note ignored that column; self-
+contradictory now. `out_scheduled` is the ORIGINAL published time, so the
+realistic value is the original.
+
+Tests: 1,998 → 2,015.
+
+### 1.20.0 — the import stops lying, and the map stops guessing
+
+Five things the owner found in first real use of the rebuilt pages.
+
+**THE IMPORT DESCRIBED EDITS IT COULD NOT MAKE.** The worst of the five,
+and it predates all of this work. `_upsert_leg` wrote schedule fields
+with `INSERT OR IGNORE`, so an existing flight's times could never
+change. The review page duly listed a retimed departure under "changed",
+the pilot approved it, and NOTHING HAPPENED. A diff that promises an edit
+the confirm step is incapable of making is the worst kind of wrong: it
+looks like it worked. Future legs are now rewritten on re-import.
+
+Only the future. A flown leg's scheduled times are settled, and what
+actually happened lives in the OOOI columns, untouched by any of this.
+The old worry about "two bid lines fighting over one shared row" only
+bites if two FFDOs disagree about the same FUTURE flight, where the later
+paste winning is self-correcting and the only rule statable in a sentence.
+
+**TIMES ARE NO LONGER RECONCILED ON A FLOWN LEG** (owner's call). The
+FFDO time is the SCHEDULE, and the schedule of a flight that already
+happened is set in stone. The airline's record settles to what actually
+occurred, so re-pasting a month reported every flown leg as "changed" —
+noise on every single re-import, describing a change that (see above) was
+never applied anyway. A deadhead correction on a flown leg IS still
+offered, because that decides whether the leg counts as flight time in
+the logbook.
+
+**THE IMPORT NOW HAS THE FINAL SAY ON WHAT WAS FLOWN** (owner's call,
+replacing "only the future is reconciled"). The old rule said a departed
+leg could never be removed by an import. The hole the owner found: if a
+trip comes off your line and you forget to remove it, and somebody else
+flies it, the app holds a flight you did not fly and you have no way to
+say so. The paste is the authority on what was yours.
+
+So a flown leg the paste omits is now offered for removal — **unticked,
+in its own section**, while an upcoming one stays ticked. That
+distinction is the entire safety mechanism, and it is load-bearing: the
+help text invites pasting "one trip or all of them", so a one-trip paste
+routinely says nothing about the rest of the month. Had flown legs
+arrived pre-ticked like upcoming ones, the ordinary act of importing a
+single trip would have deleted a month of logbook by default. Ticked
+means the paste CONTRADICTS the leg; unticked means the paste is SILENT
+about it. The section is deliberately not painted in the danger colour —
+nothing in it happens unless ticked, and red would make the ordinary case
+look like a threat every time.
+
+**THE MINI MAP DREW A STRAIGHT SOLID LINE WHETHER OR NOT IT KNEW ONE.**
+Solid is a CLAIM — this is where the aeroplane went, from recorded
+positions. On a leg with a track, 1.18.0 threw the track away; on a leg
+without one it asserted a flight path the app never observed, turning "no
+data" into "flew direct". Now: recorded track drawn solid, anchored to
+both airports so a track that starts late still reads as a journey
+between two fields; nothing recorded drawn dashed. Same distinction the
+tracker already draws — dashed is the plan, solid is the fact.
+
+The track is read straight from the positions table in `/api/v1/leg/`,
+NOT out of the live payload, which returns an empty breadcrumb for a leg
+that finished months ago — exactly the leg the calendar asks about.
+Recording positions for a year is only worth the rows if something reads
+them back; this is that something.
+
+**AN OPEN CALENDAR ROW REPEATED ITSELF.** The strip's small times stayed
+on screen above their own expansion, printing the same two times twice,
+three lines apart — once small, once properly in `.aptblock` with what
+they displaced and the gate. `.cal-leg.open` now hides `.fstrip-ends`.
+The flight number and pills stay: those are the row's identity and are
+not restated below. This never arises on the tracker because the detail
+panel covers the list.
+
+**"Arrival time fromthe airline".** Two faults in one string.
+`.detail-row` was declared only inside viewer.html's `<style>`, so on the
+calendar the key and value had no layout and ran together. And the values
+were sentence fragments — "the airline", "an estimate" — which only ever
+worked while the single place they appeared completed the phrase. They
+are now labels: Airline / Our own tracking / Estimate. The three stay
+distinguishable, because N3's export may use only airline-confirmed
+times.
+
+Tests: 1,983 → 1,998.
+
+### 1.19.1 — clearing the two things 1.19.0 left flagged
+
+Both were reported at the end of 1.19.0 and neither was acted on. That was
+wrong: a known defect gets fixed, not noted. Owner's point, and correct.
+
+Acting on them turned up that only ONE of the two was real.
+
+**NOT A BUG: the tracker's map tiles.** 1.19.0 claimed the tracker reads
+`data-theme` alone and therefore serves dark tiles to a light-mode phone.
+It does read `data-theme` alone, and that is fine. `settings.theme` is
+always `dark` or `light` — settings.py defaults it (`row["theme"] or
+"dark"`) and the picker offers nothing else — so the attribute is always
+set on that page. The system-preference palette in app.css is scoped
+`:root:not([data-theme])`, so it only ever applies to the pre-auth pages,
+which have no map. The claim was made twice without checking either fact.
+
+The comment in calendar.html asserting the tracker was buggy has been
+corrected, because a false claim left in the source is worse than no
+comment: the next person to read it "fixes" working code.
+
+**REAL: the strip-redeclaration check could not enforce its own rule.**
+`test_flight_strip_is_one_component` searched viewer.html for `.fstrip`
+followed by a brace ANYWHERE. The rule it is guarding — stated in the
+comment directly above it, and in invariant 25 — allows CONTEXTUAL
+overrides like `.fstrip-head .status` and forbids only REDECLARATION. The
+check enforced a stricter rule nobody agreed to, and passed only because
+viewer.html happened not to contain a contextual override. The calendar
+grew one in 1.18.0 (`.cal-leg-head > .fstrip`) and tripped the identical
+check there, which is how it was found — and it was fixed on the calendar
+side then and left alone here.
+
+It now matches a bare `.fstrip {` at the head of a selector. Verified
+against seven hand-made cases in both directions: it still flags every
+form of redeclaration (bare, size modifier, after a closing brace, inside
+a selector list) and no longer flags a child override, a descendant
+override, or a sub-element rule.
+
+No behaviour changed. Tests: 1,983, unchanged and all passing.
 
 ### 1.19.0 — the regression pass, as a matrix
 
@@ -2632,7 +2829,7 @@ no longer on the family's card.
 airline", `observed` → "our own tracking", `estimated` → "an estimate".
 Translated in `view.py`, not in the template, so the page and the poll
 cannot phrase it differently (P1-5). The three stay DISTINGUISHABLE
-rather than being smoothed into one word: the logbook export (N3) may use
+rather than being smoothed into one word: any future export may use
 only airline-confirmed times, so the card must not present them as
 interchangeable.
 
@@ -2851,7 +3048,7 @@ split was arbitrary — Settings is per-pilot preference, /admin is operating
 the install — and on a shared install those are two different people.
 
 Tests: 826 → 889, one new suite. Most of it is isolation: an invented
-flight that leaked into a bill or a logbook would be worse than having no
+flight that leaked into a bill or a record would be worse than having no
 test mode at all.
 
 ### 1.5.0 — the leg that would not let go, and N1
@@ -2968,6 +3165,11 @@ logbook view, CSV export, named invites, viewer-side framing), the order
 they go in, and WHY that order is a dependency chain rather than a
 preference: everything after N1 assumes flights accumulate instead of
 rolling over, so building any of the others first means building it twice.
+
+(Two of those five — the logbook view and the CSV export — were cut in
+1.22.0. This entry is left as written: it records what was committed to
+in 1.3.1, and editing an old entry to match a later decision destroys the
+only thing a version history is for.)
 
 Each entry carries the design decisions already settled in discussion, so
 they do not have to be re-litigated or, worse, silently re-decided:
