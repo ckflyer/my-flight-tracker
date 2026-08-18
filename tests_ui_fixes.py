@@ -688,7 +688,8 @@ def test_flight_sheet():
         html = fh.read()
 
     check("the sheet exists", 'class="sheet" id="sheet"' in html)
-    check("...and rests PEEKING, not shut", "--sheet-peek" in html and "--sheet-full" in html)
+    # One height only since 1.14.1: --sheet-full went with the drag.
+    check("...and rests PEEKING, not shut", "--sheet-peek" in html)
     check("...with its own scrollbar", ".sheet-body {" in html and "overflow-y: auto" in html)
     check("...that a flick cannot leak out of", "overscroll-behavior: contain" in html)
 

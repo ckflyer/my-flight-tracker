@@ -1,7 +1,7 @@
 # MyPilot
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.14.1.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.15.0.
 
 The version above was stale at 1.4.0 for five releases. `app/version.py`
 is the only authority; this line is a convenience and nothing reads it.
@@ -48,7 +48,7 @@ seriously.
 
 ## STATE
 
-**v1.14.1.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+**v1.15.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
 owner plus several FOs, who fly the same legs — hence shared flight rows
 (v5.1, retained).
 
@@ -889,6 +889,12 @@ Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
     1.13.0 shipped one and it cost two visible bugs. The check is three
     lines and belongs after any edit that deletes elements. (1.14.1)
 
+32. **Diff against the previous package before shipping.** Twice now an
+    edit computed by offset has silently deleted unrelated code from
+    viewer.html — a whole test in 1.13.0, `selectLeg` in 1.15.0. Both were
+    caught by failing assertions, which is luck, not method. `difflib`
+    against the last zip takes seconds and shows exactly what left. (1.15.0)
+
 ## MODULE MAP
 
 ```
@@ -1704,6 +1710,40 @@ DECIDED, so it does not get re-litigated:
 
 
 ## VERSION HISTORY
+
+### 1.15.0 — one surface, not cards on a card
+
+**The sheet had cards inside a card.** Day groups inherit `.card`, so each
+one was a rounded, shadowed box floating on the sheet's own surface. That
+is what made the "Flights" header read as a different colour from behind
+the strips: it was not a colour difference at all, it was a shadow and a
+radius announcing a second surface where there should only be one. The
+chrome is stripped from `.day-card` — background, radius, shadow, padding
+— leaving flights separated by hairlines on a single sheet, with one
+hairline under the header so it reads as a header. The class is kept
+rather than swapped so day grouping, headings and past-dimming all still
+work.
+
+**The footer is out of the way.** It sat under the tab pills as a white
+band on the document's background. Nothing scrolls to reach it now, so it
+was a strip of colour with no job. Kept in the DOM — the version string is
+genuinely useful when a deploy is in question — but fixed, tiny,
+transparent and click-through.
+
+**"Back to active flight" removed.** It existed because tapping a row
+swapped the hero card and you needed a way home. The panel's X returns you
+to the list, and the live flight is in the list.
+
+**Sheet raised to 52vh** from 38. At the old height the list was short
+enough that reaching for it often landed on the map instead.
+
+**A near-miss worth recording.** Removing the back-to-active JavaScript by
+computing offsets over-ran and took `selectLeg` with it — the function the
+whole row-tap path depends on. Caught because four assertions failed, and
+recovered by diffing this file against the previous package rather than
+rewriting from memory. That is twice now that editing this template by
+computed position rather than by matched text has deleted something
+unrelated (see 1.13.0). Diff against the last release before packaging.
 
 ### 1.14.1 — first real device pass on the rebuild
 
