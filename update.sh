@@ -35,6 +35,34 @@ if [ -n "$TRACKED_DATA" ]; then
   echo "$TRACKED_DATA" | sed 's/^/      git rm --cached /'
   echo "      git commit -m 'stop tracking runtime data' && git push"
   echo ""
+
+  # THE SECRET KEY IS A DIFFERENT PROBLEM FROM THE REST (1.23.1).
+  #
+  # For a database or a settings file, untracking is the whole fix: the
+  # damage was that the deploy kept overwriting them. For the session key
+  # it is only half. That key SIGNS EVERY COOKIE, so anyone holding it can
+  # forge a session — and `git rm --cached` removes it from the next
+  # commit, not from the history that already contains it. Anyone who can
+  # read the repo, now or from any clone taken since it was committed,
+  # has a working key until it is changed.
+  #
+  # Said separately and loudly because the generic advice above reads as
+  # if it finishes the job, and here it does not.
+  if echo "$TRACKED_DATA" | grep -q 'secret_key'; then
+    echo "  !! data/secret_key.txt SIGNS EVERY LOGIN COOKIE, and it is in your"
+    echo "     git history. Untracking it does NOT remove it from history."
+    echo "     Anyone who can read the repo can forge a session until you"
+    echo "     change the key. To change it, add a new one to"
+    echo "     docker-compose.yml under the app service:"
+    echo ""
+    echo "         environment:"
+    echo "           - PT_SECRET_KEY=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    echo ""
+    echo "     then: docker compose up -d"
+    echo "     Everyone is signed out once. Log in again; viewers re-enter"
+    echo "     their share code. Nothing else is lost."
+    echo ""
+  fi
 fi
 
 echo "==> resetting to origin/main"

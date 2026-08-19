@@ -355,11 +355,22 @@ def get_user_by_share_code(code: str) -> Optional[Dict[str, Any]]:
     the backfill in db.py, so no family had to be re-sent anything.
     """
     code = code.strip()
+    today = datetime.now(timezone.utc).date().isoformat()
     conn = get_connection()
     try:
+        # EXPIRY IS CHECKED IN SQL, not after the fetch, so there is no
+        # path where a row is read and the date is forgotten.
+        #
+        # `>= today` means the code works THROUGH its expiry date rather
+        # than dying at midnight as it starts. A date picker offers days,
+        # not instants, and "expires 24 Aug" plainly means it is good on
+        # the 24th — the other reading cuts someone off a day early, which
+        # they experience as the app being broken.
         row = conn.execute(
             "SELECT u.* FROM share_codes s JOIN users u ON u.id = s.user_id "
-            "WHERE s.code = ? AND s.revoked = 0", (code,)).fetchone()
+            "WHERE s.code = ? AND s.revoked = 0 "
+            "AND (s.expires_at IS NULL OR s.expires_at = '' OR s.expires_at >= ?)",
+            (code, today)).fetchone()
         if row is None:
             return None
         conn.execute("UPDATE share_codes SET last_seen_at = ? WHERE code = ?",
@@ -375,82 +386,95 @@ def _now_iso() -> str:
 
 
 def share_codes_for(user_id: int) -> list:
-    """Every invite this pilot has, newest last. Revoked ones included —
-    the page shows them struck through rather than vanishing them, so
-    "I removed that" is distinguishable from "that was never there"."""
+    """Every invite this pilot has, oldest first, each flagged with
+    whether its expiry date has passed."""
     conn = get_connection()
     try:
-        return [dict(r) for r in conn.execute(
-            "SELECT * FROM share_codes WHERE user_id = ? "
-            "ORDER BY revoked ASC, id ASC", (user_id,))]
+        rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM share_codes WHERE user_id = ? ORDER BY id ASC",
+            (user_id,))]
     finally:
         conn.close()
+    today = datetime.now(timezone.utc).date().isoformat()
+    for r in rows:
+        exp = (r.get("expires_at") or "").strip()
+        # Computed here rather than in the template, so the page and the
+        # lookup cannot disagree about whether a code still works.
+        r["is_expired"] = bool(exp) and exp < today
+    return rows
 
 
-def add_share_code(user_id: int, name: str) -> str:
+def add_share_code(user_id: int, name: str = "") -> str:
     """A new invite alongside the existing ones. Adding never disturbs a
-    code already in somebody's hands."""
+    code already in somebody's hands.
+
+    The name is optional and normally arrives empty: the row is created
+    first and named in place in the table, rather than the pilot being
+    asked to fill a box before anything exists.
+    """
     conn = get_connection()
     try:
         code = _generate_unique_share_code(conn)
         conn.execute(
             "INSERT INTO share_codes (user_id, code, name, created_at) "
             "VALUES (?,?,?,?)",
-            (user_id, code, (name or "").strip()[:40] or "Share", _now_iso()))
+            (user_id, code, (name or "").strip()[:40], _now_iso()))
         conn.commit()
     finally:
         conn.close()
     return code
 
 
-def rename_share_code(user_id: int, code_id: int, name: str) -> None:
+def update_share_code(user_id: int, code_id: int, name: str,
+                      expires_at: str) -> None:
+    """Save an edited row: its name and its expiry date.
+
+    `expires_at` is a plain YYYY-MM-DD date or empty for never. Stored as
+    the string the date input gives, because that is exactly what the
+    lookup compares against — parsing it into a datetime and back would
+    add a timezone question that a calendar date does not have.
+
+    Anything unparseable is stored as empty rather than rejected. A
+    mangled date that silently means "never expires" is safe; one that
+    silently means "expired" locks a family out with no error to see.
+    """
+    date_str = (expires_at or "").strip()[:10]
+    if date_str:
+        try:
+            datetime.strptime(date_str, "%Y-%m-%d")
+        except ValueError:
+            date_str = ""
     conn = get_connection()
     try:
         conn.execute(
-            "UPDATE share_codes SET name = ? WHERE id = ? AND user_id = ?",
-            ((name or "").strip()[:40] or "Share", code_id, user_id))
+            "UPDATE share_codes SET name = ?, expires_at = ? "
+            "WHERE id = ? AND user_id = ?",
+            ((name or "").strip()[:40], date_str, code_id, user_id))
         conn.commit()
     finally:
         conn.close()
 
 
-def set_share_code_revoked(user_id: int, code_id: int, revoked: bool) -> None:
-    """Revoke or restore ONE invite.
+def delete_share_code(user_id: int, code_id: int) -> None:
+    """Remove an invite outright.
 
-    Scoped by user_id in the WHERE clause, not merely by the id from the
-    form: without it any pilot could revoke any other pilot's invite by
-    posting a number.
+    A DELETE, not a revoked flag. 1.23.0 kept revoked rows on the page so
+    the pilot could tell "I removed that" from "that was never there",
+    which is the right instinct on the import review — a leg you dropped
+    is data you might want back. A share code is not: once it is gone the
+    intent is that it is gone, and a list of dead codes is a list nobody
+    reads growing under one they do.
+
+    Scoped by user_id in the WHERE clause, so posting somebody else's id
+    deletes nothing.
     """
     conn = get_connection()
     try:
-        conn.execute(
-            "UPDATE share_codes SET revoked = ? WHERE id = ? AND user_id = ?",
-            (1 if revoked else 0, code_id, user_id))
+        conn.execute("DELETE FROM share_codes WHERE id = ? AND user_id = ?",
+                     (code_id, user_id))
         conn.commit()
     finally:
         conn.close()
-
-
-def regenerate_one_share_code(user_id: int, code_id: int) -> Optional[str]:
-    """New digits for one invite, keeping its name and its place.
-
-    The old digits stop working immediately — same effect as the old
-    whole-account regenerate, but aimed at one person instead of everyone.
-    """
-    conn = get_connection()
-    try:
-        row = conn.execute(
-            "SELECT 1 FROM share_codes WHERE id = ? AND user_id = ?",
-            (code_id, user_id)).fetchone()
-        if row is None:
-            return None
-        code = _generate_unique_share_code(conn)
-        conn.execute("UPDATE share_codes SET code = ?, last_seen_at = NULL "
-                     "WHERE id = ? AND user_id = ?", (code, code_id, user_id))
-        conn.commit()
-    finally:
-        conn.close()
-    return code
 
 
 def regenerate_share_code(user_id: int) -> str:

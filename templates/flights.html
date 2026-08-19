@@ -166,91 +166,81 @@
     @media (max-width: 400px) {
     }
     .logout-btn:hover { color: var(--text); border-color: var(--muted); }
-    /* SHARING (1.23.0). Was a single code set 2.2rem, letter-spaced, in
-       the accent colour — a number the size of a headline, dominating the
-       page above the thing the page is actually for. It is a credential
-       you read out once, not a banner.
-
-       A LIST, not a <table>. The rows carry a name, digits, a state and a
-       cluster of controls, which is four columns on a desktop and a
-       stacked block on a phone; a real table cannot do the second without
-       fighting it. Grid does both from one rule. */
-    .share-card .card-head {
-      display: flex; align-items: center; justify-content: space-between;
-      gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.15rem;
-    }
-    .share-card h2 {
-      margin: 0; font-size: 1rem; font-weight: 600; letter-spacing: -0.01em;
-    }
-    .share-sub { margin: 0 0 0.85rem; font-size: 0.8125rem; line-height: 1.5; }
-    .add-share { display: flex; gap: 0.4rem; margin: 0; }
-    .add-share input {
-      background: var(--input-bg); color: var(--text);
-      border: 1px solid var(--border); border-radius: 8px;
-      padding: 0.4rem 0.6rem; font-size: 0.85rem; font: inherit;
-      width: 11rem; max-width: 42vw; min-height: 36px;
-    }
-    .btn-add {
-      font: inherit; font-size: 0.85rem; font-weight: 600;
-      padding: 0.4rem 0.9rem; min-height: 36px;
+    /* SHARING (1.24.0). The panel now uses the SAME table as the roster
+       below it — same header, same rules, same padding — because two
+       tables on one page styling themselves differently is most of why
+       this page read as unfinished. Everything here is the difference
+       between a read-only row and an editable one, nothing more. */
+    .btn-new-share {
+      font: inherit; font-size: 0.8125rem; font-weight: 600;
+      padding: 0.4rem 0.85rem; min-height: 34px;
       border-radius: 8px; border: 1px solid var(--accent);
       background: var(--accent); color: #fff; cursor: pointer;
+      white-space: nowrap;
+    }
+    .new-share-form { margin: 0; }
+    .share-sub { margin: 0.85rem 0 0; font-size: 0.8125rem; line-height: 1.5; }
+    /* The per-row forms hold only a hidden id — they exist to be targeted
+       by `form=` from inside the table, and must take up no space. */
+    .sr-only-form { display: none; }
+
+    /* Inputs that read as TEXT until you touch them. A table of boxes
+       looks like a form to fill in; this is a table you occasionally
+       correct, so the borders stay out of the way until focus. */
+    .share-table input[type="text"],
+    .share-table input[type="date"] {
+      font: inherit; font-size: 0.875rem; color: var(--text);
+      background: transparent; border: 1px solid transparent;
+      border-radius: 6px; padding: 0.3rem 0.4rem; min-height: 32px;
+      width: 100%; max-width: 100%;
+    }
+    .share-table input[type="text"] { min-width: 7rem; }
+    .share-table input[type="date"] { min-width: 8.5rem; }
+    .share-table input:hover { border-color: var(--border); }
+    .share-table input:focus {
+      outline: none; border-color: var(--accent);
+      background: var(--input-bg);
+    }
+    .share-table input::placeholder { color: var(--muted); opacity: 0.7; }
+    /* Safari and Chrome render the picker indicator dark-on-dark. */
+    .share-table input[type="date"]::-webkit-calendar-picker-indicator {
+      filter: invert(0.6);
+      cursor: pointer;
+    }
+    [data-theme="light"] .share-table input[type="date"]::-webkit-calendar-picker-indicator {
+      filter: none;
     }
 
-    .share-list { list-style: none; margin: 0; padding: 0; }
-    .share-row {
-      display: grid;
-      grid-template-columns: minmax(0,1fr) auto auto;
-      grid-template-areas: "name digits tools" "seen digits tools";
-      align-items: center; gap: 0.1rem 0.75rem;
-      padding: 0.6rem 0; border-top: 1px solid var(--border);
-    }
-    .share-row:first-child { border-top: none; }
-    .share-name { grid-area: name; font-weight: 600; font-size: 0.9rem;
-                  overflow-wrap: anywhere; }
-    .share-seen { grid-area: seen; font-size: 0.75rem; color: var(--muted); }
-    /* Tabular figures so five digits are the same width on every row and
-       the column does not shimmer as you read down it. */
-    .share-digits {
-      grid-area: digits;
-      font-size: 1.05rem; font-weight: 700; letter-spacing: 0.14em;
-      font-variant-numeric: tabular-nums;
+    /* Five digits, read down a column, so tabular figures and a mono
+       face — the same treatment the roster gives its times. */
+    .share-table .share-digits {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      color: var(--text);
+      font-weight: 700; letter-spacing: 0.1em;
+      font-variant-numeric: tabular-nums;
     }
-    .share-tools { grid-area: tools; display: flex; align-items: center; gap: 0.3rem; }
-    .share-tools form { margin: 0; }
+    .share-tools { display: flex; align-items: center; gap: 0.3rem; justify-content: flex-end; }
     .share-ico {
       font: inherit; font-size: 0.75rem; line-height: 1;
-      padding: 0.35rem 0.55rem; min-height: 30px;
+      padding: 0.35rem 0.6rem; min-height: 32px;
       border-radius: 7px; border: 1px solid var(--border);
       background: none; color: var(--muted); cursor: pointer;
+      white-space: nowrap;
     }
     .share-ico:hover { color: var(--text); border-color: var(--muted); }
-    .share-ico.danger { color: var(--muted); font-size: 0.95rem; padding: 0.25rem 0.5rem; }
+    .share-ico.danger { font-size: 1rem; padding: 0.2rem 0.55rem; }
     .share-ico.danger:hover { color: var(--bad); border-color: var(--bad); }
 
-    /* A revoked invite STAYS ON THE PAGE, greyed, with its digits struck
-       through — same reasoning as a dropped leg on the import review.
-       Vanishing it leaves the pilot unable to tell "I cut that person
-       off" from "that was never there", and the digits are worth keeping
-       visible because the question is usually "which code did I revoke". */
-    .share-row.is-revoked { opacity: 0.5; }
-    .share-row.is-revoked .share-digits { text-decoration: line-through; }
+    /* An EXPIRED code is dimmed but still editable — the fix is usually to
+       push the date out, and greying it into unreadability would hide the
+       one field you came to change. */
+    .share-row.is-expired td { opacity: 0.55; }
+    .share-row.is-expired .share-digits { text-decoration: line-through; }
     .share-tag {
-      font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
-      letter-spacing: 0.06em; color: var(--muted); margin-left: 0.35rem;
+      display: inline-block; margin-left: 0.35rem;
+      font-size: 0.62rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.06em; color: var(--bad);
     }
-    .share-empty { color: var(--muted); font-size: 0.85rem; padding: 0.6rem 0; }
-
-    @media (max-width: 430px) {
-      .share-row {
-        grid-template-columns: minmax(0,1fr) auto;
-        grid-template-areas: "name digits" "seen digits" "tools tools";
-        gap: 0.15rem 0.6rem;
-      }
-      .share-tools { padding-top: 0.45rem; }
-    }
+    .share-empty { color: var(--muted); }
 
     /* Month filter (1.5.0). Wraps to two lines on a narrow phone rather
        than squeezing the select to something untappable. */
@@ -335,63 +325,90 @@
   <h1>Flights</h1>
   <p class="sub">Your schedule, and who can see it.</p>
 
-  <div class="card share-card">
-    <div class="card-head">
-      <h2>Sharing</h2>
-      <form method="post" action="/flights/shares/add" class="add-share">
-        <input type="text" name="name" placeholder="Name (e.g. Sarah)"
-               maxlength="40" aria-label="Name for the new share code">
-        <button type="submit" class="btn-add">Add</button>
+  <div class="card share-card" id="shares">
+    <div class="filter-bar">
+      <div class="count" role="heading" aria-level="2">
+        Sharing
+      </div>
+      <form method="post" action="/flights/shares/add" class="new-share-form">
+        <button type="submit" class="btn-new-share">New share</button>
       </form>
     </div>
-    <p class="sub share-sub">
-      Anyone with a code can see where you are. Give each person their own
-      and you can cut off one without cutting off everybody.
-    </p>
 
-    <ul class="share-list">
-      {% for sh in shares %}
-      <li class="share-row {% if sh.revoked %}is-revoked{% endif %}">
-        <span class="share-name">
-          {{ sh.name or 'Share' }}
-          {% if sh.revoked %}<span class="share-tag">revoked</span>{% endif %}
-        </span>
-        <span class="share-digits" data-code="{{ sh.code }}">{{ sh.code }}</span>
-        <span class="share-seen">
-          {% if sh.revoked %}&mdash;
-          {% elif sh.last_seen_at %}used
-          {% else %}not used yet{% endif %}
-        </span>
-        <span class="share-tools">
-          {% if not sh.revoked %}
-          <button type="button" class="share-ico" data-share-copy
-                  title="Copy code" aria-label="Copy code {{ sh.code }}">Copy</button>
-          <form method="post" action="/flights/shares/regenerate"
-                onsubmit="return confirm('New code for {{ sh.name or 'this share' }}? Whoever is using the current one loses access straight away.');">
-            <input type="hidden" name="code_id" value="{{ sh.id }}">
-            <button type="submit" class="share-ico" title="New code"
-                    aria-label="New code for {{ sh.name or 'this share' }}">New</button>
-          </form>
-          <form method="post" action="/flights/shares/revoke"
-                onsubmit="return confirm('Revoke {{ sh.name or 'this share' }}? They lose access immediately. You can put it back afterwards.');">
-            <input type="hidden" name="code_id" value="{{ sh.id }}">
-            <button type="submit" class="share-ico danger" title="Revoke"
-                    aria-label="Revoke {{ sh.name or 'this share' }}">&times;</button>
-          </form>
-          {% else %}
-          <form method="post" action="/flights/shares/revoke">
-            <input type="hidden" name="code_id" value="{{ sh.id }}">
-            <input type="hidden" name="restore" value="1">
-            <button type="submit" class="share-ico"
-                    aria-label="Restore {{ sh.name or 'this share' }}">Restore</button>
-          </form>
-          {% endif %}
-        </span>
-      </li>
-      {% else %}
-      <li class="share-empty">No share codes yet. Add one above.</li>
-      {% endfor %}
-    </ul>
+    {# EDITED IN PLACE, NOT IN A DIALOG (1.24.0). "New share" creates the
+       row and the row IS the form — a name box and a date box sitting in
+       the table, saving on change. A dialog would put a form between the
+       pilot and the one thing the button does, and then need its own
+       open/close/validate/cancel behaviour to say what two inputs say by
+       existing.
+
+       Laid out as the same <table> as the roster below it, because two
+       tables on one page that style themselves differently is the thing
+       that made this page look unfinished. #}
+    <div class="table-scroll">
+    <table class="share-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Code</th>
+          <th>Expires</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for sh in shares %}
+        <tr class="share-row {% if sh.is_expired %}is-expired{% endif %}">
+          <td>
+            {# The row's form lives after the table: a <form> cannot wrap a
+               <tr>, so the inputs are associated by id instead. Valid
+               HTML5 and it keeps one form per row. #}
+            <input type="text" name="name" form="sh-{{ sh.id }}"
+                   value="{{ sh.name or '' }}" maxlength="40"
+                   placeholder="Who is this for?"
+                   aria-label="Name for code {{ sh.code }}">
+          </td>
+          <td class="share-digits" data-code="{{ sh.code }}">{{ sh.code }}</td>
+          <td>
+            <input type="date" name="expires_at" form="sh-{{ sh.id }}"
+                   value="{{ sh.expires_at or '' }}"
+                   aria-label="Expiry date for code {{ sh.code }}">
+            {% if sh.is_expired %}<span class="share-tag">expired</span>{% endif %}
+          </td>
+          <td class="share-tools">
+            <button type="button" class="share-ico" data-share-send
+                    title="Send this code" aria-label="Send code {{ sh.code }}">Share</button>
+            <button type="submit" form="sh-del-{{ sh.id }}" class="share-ico danger"
+                    title="Delete this code"
+                    aria-label="Delete code {{ sh.code }}">&times;</button>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="share-empty">No share codes yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+
+    {% for sh in shares %}
+    {# Auto-saving on change, the same way the month filter submits. A Save
+       button per row would be four more things on screen doing what the
+       browser already does when you leave a field. #}
+    <form method="post" action="/flights/shares/update" id="sh-{{ sh.id }}"
+          class="sr-only-form">
+      <input type="hidden" name="code_id" value="{{ sh.id }}">
+    </form>
+    <form method="post" action="/flights/shares/delete" id="sh-del-{{ sh.id }}"
+          class="sr-only-form"
+          onsubmit="return confirm('Delete this code? Whoever has it loses access immediately and it cannot be undone.');">
+      <input type="hidden" name="code_id" value="{{ sh.id }}">
+    </form>
+    {% endfor %}
+
+    <p class="sub share-sub">
+      Anyone with a code can see where you are. Give each person their own,
+      and you can remove one without affecting anybody else. Leave the date
+      blank for no expiry.
+    </p>
   </div>
 
   <div class="card">
@@ -509,25 +526,21 @@
       }
     }
 
-    // PER-ROW SHARE (1.23.0). The old handler grabbed #share-btn and
-    // #share-code by id, which is fine for exactly one code and throws on
-    // page load the moment there are none or several — taking the past-
-    // flights toggle above it down with it, since both live in this
-    // script block.
+    // PER-ROW SHARE + AUTOSAVE (1.24.0).
     //
     // Delegated, so rows added by a later render need no rewiring.
     document.addEventListener('click', async function (ev) {
-      const btn = ev.target.closest && ev.target.closest('[data-share-copy]');
+      const btn = ev.target.closest && ev.target.closest('[data-share-send]');
       if (!btn) { return; }
       const row = btn.closest('.share-row');
       const code = row.querySelector('.share-digits').dataset.code;
-      const name = row.querySelector('.share-name').textContent.trim();
       const url = window.location.origin + '/login';
       const text = `Track my flights on MyPilot: ${url}\nCode: ${code}`;
 
-      // navigator.share is the better experience where it exists, but it
-      // needs a user gesture and rejects if the person backs out — which
-      // is not an error and must not fall through to the clipboard.
+      // The share sheet is the point of this button, so it is tried first.
+      // Backing out of it rejects with AbortError, which is a choice and
+      // not a failure — falling through to the clipboard there would copy
+      // something the pilot just decided not to send.
       if (navigator.share) {
         try { await navigator.share({ title: 'MyPilot', text }); return; }
         catch (e) { if (e && e.name === 'AbortError') { return; } }
@@ -538,9 +551,40 @@
         btn.textContent = 'Copied';
         setTimeout(() => { btn.textContent = was; }, 1500);
       } catch (e) {
-        window.prompt('Copy this and send it to ' + name, text);
+        window.prompt('Copy this and send it:', text);
       }
     });
+
+    // Save a row when you leave the field, not on every keystroke: one
+    // POST per edit rather than one per letter typed.
+    //
+    // `change` alone is not enough. It fires when a text field is blurred
+    // after editing, but a date input fires it the moment a date is picked
+    // while focus stays put — so both are handled here and the submit is
+    // guarded against running twice for the same row.
+    (function () {
+      const pending = new Set();
+      function save(input) {
+        const form = input.form;
+        if (!form || pending.has(form.id)) { return; }
+        pending.add(form.id);
+        form.submit();
+      }
+      document.addEventListener('change', function (ev) {
+        const t = ev.target;
+        if (t.matches && t.matches('.share-table input')) { save(t); }
+      });
+      // Enter in a text field should commit, not reload the page with
+      // nothing saved.
+      document.addEventListener('keydown', function (ev) {
+        if (ev.key !== 'Enter') { return; }
+        const t = ev.target;
+        if (t.matches && t.matches('.share-table input[type="text"]')) {
+          ev.preventDefault();
+          save(t);
+        }
+      });
+    })();
   </script>
 
 

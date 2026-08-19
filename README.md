@@ -1,7 +1,7 @@
 # MyPilot
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.23.0.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.24.0.
 
 The version above was stale at 1.4.0 for five releases. `app/version.py`
 is the only authority; this line is a convenience and nothing reads it.
@@ -48,7 +48,7 @@ seriously.
 
 ## STATE
 
-**v1.23.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+**v1.24.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
 owner plus several FOs, who fly the same legs — hence shared flight rows
 (v5.1, retained).
 
@@ -69,7 +69,7 @@ page split (1.6.0–1.7.0). All three came out of the same problem — the app
 could not be OPERATED without SSH, and bugs could not be reproduced without
 flying a trip.
 
-Tests: **2,048**, twelve suites, all passing.
+Tests: **2,059**, twelve suites, all passing.
 
 **Current work: the UI chunks (1.9.0 onward).** Five agreed steps, owner's
 brief, reworking the tracker and calendar around one flight-strip
@@ -108,9 +108,9 @@ TRACKER SHOWS.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, placeholder filter |
-| `tests_ui_fixes.py` | 635 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
+| `tests_ui_fixes.py` | 647 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
 | `tests_regression_matrix.py` | 761 | every page x 6 odd states x 2 themes x 2 clocks, pilot and viewer |
-| `tests_app_shell.py` | 201 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
+| `tests_app_shell.py` | 200 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
 | `tests_timezones.py` | 68 | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
 | `tests_closeout_sweep.py` | 42 | the abandonment cliff, the on-ground handover, the late gate-in chase and its cap |
 | `tests_import_merge.py` | 43 | additive import, month scoping, future-only reconciliation, the diff, manual add |
@@ -1669,14 +1669,14 @@ python tests_poller_end_to_end.py   #   47
 python tests_past_leg_detail.py     #   19
 python tests_budget_limit.py        #   17
 python tests_carrier_cap.py         #   13
-python tests_ui_fixes.py            #  635
-python tests_app_shell.py           #  201
+python tests_ui_fixes.py            #  647
+python tests_app_shell.py           #  200
 python tests_timezones.py           #   68
 python tests_closeout_sweep.py      #   42
 python tests_import_merge.py        #   43
 python tests_test_mode.py           #  133
 python tests_regression_matrix.py   #  761
-```                                  # 2048
+```                                  # 2059
 
 Each uses its own scratch DB via `PT_DB_FILE`. Read
 `tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
@@ -1743,6 +1743,90 @@ DECIDED, so it does not get re-litigated:
 
 
 ## VERSION HISTORY
+
+### 1.24.0 — the share panel, done properly
+
+1.23.0 shipped the data model and a panel that did not look like it
+belonged on the page. The owner's list, and what each one turned into:
+
+**Edited in place, not in a dialog.** "New share" creates the row FIRST
+and the row IS the form — a name box and a date box in the table, saving
+on change. The old flow put a name box in front of the button, which is
+a form standing between the pilot and the one thing the button does. A
+dialog would have needed its own open, close, validate and cancel
+behaviour to say what two inputs say by existing.
+
+A `<form>` cannot wrap a `<tr>`, so each row's inputs associate with a
+form after the table by `form="sh-{id}"`. Valid HTML5, one form per row,
+no JavaScript needed to collect the fields.
+
+**Formatted as the roster table.** Same `<table>`, same header, same
+rules and padding, same scroller. Two tables on one page styling
+themselves differently was most of why this page read as unfinished. The
+inputs are borderless until hovered or focused, so it reads as a table
+you occasionally correct rather than a form to fill in.
+
+**Expiry dates.** New `expires_at` column, added by PRAGMA migration
+because CREATE TABLE IF NOT EXISTS will not add it to an install that
+already has the table from 1.23.0.
+
+Two decisions worth not re-litigating. A code works THROUGH its expiry
+date, not until midnight as it begins: a picker offers days, and
+"expires 24 Aug" plainly means good on the 24th — the other reading cuts
+someone off a day early, which they experience as the app being broken.
+And an unparseable date is stored as EMPTY, meaning never: a mangled date
+that silently means "expired" locks a family out with no error to see,
+while one that silently means "never" is visible and harmless.
+
+**One button per job.** Copy and New are gone. Share (the OS share sheet,
+falling back to the clipboard) and × remain. A cancelled share sheet
+rejects with `AbortError`, which is a choice and not a failure — falling
+through to the clipboard there would copy something the pilot had just
+decided not to send.
+
+**Delete is a delete.** 1.23.0 kept revoked rows on the page struck
+through, reasoning from the import review, where a dropped leg is data
+you might want back. A share code is not: once it is gone the intent is
+that it is gone, and a list of dead codes nobody reads growing under one
+they do is not worth the row. The revoke and per-row regenerate functions
+were deleted from auth.py rather than left unreachable, since three
+unused ways to mutate a code invite someone to wire one back up.
+
+**Autosave.** `change` covers both cases and they are not the same: a
+text field fires it on blur after editing, a date input fires it the
+moment a date is picked with focus still in the field. Enter in a text
+field commits instead of reloading the page with nothing saved, and a
+guard stops one row submitting twice.
+
+Tests: 2,048 → 2,059.
+
+### 1.23.1 — the key warning says the part that matters
+
+update.sh has warned since 1.9.0 that files under `data/` tracked by git
+get overwritten on every deploy, and told you to `git rm --cached` them.
+For a database or a settings file that IS the whole fix: the damage was
+the overwriting, and untracking stops it.
+
+**For `data/secret_key.txt` it is half the fix, and the warning read as
+if it were all of it.** That key signs every session cookie, so anyone
+holding it can forge a login — and `git rm --cached` removes a file from
+the NEXT commit, not from the history that already has it. Anyone who can
+read the repo, or holds any clone taken since it was committed, keeps a
+working key until the key itself is changed.
+
+The warning now says so separately, and prints a freshly generated
+`PT_SECRET_KEY` line ready to paste into docker-compose.yml. That
+environment variable already outranks both the database and the file in
+`get_or_create_secret_key`, so rotating needs no code change and no
+database surgery — which is why it is the route the warning gives.
+
+Worth noting what is NOT at risk: the committed file cannot log anyone
+out on deploy, because since 1.9.0 the live key is read from the database
+first and the file is only a fallback. The exposure is disclosure, not
+disruption — which is precisely why it was easy to keep ignoring.
+
+Documentation and one shell script. No application code, so no test
+moved.
 
 ### 1.23.0 — named share codes, and a smaller share panel
 

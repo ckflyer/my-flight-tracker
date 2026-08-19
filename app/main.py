@@ -30,8 +30,7 @@ from .view import short_zone, zone_label  # THE zone label, see view.py
 from .auth import (
     get_or_create_secret_key, count_users, create_user, get_user_by_username,
     get_user_by_id, get_user_by_share_code, verify_password, regenerate_share_code,
-    share_codes_for, add_share_code, rename_share_code, set_share_code_revoked,
-    regenerate_one_share_code,
+    share_codes_for, add_share_code, update_share_code, delete_share_code,
     list_all_users, delete_user, set_admin, set_recovery_code,
     reset_password_with_recovery_code,
 )
@@ -2333,51 +2332,42 @@ async def admin_regenerate_code(request: Request):
     return RedirectResponse(url="/flights", status_code=303)
 
 
-# --- named share codes (1.23.0) --------------------------------------------
+# --- named share codes (1.23.0, reworked 1.24.0) ---------------------------
 #
-# Four small routes rather than one that switches on an action field.
-# Each is a separate POST target, so the form that revokes cannot be
-# reached by a typo in the form that renames.
+# Three routes, down from four. "Regenerate one" and "revoke/restore" are
+# gone: a code you no longer want is deleted, and a replacement is a New
+# share. Two ways to retire a code was one more than the page could
+# explain.
 
 @app.post("/flights/shares/add")
-async def shares_add(request: Request, name: str = Form("")):
+async def shares_add(request: Request):
+    """Create the row FIRST, name it after. The pilot was previously asked
+    to fill a name box before anything existed, which is a form standing
+    between them and the one thing this button does."""
     pilot = require_pilot(request)
     if isinstance(pilot, RedirectResponse):
         return pilot
-    add_share_code(pilot["id"], name)
-    return RedirectResponse(url="/flights", status_code=303)
+    add_share_code(pilot["id"])
+    return RedirectResponse(url="/flights#shares", status_code=303)
 
 
-@app.post("/flights/shares/rename")
-async def shares_rename(request: Request, code_id: int = Form(...),
-                        name: str = Form("")):
+@app.post("/flights/shares/update")
+async def shares_update(request: Request, code_id: int = Form(...),
+                        name: str = Form(""), expires_at: str = Form("")):
     pilot = require_pilot(request)
     if isinstance(pilot, RedirectResponse):
         return pilot
-    rename_share_code(pilot["id"], code_id, name)
-    return RedirectResponse(url="/flights", status_code=303)
+    update_share_code(pilot["id"], code_id, name, expires_at)
+    return RedirectResponse(url="/flights#shares", status_code=303)
 
 
-@app.post("/flights/shares/revoke")
-async def shares_revoke(request: Request, code_id: int = Form(...),
-                        restore: str = Form("")):
-    """Revoke, or put back. Reversible on purpose: revoking is one tap and
-    the consequence — somebody's family losing the feed — is not obvious
-    until they complain."""
+@app.post("/flights/shares/delete")
+async def shares_delete(request: Request, code_id: int = Form(...)):
     pilot = require_pilot(request)
     if isinstance(pilot, RedirectResponse):
         return pilot
-    set_share_code_revoked(pilot["id"], code_id, not restore)
-    return RedirectResponse(url="/flights", status_code=303)
-
-
-@app.post("/flights/shares/regenerate")
-async def shares_regenerate(request: Request, code_id: int = Form(...)):
-    pilot = require_pilot(request)
-    if isinstance(pilot, RedirectResponse):
-        return pilot
-    regenerate_one_share_code(pilot["id"], code_id)
-    return RedirectResponse(url="/flights", status_code=303)
+    delete_share_code(pilot["id"], code_id)
+    return RedirectResponse(url="/flights#shares", status_code=303)
 
 
 # ---------------------------------------------------------------------------

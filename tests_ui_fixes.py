@@ -1856,19 +1856,17 @@ def test_the_calendar_row_opens_one_at_a_time(uid):
 
 
 def test_named_share_codes_keep_existing_shares_working():
-    """N4, kept small. (1.23.0)
+    """N4. Name a code, add another, keep what exists working. (1.23.0,
+    reworked 1.24.0.)
 
-    The spec wanted expiry dates, a dialog and a global pause switch. The
-    owner cut it to: name a code, add another, keep what exists working.
-    Everything below is about that last clause, because it is the part
-    that breaks silently — a family does not report "my code stopped
-    working", they just stop opening the app.
+    The part that breaks silently is the last clause — a family does not
+    report "my code stopped working", they just stop opening the app.
     """
+    from datetime import date as _date
     from app.db import get_connection
     from app.auth import (create_user as _mk, get_user_by_share_code,
-                          share_codes_for, add_share_code,
-                          set_share_code_revoked, regenerate_one_share_code,
-                          regenerate_share_code)
+                          share_codes_for, add_share_code, update_share_code,
+                          delete_share_code, regenerate_share_code)
 
     who = _mk("n4pilot", "pw-not-used")
     original = get_connection().execute(
@@ -1884,41 +1882,62 @@ def test_named_share_codes_keep_existing_shares_working():
           rows[0]["code"] == original, str(rows))
     check("...and it resolves", get_user_by_share_code(original) is not None)
 
-    # ADDING NEVER DISTURBS WHAT EXISTS. This is the owner's "keep current
-    # shares intact" in one assertion.
-    sarah = add_share_code(who, "Sarah")
+    # ADDING NEVER DISTURBS WHAT EXISTS — "keep current shares intact".
+    # The row is created UNNAMED and named in place afterwards.
+    sarah = add_share_code(who)
+    sid = [r for r in share_codes_for(who) if r["code"] == sarah][0]["id"]
+    check("a new share is created without demanding a name first",
+          not (share_codes_for(who)[-1]["name"] or ""))
     check("a second invite does not change the first",
           get_user_by_share_code(original) is not None)
     check("...and the new one works too", get_user_by_share_code(sarah) is not None)
     check("...with different digits", sarah != original)
 
-    # REVOKE IS PER-PERSON. The whole point of the feature.
-    sid = [r for r in share_codes_for(who) if r["name"] == "Sarah"][0]["id"]
-    set_share_code_revoked(who, sid, True)
-    check("a revoked invite stops resolving", get_user_by_share_code(sarah) is None)
-    check("...while everyone else is unaffected",
-          get_user_by_share_code(original) is not None)
-    # Reversible: revoking is one tap and the consequence is not visible
-    # until somebody complains.
-    set_share_code_revoked(who, sid, False)
-    check("...and it can be put back", get_user_by_share_code(sarah) is not None)
+    update_share_code(who, sid, "Sarah", "")
+    check("a row can be named in place",
+          [r for r in share_codes_for(who) if r["id"] == sid][0]["name"] == "Sarah")
 
-    # A revoked row is NOT deleted, so the pilot can tell "I cut that
-    # person off" from "that was never there".
-    set_share_code_revoked(who, sid, True)
-    check("a revoked invite stays listed",
-          any(r["id"] == sid for r in share_codes_for(who)))
-    set_share_code_revoked(who, sid, False)
+    # EXPIRY.
+    today = _date.today()
+    update_share_code(who, sid, "Sarah", (today + timedelta(days=10)).isoformat())
+    check("a future expiry leaves the code working",
+          get_user_by_share_code(sarah) is not None)
+    check("...and it is not flagged expired",
+          not [r for r in share_codes_for(who) if r["id"] == sid][0]["is_expired"])
 
-    # REGENERATING ONE leaves the others alone.
-    fresh = regenerate_one_share_code(who, sid)
-    check("new digits kill the old ones", get_user_by_share_code(sarah) is None)
-    check("...and the new ones work", get_user_by_share_code(fresh) is not None)
-    check("...and the original is untouched",
+    update_share_code(who, sid, "Sarah", (today - timedelta(days=1)).isoformat())
+    check("a past expiry stops the code resolving",
+          get_user_by_share_code(sarah) is None)
+    check("...and the page flags it",
+          [r for r in share_codes_for(who) if r["id"] == sid][0]["is_expired"])
+    check("...without touching anyone else",
           get_user_by_share_code(original) is not None)
 
-    # A code may not collide with ANY live code, across all pilots — two
-    # households on one code would each see the other's position feed.
+    # THE BOUNDARY. "Expires 24 Aug" plainly means good ON the 24th; the
+    # other reading cuts someone off a day early, which they experience as
+    # the app being broken.
+    update_share_code(who, sid, "Sarah", today.isoformat())
+    check("a code expiring TODAY still works today",
+          get_user_by_share_code(sarah) is not None)
+
+    # A mangled date FAILS SAFE to "never". Silently meaning "expired"
+    # would lock a family out with no error anywhere to see.
+    update_share_code(who, sid, "Sarah", "24/08/2026")
+    check("an unparseable date is stored as no expiry",
+          ([r for r in share_codes_for(who) if r["id"] == sid][0]["expires_at"] or "") == "")
+    check("...so the code keeps working rather than dying silently",
+          get_user_by_share_code(sarah) is not None)
+
+    # DELETE IS A DELETE (1.24.0). 1.23.0 kept revoked rows listed; a list
+    # of dead codes nobody reads is not worth growing under one they do.
+    delete_share_code(who, sid)
+    check("a deleted code stops resolving", get_user_by_share_code(sarah) is None)
+    check("...and leaves the list", not any(r["id"] == sid for r in share_codes_for(who)))
+    check("...while everyone else is untouched",
+          get_user_by_share_code(original) is not None)
+
+    # Codes must be unique across ALL pilots: two households on one code
+    # would each see the other's position feed.
     all_codes = [r["code"] for r in get_connection().execute(
         "SELECT code FROM share_codes")]
     check("every code in the table is unique",
@@ -1926,48 +1945,57 @@ def test_named_share_codes_keep_existing_shares_working():
 
     # THE LEGACY WHOLE-ACCOUNT REGENERATE. Its button is gone but the
     # route is still reachable from a stale page, and auth resolves
-    # through share_codes now — so updating only `users` would leave the
-    # pilot's first invite pointing at digits nothing accepts.
+    # through share_codes now.
     regenerate_share_code(who)
     now_users = get_connection().execute(
         "SELECT share_code FROM users WHERE id = ?", (who,)).fetchone()["share_code"]
     fam = [r for r in share_codes_for(who) if r["name"] == "Family"][0]
     check("the legacy regenerate keeps both tables in step",
           fam["code"] == now_users, f"{fam['code']} vs {now_users}")
-    check("...and the new code resolves",
-          get_user_by_share_code(now_users) is not None)
-    check("...and the old one does not", get_user_by_share_code(original) is None)
+    check("...and the old code no longer resolves",
+          get_user_by_share_code(original) is None)
 
 
-def test_the_share_panel_is_a_list_not_a_billboard():
-    """The code was set at 2.2rem in the accent colour. (1.23.0)"""
+def test_the_share_table_looks_like_the_flight_table():
+    """Edited in place, styled like its neighbour. (1.24.0)"""
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, "templates", "flights.html"), encoding="utf-8") as fh:
         html = fh.read()
 
-    check("the billboard is gone", ".share-code {" not in html)
-    check("...replaced by a list of invites", ".share-list" in html)
-    check("each row can be named", 'name="name"' in html)
-    check("...and there is a way to add another", "/flights/shares/add" in html)
-    check("...to revoke one", "/flights/shares/revoke" in html)
-    check("...and to reissue one", "/flights/shares/regenerate" in html)
+    # THE SAME TABLE AS THE ROSTER. Two tables on one page styling
+    # themselves differently is most of why this page read as unfinished.
+    check("shares are a table", '<table class="share-table">' in html)
+    before = html.split('class="share-table"')[0]
+    check("...inside the same scroller the roster uses",
+          '<div class="table-scroll">' in before[-400:], before[-120:])
+    check("...with a real thead", "<th>Name</th>" in html and "<th>Expires</th>" in html)
 
-    # A revoked invite stays visible, struck through — same reasoning as a
-    # dropped leg on the import review.
-    check("a revoked invite is shown, not hidden", "is-revoked" in html)
-    check("...struck through rather than removed",
-          "line-through" in html.split(".share-row.is-revoked", 1)[1][:200])
+    # EDIT IN PLACE, no dialog and no name box standing in front of the
+    # button. A <form> cannot wrap a <tr>, so rows associate by id.
+    check("rows carry editable fields", 'name="expires_at"' in html)
+    check("...bound to a per-row form by id", 'form="sh-' in html)
+    check("there is no name box gating the add button",
+          'placeholder="Name (e.g. Sarah)"' not in html)
+    check("the button says what it makes", "New share" in html)
 
-    # The old copy handler grabbed #share-btn by id and threw on load when
-    # it was absent — taking the past-flights toggle in the same script
-    # block down with it.
-    check("the copy handler no longer depends on a single id",
-          "getElementById('share-btn')" not in html)
-    check("...and is delegated instead", "data-share-copy" in html)
-    # A cancelled navigator.share rejects with AbortError, which is not a
-    # failure and must not fall through to the clipboard.
-    check("backing out of the share sheet is not treated as an error",
-          "AbortError" in html)
+    # ONE BUTTON PER JOB. Copy and New (regenerate) are gone.
+    check("each row can be shared", "data-share-send" in html)
+    check("the copy button is gone", "data-share-copy" not in html)
+    check("the per-row regenerate is gone", "/flights/shares/regenerate" not in html)
+    check("...and so is revoke", "/flights/shares/revoke" not in html)
+    check("delete is the only removal", "/flights/shares/delete" in html)
+    check("...and it asks first", "cannot be undone" in html)
+
+    # Revoked rows no longer linger.
+    check("nothing is kept around as revoked", "is-revoked" not in html)
+
+    # Autosave: `change` covers a blurred text field AND a picked date.
+    check("edits save without a Save button", "addEventListener('change'" in html)
+    check("...and Enter commits rather than reloading",
+          "ev.preventDefault()" in html.split("keydown", 1)[1][:400])
+    check("...and a row cannot submit twice", "pending.has" in html)
+    # A cancelled share sheet is a choice, not a failure.
+    check("backing out of the share sheet copies nothing", "AbortError" in html)
 
 
 def test_late_is_measured_from_the_airlines_own_schedule(uid):
@@ -2583,7 +2611,7 @@ def main():
     test_the_calendar_draws_flights_with_the_shared_strip(create_user("caltest", "pw-not-used"))
     test_the_calendar_row_opens_one_at_a_time(create_user("caltest2", "pw-not-used"))
     test_named_share_codes_keep_existing_shares_working()
-    test_the_share_panel_is_a_list_not_a_billboard()
+    test_the_share_table_looks_like_the_flight_table()
     test_late_is_measured_from_the_airlines_own_schedule(create_user("sbtest", "pw-not-used"))
     test_flown_legs_are_removed_by_hand_never_by_default()
     test_the_mini_map_says_whether_it_knows_the_path(create_user("mmtest", "pw-not-used"))

@@ -416,6 +416,12 @@ def init_db() -> None:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_share_codes_user "
                      "ON share_codes(user_id)")
+        # Added after the table shipped in 1.23.0, so CREATE TABLE IF NOT
+        # EXISTS will not put it on an existing install. Same PRAGMA
+        # pattern the users table uses for its own late columns.
+        scols = {r["name"] for r in conn.execute("PRAGMA table_info(share_codes)")}
+        if "expires_at" not in scols:
+            conn.execute("ALTER TABLE share_codes ADD COLUMN expires_at TEXT")
 
         # BACKFILL, and it must be idempotent — init_db runs on every boot.
         # INSERT OR IGNORE on the UNIQUE code does that: a pilot whose code
