@@ -1,7 +1,7 @@
 # MyPilot
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.22.0.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.23.0.
 
 The version above was stale at 1.4.0 for five releases. `app/version.py`
 is the only authority; this line is a convenience and nothing reads it.
@@ -48,7 +48,7 @@ seriously.
 
 ## STATE
 
-**v1.22.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+**v1.23.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
 owner plus several FOs, who fly the same legs — hence shared flight rows
 (v5.1, retained).
 
@@ -69,7 +69,7 @@ page split (1.6.0–1.7.0). All three came out of the same problem — the app
 could not be OPERATED without SSH, and bugs could not be reproduced without
 flying a trip.
 
-Tests: **2,017**, twelve suites, all passing.
+Tests: **2,048**, twelve suites, all passing.
 
 **Current work: the UI chunks (1.9.0 onward).** Five agreed steps, owner's
 brief, reworking the tracker and calendar around one flight-strip
@@ -108,9 +108,9 @@ TRACKER SHOWS.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, placeholder filter |
-| `tests_ui_fixes.py` | 607 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
+| `tests_ui_fixes.py` | 635 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
 | `tests_regression_matrix.py` | 761 | every page x 6 odd states x 2 themes x 2 clocks, pilot and viewer |
-| `tests_app_shell.py` | 198 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
+| `tests_app_shell.py` | 201 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
 | `tests_timezones.py` | 68 | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
 | `tests_closeout_sweep.py` | 42 | the abandonment cliff, the on-ground handover, the late gate-in chase and its cap |
 | `tests_import_merge.py` | 43 | additive import, month scoping, future-only reconciliation, the diff, manual add |
@@ -280,7 +280,7 @@ this the roster could not exceed about a month:
 
 ---
 
-### N4 — per-viewer named invites
+### N4 — per-viewer named invites ✅ DONE in 1.23.0 (reduced scope)
 
 **The problem.** One share code per pilot means the family is one
 undifferentiated blob. Revocation is all-or-nothing: cutting off one person
@@ -1669,14 +1669,14 @@ python tests_poller_end_to_end.py   #   47
 python tests_past_leg_detail.py     #   19
 python tests_budget_limit.py        #   17
 python tests_carrier_cap.py         #   13
-python tests_ui_fixes.py            #  607
-python tests_app_shell.py           #  198
+python tests_ui_fixes.py            #  635
+python tests_app_shell.py           #  201
 python tests_timezones.py           #   68
 python tests_closeout_sweep.py      #   42
 python tests_import_merge.py        #   43
 python tests_test_mode.py           #  133
 python tests_regression_matrix.py   #  761
-```                                  # 2017
+```                                  # 2048
 
 Each uses its own scratch DB via `PT_DB_FILE`. Read
 `tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
@@ -1743,6 +1743,72 @@ DECIDED, so it does not get re-litigated:
 
 
 ## VERSION HISTORY
+
+### 1.23.0 — named share codes, and a smaller share panel
+
+N4, **cut down by the owner**: no expiry dates, no add-dialog, no global
+pause switch, and no attempt to talk anyone into one code per person.
+Name a code, add another if you want one, keep what already exists
+working. The spec's security argument was sound and the product argument
+against it was better — a feature nobody uses protects nobody.
+
+**Codes moved to a `share_codes` table**, one row per invite: name, code,
+created, last seen, revoked. `users.share_code` IS NOT DROPPED — it still
+carries the UNIQUE index and the record of where each pilot's first code
+came from. Dropping a populated column to tidy up is how everybody's
+existing code disappears in a release note nobody reads.
+
+Auth resolves through the new table, so **revoke is per-person and
+immediate**: the revoked row stops resolving, that viewer is out mid
+session, and nobody else notices. That is the thing a single code could
+not do.
+
+**Two silent breakages found and fixed while building it**, both of the
+same shape — a second place that also had to change:
+
+- **A brand-new pilot's code would not have worked at all.** `create_user`
+  writes `users.share_code`; nothing wrote the invite row, and the db.py
+  backfill only runs at startup. So a fresh account showed a code on its
+  page that logged nobody in, until the next restart. The invite row is
+  now written in the same transaction as the user, so an account cannot
+  exist without one. Caught by checking a freshly created user rather
+  than a migrated one — the migration path worked perfectly and hid it.
+- **The legacy whole-account regenerate would have desynced the tables.**
+  Its button is gone from the page, but the ROUTE is still reachable from
+  a stale phone, and it updated only `users`. That would have left the
+  pilot's first invite pointing at digits nothing accepts, while the page
+  displayed a code that worked. It now updates both.
+
+Session validation was also re-pointed at the table. Left alone, every
+invite added after this release would have logged its viewer straight
+back out on the next page: authenticate at `/login/code`, then fail the
+`users.share_code` comparison one request later.
+
+**The panel.** The code was a single number set at 2.2rem, letter-spaced,
+in the accent colour — a credential the size of a headline, dominating
+the page above the thing the page is for. It is now a compact list: name,
+digits, whether it has been used, and copy / reissue / revoke. A revoked
+invite stays on the page struck through rather than vanishing, the same
+reasoning as a dropped leg on the import review — the pilot has to be
+able to tell "I cut that person off" from "that was never there".
+
+A list rather than a `<table>` because the rows are four columns on a
+desktop and a stacked block on a phone, and one grid rule does both.
+
+**The old copy handler grabbed `#share-btn` by id**, which is fine for
+exactly one code and throws on load when there are none or several —
+taking the past-flights toggle down with it, since both live in the same
+script block. Delegated now, and a cancelled share sheet (`AbortError`)
+is no longer treated as a failure that falls through to the clipboard.
+
+**Page polish:** cards get a defined edge and less padding, the roster
+table's header reads as a header, and its figures are tabular so the
+columns stop wandering. The table stays a table — this is the pilot's
+admin view, where the job is scanning sixty rows and deleting the wrong
+one.
+
+Tests: 2,017 → 2,048. The form-action check added in 1.18.0 picked up all
+four new routes with no changes, which is what it was for.
 
 ### 1.22.0 — one sentence instead of a sentence with an exception
 

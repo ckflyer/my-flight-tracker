@@ -1855,6 +1855,121 @@ def test_the_calendar_row_opens_one_at_a_time(uid):
           str((view["route_nm"], view["block_time"])))
 
 
+def test_named_share_codes_keep_existing_shares_working():
+    """N4, kept small. (1.23.0)
+
+    The spec wanted expiry dates, a dialog and a global pause switch. The
+    owner cut it to: name a code, add another, keep what exists working.
+    Everything below is about that last clause, because it is the part
+    that breaks silently — a family does not report "my code stopped
+    working", they just stop opening the app.
+    """
+    from app.db import get_connection
+    from app.auth import (create_user as _mk, get_user_by_share_code,
+                          share_codes_for, add_share_code,
+                          set_share_code_revoked, regenerate_one_share_code,
+                          regenerate_share_code)
+
+    who = _mk("n4pilot", "pw-not-used")
+    original = get_connection().execute(
+        "SELECT share_code FROM users WHERE id = ?", (who,)).fetchone()["share_code"]
+
+    # A NEW ACCOUNT'S CODE MUST WORK IMMEDIATELY. create_user writes the
+    # invite row in the same transaction as the user; without that a
+    # brand-new pilot hands out five digits that log nobody in, and the
+    # db.py backfill does not rescue them until the next restart.
+    rows = share_codes_for(who)
+    check("a new account gets its invite row at once", len(rows) == 1, str(rows))
+    check("...carrying the code the pilot is already showing",
+          rows[0]["code"] == original, str(rows))
+    check("...and it resolves", get_user_by_share_code(original) is not None)
+
+    # ADDING NEVER DISTURBS WHAT EXISTS. This is the owner's "keep current
+    # shares intact" in one assertion.
+    sarah = add_share_code(who, "Sarah")
+    check("a second invite does not change the first",
+          get_user_by_share_code(original) is not None)
+    check("...and the new one works too", get_user_by_share_code(sarah) is not None)
+    check("...with different digits", sarah != original)
+
+    # REVOKE IS PER-PERSON. The whole point of the feature.
+    sid = [r for r in share_codes_for(who) if r["name"] == "Sarah"][0]["id"]
+    set_share_code_revoked(who, sid, True)
+    check("a revoked invite stops resolving", get_user_by_share_code(sarah) is None)
+    check("...while everyone else is unaffected",
+          get_user_by_share_code(original) is not None)
+    # Reversible: revoking is one tap and the consequence is not visible
+    # until somebody complains.
+    set_share_code_revoked(who, sid, False)
+    check("...and it can be put back", get_user_by_share_code(sarah) is not None)
+
+    # A revoked row is NOT deleted, so the pilot can tell "I cut that
+    # person off" from "that was never there".
+    set_share_code_revoked(who, sid, True)
+    check("a revoked invite stays listed",
+          any(r["id"] == sid for r in share_codes_for(who)))
+    set_share_code_revoked(who, sid, False)
+
+    # REGENERATING ONE leaves the others alone.
+    fresh = regenerate_one_share_code(who, sid)
+    check("new digits kill the old ones", get_user_by_share_code(sarah) is None)
+    check("...and the new ones work", get_user_by_share_code(fresh) is not None)
+    check("...and the original is untouched",
+          get_user_by_share_code(original) is not None)
+
+    # A code may not collide with ANY live code, across all pilots — two
+    # households on one code would each see the other's position feed.
+    all_codes = [r["code"] for r in get_connection().execute(
+        "SELECT code FROM share_codes")]
+    check("every code in the table is unique",
+          len(all_codes) == len(set(all_codes)), str(all_codes))
+
+    # THE LEGACY WHOLE-ACCOUNT REGENERATE. Its button is gone but the
+    # route is still reachable from a stale page, and auth resolves
+    # through share_codes now — so updating only `users` would leave the
+    # pilot's first invite pointing at digits nothing accepts.
+    regenerate_share_code(who)
+    now_users = get_connection().execute(
+        "SELECT share_code FROM users WHERE id = ?", (who,)).fetchone()["share_code"]
+    fam = [r for r in share_codes_for(who) if r["name"] == "Family"][0]
+    check("the legacy regenerate keeps both tables in step",
+          fam["code"] == now_users, f"{fam['code']} vs {now_users}")
+    check("...and the new code resolves",
+          get_user_by_share_code(now_users) is not None)
+    check("...and the old one does not", get_user_by_share_code(original) is None)
+
+
+def test_the_share_panel_is_a_list_not_a_billboard():
+    """The code was set at 2.2rem in the accent colour. (1.23.0)"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "flights.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    check("the billboard is gone", ".share-code {" not in html)
+    check("...replaced by a list of invites", ".share-list" in html)
+    check("each row can be named", 'name="name"' in html)
+    check("...and there is a way to add another", "/flights/shares/add" in html)
+    check("...to revoke one", "/flights/shares/revoke" in html)
+    check("...and to reissue one", "/flights/shares/regenerate" in html)
+
+    # A revoked invite stays visible, struck through — same reasoning as a
+    # dropped leg on the import review.
+    check("a revoked invite is shown, not hidden", "is-revoked" in html)
+    check("...struck through rather than removed",
+          "line-through" in html.split(".share-row.is-revoked", 1)[1][:200])
+
+    # The old copy handler grabbed #share-btn by id and threw on load when
+    # it was absent — taking the past-flights toggle in the same script
+    # block down with it.
+    check("the copy handler no longer depends on a single id",
+          "getElementById('share-btn')" not in html)
+    check("...and is delegated instead", "data-share-copy" in html)
+    # A cancelled navigator.share rejects with AbortError, which is not a
+    # failure and must not fall through to the clipboard.
+    check("backing out of the share sheet is not treated as an error",
+          "AbortError" in html)
+
+
 def test_late_is_measured_from_the_airlines_own_schedule(uid):
     """The FFDO is not a schedule once the leg is flown. (1.21.0)
 
@@ -2467,6 +2582,8 @@ def main():
     test_a_finished_trip_holds_the_tracker_for_ten_hours()
     test_the_calendar_draws_flights_with_the_shared_strip(create_user("caltest", "pw-not-used"))
     test_the_calendar_row_opens_one_at_a_time(create_user("caltest2", "pw-not-used"))
+    test_named_share_codes_keep_existing_shares_working()
+    test_the_share_panel_is_a_list_not_a_billboard()
     test_late_is_measured_from_the_airlines_own_schedule(create_user("sbtest", "pw-not-used"))
     test_flown_legs_are_removed_by_hand_never_by_default()
     test_the_mini_map_says_whether_it_knows_the_path(create_user("mmtest", "pw-not-used"))

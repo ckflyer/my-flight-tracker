@@ -392,6 +392,47 @@ def init_db() -> None:
             )
             """
         )
+        # NAMED SHARE CODES (1.23.0). One row per invite, so revoking one
+        # person does not log out the whole family — which is what a single
+        # code on `users` forced.
+        #
+        # `users.share_code` IS NOT DROPPED. It stays as the column the
+        # UNIQUE index lives on and as the record of where each pilot's
+        # first code came from; auth reads this table instead. Dropping a
+        # populated column to tidy up is how you lose everybody's existing
+        # code in a release note nobody reads.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS share_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                code TEXT NOT NULL UNIQUE,
+                name TEXT,
+                created_at TEXT,
+                last_seen_at TEXT,
+                revoked INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_share_codes_user "
+                     "ON share_codes(user_id)")
+
+        # BACKFILL, and it must be idempotent — init_db runs on every boot.
+        # INSERT OR IGNORE on the UNIQUE code does that: a pilot whose code
+        # is already here is skipped, so a restart cannot duplicate it or
+        # reset its name.
+        #
+        # This is what "keep current shares intact" means concretely: every
+        # code a family is already using becomes a row here, still valid,
+        # and nobody has to be told to re-share anything.
+        for r in conn.execute(
+                "SELECT id, share_code, created_at FROM users "
+                "WHERE share_code IS NOT NULL AND share_code != ''"):
+            conn.execute(
+                "INSERT OR IGNORE INTO share_codes "
+                "(user_id, code, name, created_at) VALUES (?,?,?,?)",
+                (r["id"], r["share_code"], "Family", r["created_at"]))
+
         # Upgrades from before these columns existed.
         ucols = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
         for name, decl in [

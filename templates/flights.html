@@ -17,13 +17,18 @@
       max-width: 900px;
       margin: 0 auto;
     }
-    h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
-    .sub { color: var(--muted); margin-bottom: 1.5rem; }
+    /* Tightened 1.23.0. The page was three flat slabs of the same colour
+       with no edges and a lot of air; the changes are small and all in
+       the same direction — a defined edge, slightly less padding, and a
+       heading that sits closer to what it names. */
+    h1 { font-size: 1.5rem; letter-spacing: -0.02em; margin-bottom: 0.25rem; }
+    .sub { color: var(--muted); margin-bottom: 1.25rem; font-size: 0.875rem; }
     .card {
       background: var(--card);
-      border-radius: 12px;
-      padding: 1.25rem;
-      margin-bottom: 1.5rem;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1.1rem 1.15rem;
+      margin-bottom: 1.15rem;
     }
     textarea {
       width: 100%;
@@ -48,10 +53,29 @@
       font-weight: 600;
       cursor: pointer;
     }
-    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    /* THE ROSTER TABLE (sharpened 1.23.0). It stays a table: this is the
+       pilot's own admin view, where the job is scanning sixty rows and
+       deleting the wrong one, and a table is the right tool for that. The
+       tracker and calendar are where a flight is a designed object.
+
+       What changed is contrast and rhythm — the header now reads as a
+       header, the figures line up, and only the header rule is solid. */
+    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
     .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-    th, td { text-align: left; padding: 0.5rem 0.4rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
-    th { color: var(--muted); font-weight: 500; font-size: 0.75rem; text-transform: uppercase; }
+    th, td {
+      text-align: left; padding: 0.55rem 0.45rem;
+      border-bottom: 1px solid var(--border); white-space: nowrap;
+    }
+    th {
+      color: var(--muted); font-weight: 700; font-size: 0.68rem;
+      text-transform: uppercase; letter-spacing: 0.07em;
+      border-bottom-color: var(--muted);
+    }
+    /* Times and dates are columns of digits read down, not across, so
+       they need to be the same width per glyph or the column wanders. */
+    td { font-variant-numeric: tabular-nums; }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:hover td { background: rgba(127,127,127,0.06); }
     td:last-child, th:last-child { width: 44px; white-space: normal; }
     .count { color: var(--muted); margin-bottom: 0.75rem; }
     .toggle {
@@ -142,15 +166,91 @@
     @media (max-width: 400px) {
     }
     .logout-btn:hover { color: var(--text); border-color: var(--muted); }
-    .share-code-box { position: relative; margin: 0.5rem 0 1rem; }
-    .share-code {
-      font-size: 2.2rem;
-      font-weight: 700;
-      letter-spacing: 0.25em;
-      font-variant-numeric: tabular-nums;
-      color: var(--accent);
+    /* SHARING (1.23.0). Was a single code set 2.2rem, letter-spaced, in
+       the accent colour — a number the size of a headline, dominating the
+       page above the thing the page is actually for. It is a credential
+       you read out once, not a banner.
+
+       A LIST, not a <table>. The rows carry a name, digits, a state and a
+       cluster of controls, which is four columns on a desktop and a
+       stacked block on a phone; a real table cannot do the second without
+       fighting it. Grid does both from one rule. */
+    .share-card .card-head {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.15rem;
     }
-    .regen-form { position: absolute; top: -0.15rem; right: 0; margin: 0; }
+    .share-card h2 {
+      margin: 0; font-size: 1rem; font-weight: 600; letter-spacing: -0.01em;
+    }
+    .share-sub { margin: 0 0 0.85rem; font-size: 0.8125rem; line-height: 1.5; }
+    .add-share { display: flex; gap: 0.4rem; margin: 0; }
+    .add-share input {
+      background: var(--input-bg); color: var(--text);
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 0.4rem 0.6rem; font-size: 0.85rem; font: inherit;
+      width: 11rem; max-width: 42vw; min-height: 36px;
+    }
+    .btn-add {
+      font: inherit; font-size: 0.85rem; font-weight: 600;
+      padding: 0.4rem 0.9rem; min-height: 36px;
+      border-radius: 8px; border: 1px solid var(--accent);
+      background: var(--accent); color: #fff; cursor: pointer;
+    }
+
+    .share-list { list-style: none; margin: 0; padding: 0; }
+    .share-row {
+      display: grid;
+      grid-template-columns: minmax(0,1fr) auto auto;
+      grid-template-areas: "name digits tools" "seen digits tools";
+      align-items: center; gap: 0.1rem 0.75rem;
+      padding: 0.6rem 0; border-top: 1px solid var(--border);
+    }
+    .share-row:first-child { border-top: none; }
+    .share-name { grid-area: name; font-weight: 600; font-size: 0.9rem;
+                  overflow-wrap: anywhere; }
+    .share-seen { grid-area: seen; font-size: 0.75rem; color: var(--muted); }
+    /* Tabular figures so five digits are the same width on every row and
+       the column does not shimmer as you read down it. */
+    .share-digits {
+      grid-area: digits;
+      font-size: 1.05rem; font-weight: 700; letter-spacing: 0.14em;
+      font-variant-numeric: tabular-nums;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--text);
+    }
+    .share-tools { grid-area: tools; display: flex; align-items: center; gap: 0.3rem; }
+    .share-tools form { margin: 0; }
+    .share-ico {
+      font: inherit; font-size: 0.75rem; line-height: 1;
+      padding: 0.35rem 0.55rem; min-height: 30px;
+      border-radius: 7px; border: 1px solid var(--border);
+      background: none; color: var(--muted); cursor: pointer;
+    }
+    .share-ico:hover { color: var(--text); border-color: var(--muted); }
+    .share-ico.danger { color: var(--muted); font-size: 0.95rem; padding: 0.25rem 0.5rem; }
+    .share-ico.danger:hover { color: var(--bad); border-color: var(--bad); }
+
+    /* A revoked invite STAYS ON THE PAGE, greyed, with its digits struck
+       through — same reasoning as a dropped leg on the import review.
+       Vanishing it leaves the pilot unable to tell "I cut that person
+       off" from "that was never there", and the digits are worth keeping
+       visible because the question is usually "which code did I revoke". */
+    .share-row.is-revoked { opacity: 0.5; }
+    .share-row.is-revoked .share-digits { text-decoration: line-through; }
+    .share-tag {
+      font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.06em; color: var(--muted); margin-left: 0.35rem;
+    }
+    .share-empty { color: var(--muted); font-size: 0.85rem; padding: 0.6rem 0; }
+
+    @media (max-width: 430px) {
+      .share-row {
+        grid-template-columns: minmax(0,1fr) auto;
+        grid-template-areas: "name digits" "seen digits" "tools tools";
+        gap: 0.15rem 0.6rem;
+      }
+      .share-tools { padding-top: 0.45rem; }
+    }
 
     /* Month filter (1.5.0). Wraps to two lines on a narrow phone rather
        than squeezing the select to something untappable. */
@@ -233,25 +333,65 @@
     <div class="brand">MyPilot</div>
   </div>
   <h1>Flights</h1>
-  <p class="sub">Paste your trip schedule below.</p>
+  <p class="sub">Your schedule, and who can see it.</p>
 
-  <div class="card">
-    <div class="count">Share with viewers</div>
-    <div class="share-code-box">
-      <div class="share-code" id="share-code">{{ share_code }}</div>
-      <form method="post" action="/flights/regenerate-code" onsubmit="return confirm('Generate a new code? Anyone using the current code will lose access immediately.');" class="regen-form">
-        <button type="submit" class="regen-icon-btn" title="Regenerate code" aria-label="Regenerate code">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="1 4 1 10 7 10"></polyline>
-            <polyline points="23 20 23 14 17 14"></polyline>
-            <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"></path>
-          </svg>
-        </button>
+  <div class="card share-card">
+    <div class="card-head">
+      <h2>Sharing</h2>
+      <form method="post" action="/flights/shares/add" class="add-share">
+        <input type="text" name="name" placeholder="Name (e.g. Sarah)"
+               maxlength="40" aria-label="Name for the new share code">
+        <button type="submit" class="btn-add">Add</button>
       </form>
     </div>
-    <div class="share-actions">
-      <button type="button" id="share-btn">Share</button>
-    </div>
+    <p class="sub share-sub">
+      Anyone with a code can see where you are. Give each person their own
+      and you can cut off one without cutting off everybody.
+    </p>
+
+    <ul class="share-list">
+      {% for sh in shares %}
+      <li class="share-row {% if sh.revoked %}is-revoked{% endif %}">
+        <span class="share-name">
+          {{ sh.name or 'Share' }}
+          {% if sh.revoked %}<span class="share-tag">revoked</span>{% endif %}
+        </span>
+        <span class="share-digits" data-code="{{ sh.code }}">{{ sh.code }}</span>
+        <span class="share-seen">
+          {% if sh.revoked %}&mdash;
+          {% elif sh.last_seen_at %}used
+          {% else %}not used yet{% endif %}
+        </span>
+        <span class="share-tools">
+          {% if not sh.revoked %}
+          <button type="button" class="share-ico" data-share-copy
+                  title="Copy code" aria-label="Copy code {{ sh.code }}">Copy</button>
+          <form method="post" action="/flights/shares/regenerate"
+                onsubmit="return confirm('New code for {{ sh.name or 'this share' }}? Whoever is using the current one loses access straight away.');">
+            <input type="hidden" name="code_id" value="{{ sh.id }}">
+            <button type="submit" class="share-ico" title="New code"
+                    aria-label="New code for {{ sh.name or 'this share' }}">New</button>
+          </form>
+          <form method="post" action="/flights/shares/revoke"
+                onsubmit="return confirm('Revoke {{ sh.name or 'this share' }}? They lose access immediately. You can put it back afterwards.');">
+            <input type="hidden" name="code_id" value="{{ sh.id }}">
+            <button type="submit" class="share-ico danger" title="Revoke"
+                    aria-label="Revoke {{ sh.name or 'this share' }}">&times;</button>
+          </form>
+          {% else %}
+          <form method="post" action="/flights/shares/revoke">
+            <input type="hidden" name="code_id" value="{{ sh.id }}">
+            <input type="hidden" name="restore" value="1">
+            <button type="submit" class="share-ico"
+                    aria-label="Restore {{ sh.name or 'this share' }}">Restore</button>
+          </form>
+          {% endif %}
+        </span>
+      </li>
+      {% else %}
+      <li class="share-empty">No share codes yet. Add one above.</li>
+      {% endfor %}
+    </ul>
   </div>
 
   <div class="card">
@@ -326,7 +466,7 @@
 
   <div class="card">
     <div class="filter-bar">
-      <div class="count">
+      <div class="count" role="heading" aria-level="2">
         {{ count }} leg{{ '' if count == 1 else 's' }}
         {%- if active_month %} in {{ active_month_label }}{% else %} loaded{% endif %}
       </div>
@@ -369,24 +509,36 @@
       }
     }
 
-    document.getElementById('share-btn').addEventListener('click', async function() {
-      const code = document.getElementById('share-code').textContent.trim();
+    // PER-ROW SHARE (1.23.0). The old handler grabbed #share-btn and
+    // #share-code by id, which is fine for exactly one code and throws on
+    // page load the moment there are none or several — taking the past-
+    // flights toggle above it down with it, since both live in this
+    // script block.
+    //
+    // Delegated, so rows added by a later render need no rewiring.
+    document.addEventListener('click', async function (ev) {
+      const btn = ev.target.closest && ev.target.closest('[data-share-copy]');
+      if (!btn) { return; }
+      const row = btn.closest('.share-row');
+      const code = row.querySelector('.share-digits').dataset.code;
+      const name = row.querySelector('.share-name').textContent.trim();
       const url = window.location.origin + '/login';
       const text = `Track my flights on MyPilot: ${url}\nCode: ${code}`;
+
+      // navigator.share is the better experience where it exists, but it
+      // needs a user gesture and rejects if the person backs out — which
+      // is not an error and must not fall through to the clipboard.
       if (navigator.share) {
-        try {
-          await navigator.share({ title: 'MyPilot', text });
-        } catch (e) { /* user cancelled — fine */ }
-        return;
+        try { await navigator.share({ title: 'MyPilot', text }); return; }
+        catch (e) { if (e && e.name === 'AbortError') { return; } }
       }
       try {
         await navigator.clipboard.writeText(text);
-        const btn = document.getElementById('share-btn');
-        const original = btn.textContent;
-        btn.textContent = 'Copied!';
-        setTimeout(() => { btn.textContent = original; }, 1500);
+        const was = btn.textContent;
+        btn.textContent = 'Copied';
+        setTimeout(() => { btn.textContent = was; }, 1500);
       } catch (e) {
-        alert(text);
+        window.prompt('Copy this and send it to ' + name, text);
       }
     });
   </script>

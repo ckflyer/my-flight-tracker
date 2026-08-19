@@ -30,6 +30,8 @@ from .view import short_zone, zone_label  # THE zone label, see view.py
 from .auth import (
     get_or_create_secret_key, count_users, create_user, get_user_by_username,
     get_user_by_id, get_user_by_share_code, verify_password, regenerate_share_code,
+    share_codes_for, add_share_code, rename_share_code, set_share_code_revoked,
+    regenerate_one_share_code,
     list_all_users, delete_user, set_admin, set_recovery_code,
     reset_password_with_recovery_code,
 )
@@ -128,8 +130,18 @@ def current_viewer_user_id(request: Request) -> Optional[int]:
     viewer_code = request.session.get("viewer_code")
     if not viewer_user_id or not viewer_code:
         return None
-    user = get_user_by_id(viewer_user_id)
-    if not user or user["share_code"] != viewer_code:
+    # RE-RESOLVED THROUGH share_codes ON EVERY REQUEST (1.23.0).
+    #
+    # This used to compare against `users.share_code`, which was the only
+    # code there was. Left as it was, every invite added after 1.23.0
+    # would have logged its viewer straight back out on the next page —
+    # they would authenticate at /login/code and then fail this check.
+    #
+    # Going through the table also means REVOKE is immediate and
+    # per-person: the revoked row stops resolving, that viewer is out mid
+    # session, and nobody else notices.
+    holder = get_user_by_share_code(viewer_code)
+    if not holder or holder["id"] != viewer_user_id:
         return None
     return viewer_user_id
 
@@ -955,7 +967,7 @@ async def login_code(request: Request, code: str = Form(...)):
         template = jinja_env.get_template("login.html")
         return HTMLResponse(template.render(request=request, error="That tracking code doesn't match anyone."))
     request.session["viewer_user_id"] = user["id"]
-    request.session["viewer_code"] = user["share_code"]
+    request.session["viewer_code"] = code.strip()
     request.session.pop("user_id", None)
     return RedirectResponse(url="/", status_code=303)
 
@@ -2054,6 +2066,7 @@ async def flights_page(request: Request, month: Optional[str] = None,
                             if active_month else None),
         active_tab="flights", is_admin=bool(pilot["is_admin"]), is_pilot=True,
         settings=settings.model_dump(), share_code=pilot["share_code"],
+        shares=share_codes_for(pilot["id"]),
         # A paste that parsed to nothing has always redirected here with
         # ?err=parse, and this page has always ignored it — so the paste
         # box emptied itself, the roster did not change, and NOTHING said
@@ -2317,6 +2330,53 @@ async def admin_regenerate_code(request: Request):
     if isinstance(pilot, RedirectResponse):
         return pilot
     regenerate_share_code(pilot["id"])
+    return RedirectResponse(url="/flights", status_code=303)
+
+
+# --- named share codes (1.23.0) --------------------------------------------
+#
+# Four small routes rather than one that switches on an action field.
+# Each is a separate POST target, so the form that revokes cannot be
+# reached by a typo in the form that renames.
+
+@app.post("/flights/shares/add")
+async def shares_add(request: Request, name: str = Form("")):
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    add_share_code(pilot["id"], name)
+    return RedirectResponse(url="/flights", status_code=303)
+
+
+@app.post("/flights/shares/rename")
+async def shares_rename(request: Request, code_id: int = Form(...),
+                        name: str = Form("")):
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    rename_share_code(pilot["id"], code_id, name)
+    return RedirectResponse(url="/flights", status_code=303)
+
+
+@app.post("/flights/shares/revoke")
+async def shares_revoke(request: Request, code_id: int = Form(...),
+                        restore: str = Form("")):
+    """Revoke, or put back. Reversible on purpose: revoking is one tap and
+    the consequence — somebody's family losing the feed — is not obvious
+    until they complain."""
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    set_share_code_revoked(pilot["id"], code_id, not restore)
+    return RedirectResponse(url="/flights", status_code=303)
+
+
+@app.post("/flights/shares/regenerate")
+async def shares_regenerate(request: Request, code_id: int = Form(...)):
+    pilot = require_pilot(request)
+    if isinstance(pilot, RedirectResponse):
+        return pilot
+    regenerate_one_share_code(pilot["id"], code_id)
     return RedirectResponse(url="/flights", status_code=303)
 
 

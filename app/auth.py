@@ -13,7 +13,7 @@ import binascii
 import hashlib
 import os
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -112,10 +112,25 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 def _generate_unique_share_code(conn) -> str:
+    """A code no live invite anywhere is already using.
+
+    Checked against BOTH tables, and across all pilots, not merely unique
+    per pilot: two households handed the same five digits would each see
+    the other's position feed. `users.share_code` is still checked because
+    it still carries the UNIQUE index, so a collision there would fail the
+    insert rather than be caught here.
+
+    Revoked codes are deliberately still in the way. Reissuing five digits
+    that a removed viewer has sitting in a text message is the one failure
+    this whole feature exists to prevent.
+    """
     for _ in range(50):
         code = f"{secrets.randbelow(100_000):05d}"
-        existing = conn.execute("SELECT 1 FROM users WHERE share_code = ?", (code,)).fetchone()
-        if not existing:
+        taken = conn.execute(
+            "SELECT 1 FROM users WHERE share_code = ? "
+            "UNION ALL SELECT 1 FROM share_codes WHERE code = ?",
+            (code, code)).fetchone()
+        if not taken:
             return code
     # Practically unreachable at this scale (100k possible codes), but never
     # loop forever.
@@ -190,8 +205,23 @@ def create_user(username: str, password: str, email: str = "") -> int:
             (username.strip(), hash_password(password), email.strip(), share_code,
              1 if is_first else 0, datetime.utcnow().isoformat() + "Z"),
         )
-        conn.commit()
         user_id = cur.lastrowid
+        # AND THE INVITE ROW (1.23.0). Since auth resolves codes through
+        # `share_codes`, a pilot whose code exists only on `users` has a
+        # code that does not work — and the db.py backfill would not
+        # rescue them until the next restart. A brand-new account handing
+        # out five digits that log nobody in is the worst possible first
+        # impression, and it is silent: the pilot sees a code on their
+        # page and the family sees "invalid code".
+        #
+        # Written in the SAME transaction as the user, so an account can
+        # never exist without its first invite.
+        conn.execute(
+            "INSERT OR IGNORE INTO share_codes "
+            "(user_id, code, name, created_at) VALUES (?,?,?,?)",
+            (user_id, share_code, "Family",
+             datetime.now(timezone.utc).isoformat()))
+        conn.commit()
     finally:
         conn.close()
     claim_orphaned_data(user_id)
@@ -316,12 +346,111 @@ def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
 
 
 def get_user_by_share_code(code: str) -> Optional[Dict[str, Any]]:
+    """Resolve a code to its pilot, via `share_codes` (1.23.0).
+
+    A REVOKED row does not resolve, which is the entire point: that is how
+    one viewer is cut off without touching anyone else's access.
+
+    Every code that existed before 1.23.0 was copied into this table by
+    the backfill in db.py, so no family had to be re-sent anything.
+    """
+    code = code.strip()
     conn = get_connection()
     try:
-        row = conn.execute("SELECT * FROM users WHERE share_code = ?", (code.strip(),)).fetchone()
+        row = conn.execute(
+            "SELECT u.* FROM share_codes s JOIN users u ON u.id = s.user_id "
+            "WHERE s.code = ? AND s.revoked = 0", (code,)).fetchone()
+        if row is None:
+            return None
+        conn.execute("UPDATE share_codes SET last_seen_at = ? WHERE code = ?",
+                     (_now_iso(), code))
+        conn.commit()
     finally:
         conn.close()
-    return dict(row) if row else None
+    return dict(row)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def share_codes_for(user_id: int) -> list:
+    """Every invite this pilot has, newest last. Revoked ones included —
+    the page shows them struck through rather than vanishing them, so
+    "I removed that" is distinguishable from "that was never there"."""
+    conn = get_connection()
+    try:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM share_codes WHERE user_id = ? "
+            "ORDER BY revoked ASC, id ASC", (user_id,))]
+    finally:
+        conn.close()
+
+
+def add_share_code(user_id: int, name: str) -> str:
+    """A new invite alongside the existing ones. Adding never disturbs a
+    code already in somebody's hands."""
+    conn = get_connection()
+    try:
+        code = _generate_unique_share_code(conn)
+        conn.execute(
+            "INSERT INTO share_codes (user_id, code, name, created_at) "
+            "VALUES (?,?,?,?)",
+            (user_id, code, (name or "").strip()[:40] or "Share", _now_iso()))
+        conn.commit()
+    finally:
+        conn.close()
+    return code
+
+
+def rename_share_code(user_id: int, code_id: int, name: str) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE share_codes SET name = ? WHERE id = ? AND user_id = ?",
+            ((name or "").strip()[:40] or "Share", code_id, user_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_share_code_revoked(user_id: int, code_id: int, revoked: bool) -> None:
+    """Revoke or restore ONE invite.
+
+    Scoped by user_id in the WHERE clause, not merely by the id from the
+    form: without it any pilot could revoke any other pilot's invite by
+    posting a number.
+    """
+    conn = get_connection()
+    try:
+        conn.execute(
+            "UPDATE share_codes SET revoked = ? WHERE id = ? AND user_id = ?",
+            (1 if revoked else 0, code_id, user_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def regenerate_one_share_code(user_id: int, code_id: int) -> Optional[str]:
+    """New digits for one invite, keeping its name and its place.
+
+    The old digits stop working immediately — same effect as the old
+    whole-account regenerate, but aimed at one person instead of everyone.
+    """
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM share_codes WHERE id = ? AND user_id = ?",
+            (code_id, user_id)).fetchone()
+        if row is None:
+            return None
+        code = _generate_unique_share_code(conn)
+        conn.execute("UPDATE share_codes SET code = ?, last_seen_at = NULL "
+                     "WHERE id = ? AND user_id = ?", (code, code_id, user_id))
+        conn.commit()
+    finally:
+        conn.close()
+    return code
 
 
 def regenerate_share_code(user_id: int) -> str:
@@ -330,8 +459,21 @@ def regenerate_share_code(user_id: int) -> str:
     every request rather than being valid forever once granted."""
     conn = get_connection()
     try:
+        old_row = conn.execute("SELECT share_code FROM users WHERE id = ?",
+                               (user_id,)).fetchone()
         new_code = _generate_unique_share_code(conn)
         conn.execute("UPDATE users SET share_code = ? WHERE id = ?", (new_code, user_id))
+        # AND THE MATCHING INVITE (1.23.0). The button that calls this is
+        # gone from the page, but the ROUTE is still reachable — a phone
+        # with the old /flights open posts to it — and auth resolves codes
+        # through `share_codes` now. Updating only `users` would leave the
+        # pilot's original invite pointing at digits nothing accepts,
+        # silently, while the page showed a code that worked.
+        if old_row and old_row["share_code"]:
+            conn.execute(
+                "UPDATE share_codes SET code = ?, last_seen_at = NULL "
+                "WHERE user_id = ? AND code = ?",
+                (new_code, user_id, old_row["share_code"]))
         conn.commit()
     finally:
         conn.close()
