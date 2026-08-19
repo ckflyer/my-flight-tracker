@@ -1,7 +1,7 @@
 # MyPilot
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.24.0.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.24.1.
 
 The version above was stale at 1.4.0 for five releases. `app/version.py`
 is the only authority; this line is a convenience and nothing reads it.
@@ -48,7 +48,7 @@ seriously.
 
 ## STATE
 
-**v1.24.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+**v1.24.1.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
 owner plus several FOs, who fly the same legs — hence shared flight rows
 (v5.1, retained).
 
@@ -69,7 +69,7 @@ page split (1.6.0–1.7.0). All three came out of the same problem — the app
 could not be OPERATED without SSH, and bugs could not be reproduced without
 flying a trip.
 
-Tests: **2,059**, twelve suites, all passing.
+Tests: **2,069**, twelve suites, all passing.
 
 **Current work: the UI chunks (1.9.0 onward).** Five agreed steps, owner's
 brief, reworking the tracker and calendar around one flight-strip
@@ -108,7 +108,7 @@ TRACKER SHOWS.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, placeholder filter |
-| `tests_ui_fixes.py` | 647 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
+| `tests_ui_fixes.py` | 656 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
 | `tests_regression_matrix.py` | 761 | every page x 6 odd states x 2 themes x 2 clocks, pilot and viewer |
 | `tests_app_shell.py` | 200 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
 | `tests_timezones.py` | 68 | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
@@ -1669,14 +1669,14 @@ python tests_poller_end_to_end.py   #   47
 python tests_past_leg_detail.py     #   19
 python tests_budget_limit.py        #   17
 python tests_carrier_cap.py         #   13
-python tests_ui_fixes.py            #  647
+python tests_ui_fixes.py            #  656
 python tests_app_shell.py           #  200
 python tests_timezones.py           #   68
 python tests_closeout_sweep.py      #   42
 python tests_import_merge.py        #   43
 python tests_test_mode.py           #  133
 python tests_regression_matrix.py   #  761
-```                                  # 2059
+```                                  # 2069
 
 Each uses its own scratch DB via `PT_DB_FILE`. Read
 `tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
@@ -1743,6 +1743,54 @@ DECIDED, so it does not get re-litigated:
 
 
 ## VERSION HISTORY
+
+### 1.24.1 — the button was the problem, not the hue
+
+**"The blue makes this app feel cheap."** The owner said it about one
+button and the diagnosis generalises. `--accent` is a flat saturated blue
+and a large solid block of it is what reads as cheap — the loudest thing
+on the page turned out to be a button that adds a table row. The page had
+six of them.
+
+There is now ONE filled button on this page, and it is Import, which is
+what the page is for. New share, the month filter and the past-flights
+toggle are quiet bordered controls that gain contrast on hover. The
+accent is left for what it means — links, focus, the active tab. Six blue
+buttons is not emphasis, it is wallpaper.
+
+The hue itself was NOT changed. It is used in twelve templates and the
+complaint was about a slab of it, not the colour; recolouring the whole
+app to fix one button would be the larger, riskier and less accurate fix.
+
+**MOBILE: the table stops being a table under 600px.** Four columns, two
+of them text inputs and one a native date picker, do not fit across a
+phone — and the date input is the widest thing on the row, which is
+exactly why the owner saw it scrunch as soon as a date was set. Rows
+become blocks: code and buttons on the top line where they can be read
+and tapped, name and date full width beneath. The header is dropped
+because the fields label themselves.
+
+**Icons, not labels.** The word "Share" sat next to a date input whose
+native picker indicator renders right beside it on desktop, so the two
+read as one control with a calendar stuck to it — which is what the owner
+was seeing and why it did not happen on mobile, where the indicator is
+not drawn. It is now a tray-and-arrow glyph in its own partial, same rule
+as the arrows and the moon.
+
+**The X matches the roster's.** It was a bordered box while the table
+directly below deleted its rows with a bare glyph. Two tables on one page
+must not disagree about what deleting a row looks like; it now uses
+`.delete-btn`, the same class.
+
+**Date format: deliberately not fixed.** `8/18/2026` on desktop and
+`August 18, 2026` on the phone is `<input type="date">` rendering the
+value in each device's own locale, and it is not settable from CSS or an
+attribute. Making it consistent means giving up the native picker for a
+text box — losing the wheel on iOS and inviting typos into a field that
+locks people out when wrong. Left native. Each person sees their own
+format consistently on their own device; nobody sees two at once.
+
+Tests: 2,059 → 2,069.
 
 ### 1.24.0 — the share panel, done properly
 

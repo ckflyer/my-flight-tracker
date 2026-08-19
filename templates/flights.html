@@ -42,17 +42,32 @@
       font-size: 0.9rem;
       resize: vertical;
     }
+    /* ONE primary action per page, and on this page it is Import (1.24.1).
+       Everything else — New share, the month filter, the past-flights
+       toggle — is now quiet, so the single filled button means something
+       rather than being the colour the page happens to be painted in.
+       Six blue buttons is not emphasis, it is wallpaper.
+
+       Squarer corners and a tighter, slightly letter-spaced label: the
+       10px-radius pill with roomy padding is the shape every bootstrapped
+       admin page has, and it is most of what "cheap" was pointing at. */
     button {
       display: inline-block;
       margin-top: 0.75rem;
-      padding: 0.65rem 1.25rem;
+      padding: 0.6rem 1.1rem;
       background: var(--accent);
-      color: white;
-      border: none;
+      color: #fff;
+      border: 1px solid transparent;
       border-radius: 8px;
+      font: inherit;
+      font-size: 0.875rem;
       font-weight: 600;
+      letter-spacing: -0.005em;
       cursor: pointer;
+      transition: filter 120ms ease;
     }
+    button:hover { filter: brightness(1.08); }
+    button:active { transform: translateY(0.5px); }
     /* THE ROSTER TABLE (sharpened 1.23.0). It stays a table: this is the
        pilot's own admin view, where the job is scanning sixty rows and
        deleting the wrong one, and a table is the right tool for that. The
@@ -81,15 +96,18 @@
     .toggle {
       display: block;
       width: 100%;
-      background: rgba(127,127,127,0.12);
-      color: var(--text);
-      border: none;
+      background: none;
+      color: var(--muted);
+      border: 1px solid var(--border);
       border-radius: 10px;
-      padding: 0.75rem;
+      padding: 0.7rem;
+      font-size: 0.8125rem;
       font-weight: 600;
       cursor: pointer;
       margin-bottom: 0.75rem;
+      transition: color 120ms ease, border-color 120ms ease;
     }
+    .toggle:hover { color: var(--text); border-color: var(--muted); }
     #past-section { display: none; }
     #past-section.open { display: block; }
     .zone-cell { color: var(--muted); font-size: 0.75rem; white-space: nowrap; }
@@ -166,81 +184,141 @@
     @media (max-width: 400px) {
     }
     .logout-btn:hover { color: var(--text); border-color: var(--muted); }
-    /* SHARING (1.24.0). The panel now uses the SAME table as the roster
-       below it — same header, same rules, same padding — because two
-       tables on one page styling themselves differently is most of why
-       this page read as unfinished. Everything here is the difference
-       between a read-only row and an editable one, nothing more. */
-    .btn-new-share {
-      font: inherit; font-size: 0.8125rem; font-weight: 600;
-      padding: 0.4rem 0.85rem; min-height: 34px;
-      border-radius: 8px; border: 1px solid var(--accent);
-      background: var(--accent); color: #fff; cursor: pointer;
-      white-space: nowrap;
+    /* SHARING (1.24.1). Same <table> as the roster below — same header,
+       same rules, same padding — because two tables on one page styling
+       themselves differently was most of why this page read as
+       unfinished. */
+
+    /* THE BUTTON WAS THE PROBLEM, NOT THE HUE (1.24.1). It was a solid
+       fill of --accent, which is the same flat saturated blue every
+       framework ships as its default primary. A large block of it is what
+       reads as cheap: the loudest thing on the page turns out to be a
+       button that adds a row.
+       
+       So the fill goes and the accent stays for the things it actually
+       means — links, focus, the active tab. A quiet bordered button that
+       gains contrast on hover is the standard move in interfaces that
+       look expensive, and it costs nothing: the button is still obviously
+       a button, it just stops shouting over the content. */
+    .section-head {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 0.75rem; margin-bottom: 0.85rem;
     }
-    .new-share-form { margin: 0; }
-    .share-sub { margin: 0.85rem 0 0; font-size: 0.8125rem; line-height: 1.5; }
-    /* The per-row forms hold only a hidden id — they exist to be targeted
-       by `form=` from inside the table, and must take up no space. */
+    .section-title {
+      margin: 0; font-size: 0.8rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted);
+    }
+    .new-share-form { margin: 0; display: flex; }
+    .btn-quiet {
+      font: inherit; font-size: 0.8125rem; font-weight: 600;
+      padding: 0.4rem 0.8rem; min-height: 34px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--input-bg); color: var(--text);
+      cursor: pointer; white-space: nowrap;
+      transition: border-color 120ms ease, background 120ms ease;
+    }
+    .btn-quiet:hover { border-color: var(--muted); background: var(--card); }
+    .btn-quiet:active { transform: translateY(0.5px); }
+    .share-sub { margin: 0.9rem 0 0; font-size: 0.8125rem; line-height: 1.55; }
+    /* Per-row forms hold only a hidden id — targeted by `form=` from
+       inside the table, and must take up no space. */
     .sr-only-form { display: none; }
 
-    /* Inputs that read as TEXT until you touch them. A table of boxes
-       looks like a form to fill in; this is a table you occasionally
-       correct, so the borders stay out of the way until focus. */
+    /* Inputs that read as TEXT until touched. A table of boxes looks like
+       a form to fill in; this is a table you occasionally correct. */
     .share-table input[type="text"],
     .share-table input[type="date"] {
       font: inherit; font-size: 0.875rem; color: var(--text);
       background: transparent; border: 1px solid transparent;
       border-radius: 6px; padding: 0.3rem 0.4rem; min-height: 32px;
-      width: 100%; max-width: 100%;
+      width: 100%;
     }
-    .share-table input[type="text"] { min-width: 7rem; }
-    .share-table input[type="date"] { min-width: 8.5rem; }
     .share-table input:hover { border-color: var(--border); }
     .share-table input:focus {
-      outline: none; border-color: var(--accent);
-      background: var(--input-bg);
+      outline: none; border-color: var(--accent); background: var(--input-bg);
     }
-    .share-table input::placeholder { color: var(--muted); opacity: 0.7; }
-    /* Safari and Chrome render the picker indicator dark-on-dark. */
+    .share-table input::placeholder { color: var(--muted); opacity: 0.75; }
     .share-table input[type="date"]::-webkit-calendar-picker-indicator {
-      filter: invert(0.6);
-      cursor: pointer;
+      filter: invert(0.6); cursor: pointer;
     }
     [data-theme="light"] .share-table input[type="date"]::-webkit-calendar-picker-indicator {
       filter: none;
     }
 
-    /* Five digits, read down a column, so tabular figures and a mono
-       face — the same treatment the roster gives its times. */
+    /* Five digits read down a column: mono and tabular, the same
+       treatment the roster gives its times. */
     .share-table .share-digits {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-weight: 700; letter-spacing: 0.1em;
-      font-variant-numeric: tabular-nums;
+      font-weight: 700; letter-spacing: 0.08em;
+      font-variant-numeric: tabular-nums; white-space: nowrap;
     }
-    .share-tools { display: flex; align-items: center; gap: 0.3rem; justify-content: flex-end; }
-    .share-ico {
-      font: inherit; font-size: 0.75rem; line-height: 1;
-      padding: 0.35rem 0.6rem; min-height: 32px;
-      border-radius: 7px; border: 1px solid var(--border);
-      background: none; color: var(--muted); cursor: pointer;
-      white-space: nowrap;
+    .share-table td { vertical-align: middle; }
+    .share-tools { white-space: nowrap; text-align: right; }
+    /* Matches .delete-btn exactly — the roster's X and this one are the
+       same action and must not be two different controls. */
+    .row-icon-btn {
+      margin: 0; padding: 0; width: 32px; height: 32px; min-width: 32px;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: transparent; color: var(--muted);
+      border: none; border-radius: 8px; cursor: pointer;
     }
-    .share-ico:hover { color: var(--text); border-color: var(--muted); }
-    .share-ico.danger { font-size: 1rem; padding: 0.2rem 0.55rem; }
-    .share-ico.danger:hover { color: var(--bad); border-color: var(--bad); }
+    .row-icon-btn svg { width: 17px; height: 17px; display: block; }
+    .row-icon-btn:hover, .row-icon-btn:active {
+      background: rgba(127,127,127,0.14); color: var(--text);
+    }
 
-    /* An EXPIRED code is dimmed but still editable — the fix is usually to
-       push the date out, and greying it into unreadability would hide the
-       one field you came to change. */
+    /* An EXPIRED code is dimmed but still editable — the fix is usually
+       to push the date out, and greying it into unreadability would hide
+       the one field you came to change. */
     .share-row.is-expired td { opacity: 0.55; }
     .share-row.is-expired .share-digits { text-decoration: line-through; }
     .share-tag {
-      display: inline-block; margin-left: 0.35rem;
+      display: inline-block; margin-left: 0.3rem;
       font-size: 0.62rem; font-weight: 700; text-transform: uppercase;
       letter-spacing: 0.06em; color: var(--bad);
     }
     .share-empty { color: var(--muted); }
+
+    /* MOBILE: THE TABLE STOPS BEING A TABLE (1.24.1).
+    
+       Four columns, two of them text inputs and one of them a native date
+       picker, do not fit across a phone. Sideways scrolling to reach a
+       delete button is worse than no table at all, and the date input is
+       the widest thing on the row — which is exactly why the owner saw it
+       scrunch as soon as a date was set.
+
+       So under 600px each row becomes a block: code and buttons on the
+       top line where they can be read and tapped, name and date full
+       width beneath. The header is hidden because the fields label
+       themselves — a placeholder for the name, and a date input that is
+       visibly a date. */
+    @media (max-width: 600px) {
+      .share-table, .share-table tbody, .share-table tr, .share-table td {
+        display: block; width: 100%;
+      }
+      .share-table thead { display: none; }
+      .share-table tr.share-row {
+        padding: 0.7rem 0; border-bottom: 1px solid var(--border);
+      }
+      .share-table tr.share-row:last-child { border-bottom: none; }
+      .share-table td { border: none; padding: 0; white-space: normal; }
+      .share-table td.share-digits {
+        display: inline-block; width: auto;
+        font-size: 1.05rem; padding: 0.1rem 0 0.35rem;
+      }
+      .share-table td.share-tools {
+        display: inline-block; width: auto; float: right;
+      }
+      .share-table input[type="text"],
+      .share-table input[type="date"] {
+        border-color: var(--border); background: var(--input-bg);
+        margin-top: 0.3rem; min-height: 38px;
+      }
+      /* The scroller has nothing to scroll once the rows are blocks, and
+         leaving it on clips the focus ring on the inputs. */
+      .share-card .table-scroll { overflow-x: visible; }
+    }
 
     /* Month filter (1.5.0). Wraps to two lines on a narrow phone rather
        than squeezing the select to something untappable. */
@@ -326,12 +404,10 @@
   <p class="sub">Your schedule, and who can see it.</p>
 
   <div class="card share-card" id="shares">
-    <div class="filter-bar">
-      <div class="count" role="heading" aria-level="2">
-        Sharing
-      </div>
+    <div class="section-head">
+      <h2 class="section-title">Sharing</h2>
       <form method="post" action="/flights/shares/add" class="new-share-form">
-        <button type="submit" class="btn-new-share">New share</button>
+        <button type="submit" class="btn-quiet">New share</button>
       </form>
     </div>
 
@@ -375,9 +451,16 @@
             {% if sh.is_expired %}<span class="share-tag">expired</span>{% endif %}
           </td>
           <td class="share-tools">
-            <button type="button" class="share-ico" data-share-send
-                    title="Send this code" aria-label="Send code {{ sh.code }}">Share</button>
-            <button type="submit" form="sh-del-{{ sh.id }}" class="share-ico danger"
+            {# ICONS, NOT LABELS (1.24.1). The word "Share" sat next to a
+               date input whose native picker indicator renders right
+               beside it on desktop, so the two read as one control with a
+               calendar stuck to it. And the X is the same action the
+               roster below performs with a bare glyph — two tables on one
+               page should not disagree about what deleting a row looks
+               like. #}
+            <button type="button" class="row-icon-btn" data-share-send
+                    title="Send this code" aria-label="Send code {{ sh.code }}">{% include "partials/share_glyph.html" %}</button>
+            <button type="submit" form="sh-del-{{ sh.id }}" class="delete-btn"
                     title="Delete this code"
                     aria-label="Delete code {{ sh.code }}">&times;</button>
           </td>

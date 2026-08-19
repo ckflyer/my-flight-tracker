@@ -1980,6 +1980,38 @@ def test_the_share_table_looks_like_the_flight_table():
 
     # ONE BUTTON PER JOB. Copy and New (regenerate) are gone.
     check("each row can be shared", "data-share-send" in html)
+    # ICONS, NOT LABELS (1.24.1). The word "Share" sat beside a date
+    # input, whose native picker indicator renders right next to it on
+    # desktop — the two read as one control with a calendar stuck on.
+    check("...with a glyph from the shared partial",
+          'partials/share_glyph.html' in html)
+    check("...not the word Share in a box", ">Share</button>" not in html)
+    # The roster below deletes a row with a bare X. Two tables on one page
+    # must not disagree about what deleting looks like.
+    check("delete uses the same control as the roster's",
+          'class="delete-btn"' in html.split('data-share-send', 1)[1][:400])
+
+    # MOBILE: four columns, two of them inputs and one a native date
+    # picker, do not fit across a phone — and the date input is the widest
+    # thing on the row, which is why it scrunched as soon as a date was
+    # set. Under 600px the rows become blocks.
+    mq = html.split("@media (max-width: 600px)", 1)
+    check("the share table restacks on a phone", len(mq) == 2)
+    if len(mq) == 2:
+        block = mq[1][:1400]
+        check("...rows become blocks", ".share-table tr" in block and "display: block" in block)
+        check("...and the header is dropped", ".share-table thead" in block)
+        check("...with no sideways scroll left to trap the focus ring",
+              "overflow-x: visible" in block)
+
+    # THE BUTTON WAS THE PROBLEM, NOT THE HUE. A solid fill of --accent is
+    # the default primary every framework ships; a large block of it is
+    # what reads as cheap. One filled button per page, and this is not it.
+    check("New share is quiet, not a slab of accent",
+          "btn-quiet" in html and "btn-new-share" not in html)
+    quiet = html.split(".btn-quiet {", 1)[1].split("}", 1)[0]
+    check("...so it does not fill with the accent colour",
+          "background: var(--accent)" not in quiet, quiet)
     check("the copy button is gone", "data-share-copy" not in html)
     check("the per-row regenerate is gone", "/flights/shares/regenerate" not in html)
     check("...and so is revoke", "/flights/shares/revoke" not in html)
