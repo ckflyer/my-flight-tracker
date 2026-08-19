@@ -547,8 +547,25 @@ def test_zone_rule_reaches_every_page():
 
     with open(os.path.join(here, "templates", "flights.html"), encoding="utf-8") as fh:
         html = fh.read()
-    check("zone gets its own column", 'class="zone-cell"' in html)
-    check("...and the divider spans all seven", 'colspan="7"' in html)
+    # THE ZONE RIDES ON ITS OWN TIME (1.24.2, replacing a column).
+    #
+    # It used to be a seventh column printing "CT" or "CT/ET" once per
+    # row. Every other surface in this app treats a zone as an annotation
+    # ON a time and renders it as the .tz subscript — the strips, the
+    # tracker card and the calendar have all done so since 1.7.0. The
+    # roster was the last place stating it as a value of its own, which
+    # is why it looked like a different app's table.
+    check("the zone column is gone", 'class="zone-cell"' not in html)
+    check("...and the divider spans the six that remain", 'colspan="6"' in html)
+    check("...with the zone now subscripted onto the departure",
+          '{{ row.dep }}{% if row.dep_zone %}<span class="tz"' in html)
+    check("...and onto the arrival",
+          '{{ row.arr }}{% if row.arr_zone %}<span class="tz"' in html)
+    # The route still needs both zones available, so the view must keep
+    # supplying them separately — a single combined string would make the
+    # per-time subscript impossible.
+    check("both zones are still supplied separately",
+          '"arr_zone": tz_abbr(leg, "arr")' in src)
     check("the leg counter pluralises properly", "leg(s)" not in html)
     check("...with real logic behind it",
           "{{ '' if count == 1 else 's' }}" in html)
@@ -1956,6 +1973,72 @@ def test_named_share_codes_keep_existing_shares_working():
           get_user_by_share_code(original) is None)
 
 
+def test_the_accent_is_readable_in_both_of_its_jobs():
+    """One colour could not do both jobs. (1.24.2)
+
+    --accent is a LINK colour on a dark navy card and a BUTTON FILL behind
+    white text. Those pull in opposite directions: the first wants a light
+    value, the second a dark one. The old single blue compromised and lost
+    the button — 3.68:1 behind white text, under the 3:1 floor for UI text
+    and nowhere near the 4.5:1 for body.
+
+    Computed rather than eyeballed, because "looks fine on my monitor" is
+    how contrast bugs ship.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "static", "app.css"), encoding="utf-8") as fh:
+        css = fh.read()
+
+    def lum(h):
+        h = h.lstrip("#")
+        c = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+        f = lambda v: v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+        r, g, b = [f(v) for v in c]
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    def ratio(a, b):
+        hi, lo = sorted([lum(a), lum(b)], reverse=True)
+        return (hi + 0.05) / (lo + 0.05)
+
+    def var_in(block, name):
+        seg = css.split(block, 1)[1].split("}", 1)[0]
+        m = re.search(rf"{name}:\s*(#[0-9a-fA-F]{{6}})", seg)
+        return m.group(1) if m else None
+
+    check("the accent is split into a link and a fill",
+          css.count("--accent-fill:") >= 2, str(css.count("--accent-fill:")))
+
+    dark_link = var_in('[data-theme="dark"] {', "--accent")
+    dark_fill = var_in('[data-theme="dark"] {', "--accent-fill")
+    light_link = var_in('[data-theme="light"] {', "--accent")
+    light_fill = var_in('[data-theme="light"] {', "--accent-fill")
+    check("all four values are declared",
+          all([dark_link, dark_fill, light_link, light_fill]),
+          str([dark_link, dark_fill, light_link, light_fill]))
+    if not all([dark_link, dark_fill, light_link, light_fill]):
+        return
+
+    # 4.5:1 is the body-text floor, and a link is body text.
+    r = ratio(dark_link, "#1a2332")
+    check("a dark-mode link clears 4.5:1 on the card", r >= 4.5, f"{r:.2f}")
+    r = ratio(light_link, "#ffffff")
+    check("a light-mode link clears 4.5:1 on the card", r >= 4.5, f"{r:.2f}")
+    # The filled button carries white text.
+    r = ratio(dark_fill, "#ffffff")
+    check("the dark-mode button fill clears 4.5:1 behind white", r >= 4.5, f"{r:.2f}")
+    r = ratio(light_fill, "#ffffff")
+    check("the light-mode button fill clears 4.5:1 behind white", r >= 4.5, f"{r:.2f}")
+
+    # It must not be mistaken for a STATUS. Green, red and amber already
+    # mean on time, late and caution on the strips.
+    for status in ("--good", "--bad", "--warn"):
+        val = var_in('[data-theme="dark"] {', status)
+        if val:
+            check(f"the accent is distinguishable from {status}",
+                  abs(lum(dark_link) - lum(val)) > 0.02 or dark_link != val,
+                  f"{dark_link} vs {val}")
+
+
 def test_the_share_table_looks_like_the_flight_table():
     """Edited in place, styled like its neighbour. (1.24.0)"""
     here = os.path.dirname(os.path.abspath(__file__))
@@ -2643,6 +2726,7 @@ def main():
     test_the_calendar_draws_flights_with_the_shared_strip(create_user("caltest", "pw-not-used"))
     test_the_calendar_row_opens_one_at_a_time(create_user("caltest2", "pw-not-used"))
     test_named_share_codes_keep_existing_shares_working()
+    test_the_accent_is_readable_in_both_of_its_jobs()
     test_the_share_table_looks_like_the_flight_table()
     test_late_is_measured_from_the_airlines_own_schedule(create_user("sbtest", "pw-not-used"))
     test_flown_legs_are_removed_by_hand_never_by_default()

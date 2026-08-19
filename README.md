@@ -1,7 +1,7 @@
 # MyPilot
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.24.1.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.24.4.
 
 The version above was stale at 1.4.0 for five releases. `app/version.py`
 is the only authority; this line is a convenience and nothing reads it.
@@ -48,7 +48,7 @@ seriously.
 
 ## STATE
 
-**v1.24.1.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+**v1.24.4.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
 owner plus several FOs, who fly the same legs — hence shared flight rows
 (v5.1, retained).
 
@@ -69,7 +69,7 @@ page split (1.6.0–1.7.0). All three came out of the same problem — the app
 could not be OPERATED without SSH, and bugs could not be reproduced without
 flying a trip.
 
-Tests: **2,069**, twelve suites, all passing.
+Tests: **2,081**, twelve suites, all passing.
 
 **Current work: the UI chunks (1.9.0 onward).** Five agreed steps, owner's
 brief, reworking the tracker and calendar around one flight-strip
@@ -108,7 +108,7 @@ TRACKER SHOWS.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, placeholder filter |
-| `tests_ui_fixes.py` | 656 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
+| `tests_ui_fixes.py` | 668 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
 | `tests_regression_matrix.py` | 761 | every page x 6 odd states x 2 themes x 2 clocks, pilot and viewer |
 | `tests_app_shell.py` | 200 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
 | `tests_timezones.py` | 68 | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
@@ -183,13 +183,15 @@ Verified in the v7.4 tree, listed here so nobody "fixes" them twice:
 - **Schedule import has only ever been fed one carrier's FFDO lines.** This is the
   gate on every other person using the app, and it is not a UI problem.
   See ROADMAP P0-7.
-- **Import REPLACES the roster rather than adding to it.** Pasting a new
-  month deletes roster rows for legs not in the paste, including past ones.
-  Flight rows survive (shared, adopted); only the link is pruned. This is
-  the single blocker on the app being a record rather than a rolling
-  window. Owned by NEXT UP / N1.
-- **One share code per pilot.** No named invites, no per-person
-  revocation, no expiry, no last-seen. Owned by NEXT UP / N4.
+- ~~**Import REPLACES the roster rather than adding to it.**~~ **CLOSED in
+  1.5.0** by N1, and tightened since: 1.20.0/1.22.0 froze flown legs
+  against re-import entirely, and the review page decides removals rather
+  than the paste doing it silently. Left listed, struck through, because
+  this bullet was the stated blocker on the app being a record rather than
+  a rolling window, and that is worth being able to see was cleared.
+- ~~**One share code per pilot.**~~ **CLOSED in 1.23.0** by N4, reduced in
+  scope by the owner: named invites, per-person removal, expiry dates and
+  last-seen. No global pause switch and no per-code dialog — see 1.24.0.
 - **No self-service account deletion.** `settings.html` has admin-deletes-
   a-user only (`/settings/users/delete/{user_id}`). Apple requires an
   in-app deletion path for any app offering account creation, and it is
@@ -307,34 +309,46 @@ live feed running at all.
 
 ---
 
-### N5 — viewer-side framing
+### N5 — viewer-side framing ⚠️ MOSTLY ALREADY BUILT / DESCOPED (1.24.4)
 
-**The insight.** A family member is not asking "where is the aircraft".
-They are asking **"when are you home"**. The tracker answers the first
-question well and the second one barely.
+**Checked against the running app at the owner's prompting, and most of
+this spec describes work that has since been done by other releases.** It
+was written in 1.3.1 and not re-read for twenty-one versions. Recorded
+here rather than quietly deleted, because the useful lesson is that a
+plan left unread for that long stops describing the app.
 
-**The change.**
-- Arrival time in the VIEWER's timezone, not the destination airport's.
-  Someone in Dallas waiting on a pilot landing in Phoenix wants to know
-  when to leave for the airport in their own clock.
-- Trip-level framing: "away until Thursday · 2 legs left".
-- Surface the pickup details already stored — gate, terminal, baggage.
-- A landed-safe history: the last few arrivals, with times.
+Bullet by bullet:
 
-**Template split happens here.** Pilot and viewer currently share
-`viewer.html` (2,333 lines) with `is_pilot` toggles. The owner's proposed
-trigger — split on whether the visitor is signed in as a pilot — is the
-right line, and N5 makes it unavoidable. Do the split as part of
-N5, not before: splitting an unchanged file achieves nothing, and doing it
-alongside a behaviour change makes a regression impossible to attribute.
+- ~~Surface the pickup details already stored — gate, terminal, baggage.~~
+  **ALREADY SHOWN.** Gate appears twice on the tracker: as a badge on each
+  `.aptblock` (`v-dep-gate` / `v-arr-gate`) and again in the detail rows,
+  where terminal and baggage ride with it. 1.12.1 deliberately CUT the
+  terminal line and baggage badge from the strip as clutter — owner's
+  call — so this bullet was asking for something that had been built and
+  then trimmed on purpose.
+- ~~A landed-safe history: the last few arrivals, with times.~~ **ALREADY
+  SHOWN.** `PHASE_ARRIVED` tags a finished leg, past legs of the current
+  trip stay in the list until they settle out (1.17.0), and the calendar
+  has been the history browser since 1.18.0 with actual times, delays and
+  the flown track.
+- ~~Trip-level framing: "away until Thursday · 2 legs left".~~ **NOT
+  WANTED** (owner, 1.24.4).
+- ~~Arrival time in the VIEWER's timezone rather than the destination's.~~
+  **NOT AS A DEFAULT** (owner, 1.24.4). The destination zone is the right
+  answer: it is the clock the pilot is living on and the one written on
+  every gate board. A SETTINGS TOGGLE is the surviving idea, and it is a
+  small one — the viewer already has its own theme and clock-format
+  preferences in cookies, so this is a third of the same kind.
 
-**Sequencing note:** P0-6 (moving viewer.html's inline JavaScript to
-`/static/app.js`) should land BETWEEN N4 and N5. Splitting a template that
-still carries 1,376 lines of inline script means splitting the script too,
-by hand, which is precisely how the documented "viewer.html silently loses
-JavaScript" bug happens.
+**Template split: no longer forced.** The split was justified by N5's
+behaviour changes. With those gone, splitting `viewer.html` would be
+refactoring for its own sake, and this file's own history says that is
+how JavaScript silently goes missing. Do it when a change needs it.
 
----
+**P0-6 accordingly drops from prerequisite to housekeeping.** Extracting
+the inline script still has value — a template cannot be cached or
+syntax-checked as a script can — but the sequencing note that made it
+urgent was pointing at a split that is not happening.
 
 ### What this sequence deliberately does NOT do
 
@@ -1669,14 +1683,14 @@ python tests_poller_end_to_end.py   #   47
 python tests_past_leg_detail.py     #   19
 python tests_budget_limit.py        #   17
 python tests_carrier_cap.py         #   13
-python tests_ui_fixes.py            #  656
+python tests_ui_fixes.py            #  668
 python tests_app_shell.py           #  200
 python tests_timezones.py           #   68
 python tests_closeout_sweep.py      #   42
 python tests_import_merge.py        #   43
 python tests_test_mode.py           #  133
 python tests_regression_matrix.py   #  761
-```                                  # 2069
+```                                  # 2081
 
 Each uses its own scratch DB via `PT_DB_FILE`. Read
 `tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
@@ -1743,6 +1757,97 @@ DECIDED, so it does not get re-litigated:
 
 
 ## VERSION HISTORY
+
+### 1.24.4 — N5 was describing an app that no longer exists
+
+The owner read the N5 summary and asked where it had come from: the gate
+already shows, "Arrived" already shows, he does not want a trip summary,
+and the destination timezone should stay. Checked against the code, and
+he is right on all four.
+
+N5 was written in 1.3.1 and not re-read for twenty-one versions. Two of
+its four bullets had been built by other releases in the meantime — gate,
+terminal and baggage all render, and 1.12.1 then deliberately trimmed two
+of them off the strip as clutter, so the plan was asking for something
+that had been built AND pruned on purpose since. A third (arrivals
+history) is what the calendar has been since 1.18.0.
+
+**The lesson worth keeping is not that the plan was wrong.** It was right
+in 1.3.1. It is that a plan nobody re-reads stops describing the app,
+while still being followed — and I quoted it back as the next step
+without checking any of it. The spec is now marked against what was
+actually found, bullet by bullet, rather than deleted.
+
+**What survives:** a settings toggle for showing arrival times in the
+viewer's own timezone. Small, and optional by design — the destination
+zone is the right default, being the clock the pilot is on and the one on
+every gate board.
+
+**What follows from it:** the template split is no longer forced, since
+it existed to serve N5's behaviour changes. P0-6 drops from prerequisite
+to housekeeping. Refactoring viewer.html with no change to make is how
+this file has twice silently lost JavaScript.
+
+Documentation only. No test moved.
+
+### 1.24.3 — two closed items were still listed as open
+
+Documentation only. STILL OPEN carried "Import REPLACES the roster" and
+"One share code per pilot" as live problems. The first was closed in
+1.5.0 by N1 and tightened twice since; the second in 1.23.0 by N4. Both
+were the stated blockers on things this app now does.
+
+Struck through rather than deleted. A list of open problems is only
+trustworthy if you can see which ones got cleared, and both of these were
+named as blockers often enough elsewhere in this file that removing them
+outright would read as though the note had gone missing.
+
+No code changed, so no test moved.
+
+### 1.24.2 — indigo, and the roster stops inventing a zone column
+
+**THE ACCENT IS NO LONGER FRAMEWORK BLUE.** `#3b82f6` is Tailwind
+blue-500, the colour every bootstrapped admin page ships with, and it is
+most of what the owner meant by cheesy and cheap. 1.24.1 quietened the
+buttons, which helped and did not address the hue; this does.
+
+**Split into two variables, because one value cannot do both jobs.**
+`--accent` is a LINK colour on a dark navy card and a BUTTON FILL behind
+white text, and those pull in opposite directions: the first wants a
+light value, the second a dark one. The old single blue compromised and
+lost the button — 3.68:1 behind white text, below even the 3:1 floor for
+UI text. Now `--accent` (link) and `--accent-fill` (button), and all four
+values clear 4.5:1, computed rather than eyeballed.
+
+Deliberately not green, red or amber: those already mean on time, late
+and caution on the strips, and an accent colliding with a status colour
+makes both harder to read. There is a test asserting the contrast maths
+and the separation from the status colours, because "looks fine on my
+monitor" is how contrast bugs ship.
+
+**THE DATE BOX WAS SHOVING THE ICONS APART.** Both share inputs were
+`width: 100%`, and the Expires column had room to spare — so the date box
+stretched to fill it, leaving the actions column too narrow for two 32px
+buttons side by side. They wrapped onto separate lines. The date is ten
+characters and a picker button and never needs more; both it and the
+actions cell are now sized to their content, and the actions cell is a
+non-wrapping flex row so it cannot stack again.
+
+That also explains the calendar symbol the owner saw only on desktop: it
+is the date input's native picker indicator, drawn immediately beside the
+share button because the two cells were touching.
+
+**THE ZONE COLUMN IS GONE.** The roster printed "CT" or "CT/ET" in a
+seventh column, once per row. Every other surface in this app treats a
+zone as an annotation ON a time and renders it as the `.tz` subscript —
+the strips, the tracker card and the calendar have all done so since
+1.7.0. The roster was the last place stating it as a value of its own,
+which is a large part of why it read as a different app's table. The zone
+now rides on its own time, and the view keeps supplying `dep_zone` and
+`arr_zone` separately, which is what makes a per-time subscript possible
+at all.
+
+Tests: 2,069 → 2,081.
 
 ### 1.24.1 — the button was the problem, not the hue
 

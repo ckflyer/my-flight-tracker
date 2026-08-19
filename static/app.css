@@ -27,7 +27,21 @@
 [data-theme="dark"] {
   --bg: #0f1419;
   --card: #1a2332;
-  --accent: #3b82f6;
+  /* INDIGO, NOT FRAMEWORK BLUE (1.24.2). #3b82f6 is Tailwind blue-500 —
+     the colour every bootstrapped admin page ships with, which is most of
+     what "cheesy and cheap" was pointing at.
+
+     SPLIT IN TWO, because one value cannot do both jobs well. A link on a
+     dark navy card needs a LIGHT colour; a filled button with white text
+     needs a DARK one. The old single blue compromised: 4.29 against the
+     card and 3.68 behind white text, the second of which is below the
+     3:1 floor for UI text. These are 5.77 and 6.29.
+
+     Deliberately NOT green, red or amber: those already mean on time,
+     late and caution on the strips, and an accent that collides with a
+     status colour makes both harder to read. */
+  --accent: #8b94f7;
+  --accent-fill: #4f46e5;
   --text: #e7ecf3;
   --muted: #8b9bb4;
   --good: #22c55e;
@@ -47,7 +61,10 @@
 [data-theme="light"] {
   --bg: #f1f5f9;
   --card: #ffffff;
-  --accent: #2563eb;
+  /* One value serves both here: on white, the dark indigo that carries
+     white text is also the readable link colour (7.9 either way). */
+  --accent: #4338ca;
+  --accent-fill: #4338ca;
   --text: #0f172a;
   --muted: #64748b;
   --bad: #dc2626;
@@ -63,7 +80,8 @@
   :root:not([data-theme]) {
     --bg: #f1f5f9;
     --card: #ffffff;
-    --accent: #2563eb;
+    --accent: #4338ca;
+    --accent-fill: #4338ca;
     --text: #0f172a;
     --muted: #64748b;
     --bad: #dc2626;

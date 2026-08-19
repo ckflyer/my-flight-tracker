@@ -48,7 +48,7 @@ from typing import Tuple
 # Bump on EVERY build. This also keys the service worker cache (static/sw.js),
 # so forgetting means phones keep serving the previous build's CSS and
 # JavaScript and `update.sh` appears to do nothing at all.
-VERSION = "1.24.1"
+VERSION = "1.24.4"
 
 # The JSON contract. Routes mount at /api/v{API_VERSION}/. An integer, not a
 # semver, because there is nothing to express beyond "which contract" -- it is

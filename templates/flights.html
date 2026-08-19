@@ -55,7 +55,9 @@
       display: inline-block;
       margin-top: 0.75rem;
       padding: 0.6rem 1.1rem;
-      background: var(--accent);
+      /* --accent-fill, not --accent: the fill needs the dark end of the
+         pair so white text on it stays readable. See app.css. */
+      background: var(--accent-fill);
       color: #fff;
       border: 1px solid transparent;
       border-radius: 8px;
@@ -110,7 +112,6 @@
     .toggle:hover { color: var(--text); border-color: var(--muted); }
     #past-section { display: none; }
     #past-section.open { display: block; }
-    .zone-cell { color: var(--muted); font-size: 0.75rem; white-space: nowrap; }
     .dh {
       display: inline-block;
       padding: 0.15rem 0.45rem;
@@ -234,6 +235,14 @@
       border-radius: 6px; padding: 0.3rem 0.4rem; min-height: 32px;
       width: 100%;
     }
+    /* SIZED TO ITS CONTENT (1.24.2). Both inputs were width:100% and the
+       Expires column had room to spare, so the date box stretched to fill
+       it — leaving the actions column too narrow for two 32px buttons
+       side by side, which is why they stacked. The date is a fixed ten
+       characters plus a picker button; it never needs more than this. */
+    .share-table td.share-expires { width: 1%; white-space: nowrap; }
+    .share-table input[type="date"] { width: auto; min-width: 9.5rem; }
+    .share-table td.share-tools { width: 1%; }
     .share-table input:hover { border-color: var(--border); }
     .share-table input:focus {
       outline: none; border-color: var(--accent); background: var(--input-bg);
@@ -254,7 +263,10 @@
       font-variant-numeric: tabular-nums; white-space: nowrap;
     }
     .share-table td { vertical-align: middle; }
-    .share-tools { white-space: nowrap; text-align: right; }
+    .share-tools {
+      white-space: nowrap; text-align: right;
+      display: flex; flex-wrap: nowrap; gap: 0.15rem; justify-content: flex-end;
+    }
     /* Matches .delete-btn exactly — the roster's X and this one are the
        same action and must not be two different controls. */
     .row-icon-btn {
@@ -444,7 +456,7 @@
                    aria-label="Name for code {{ sh.code }}">
           </td>
           <td class="share-digits" data-code="{{ sh.code }}">{{ sh.code }}</td>
-          <td>
+          <td class="share-expires">
             <input type="date" name="expires_at" form="sh-{{ sh.id }}"
                    value="{{ sh.expires_at or '' }}"
                    aria-label="Expiry date for code {{ sh.code }}">
@@ -535,22 +547,26 @@
           <th>Route</th>
           <th>Dep</th>
           <th>Arr</th>
-          <th>Zone</th>
           <th></th>
         </tr>
       </thead>
       <tbody>
         {% for row in rows %}
         {% if row.divider %}
-        <tr class="trip-divider-row"><td colspan="7"></td></tr>
+        <tr class="trip-divider-row"><td colspan="6"></td></tr>
         {% else %}
         <tr>
           <td>{{ row.date }}</td>
           <td>{{ row.callsign }}{% if row.is_deadhead %}<span class="dh">DH</span>{% endif %}</td>
           <td>{{ row.route }}</td>
-          <td>{{ row.dep }}</td>
-          <td>{{ row.arr }}</td>
-          <td class="zone-cell">{% if row.same_zone %}{{ row.dep_zone }}{% else %}{{ row.dep_zone }}/{{ row.arr_zone }}{% endif %}</td>
+          {# THE ZONE RIDES ON ITS OWN TIME (1.24.2). It was a seventh
+             column printing "CT" or "CT/ET" once per row, which is the
+             one thing every other surface in this app agrees not to do:
+             a zone is an annotation on a time, not a value of its own.
+             The tracker, the calendar and the strips have all used the
+             .tz subscript since 1.7.0. #}
+          <td>{{ row.dep }}{% if row.dep_zone %}<span class="tz" aria-hidden="true">{{ row.dep_zone }}</span>{% endif %}</td>
+          <td>{{ row.arr }}{% if row.arr_zone %}<span class="tz" aria-hidden="true">{{ row.arr_zone }}</span>{% endif %}</td>
           <td style="text-align:right">
             <form method="post" action="/flights/delete/{{ row.id }}" onsubmit="return confirm('Delete {{ row.callsign }} on {{ row.date_iso }}?');" style="display:inline;">
               <button type="submit" class="delete-btn" aria-label="Delete flight">&times;</button>
