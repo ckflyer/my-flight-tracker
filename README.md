@@ -1,7 +1,7 @@
 # MyPilot
 
 Self-hosted flight tracking for airline crew and their families. FastAPI +
-SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.24.4.
+SQLite + Jinja, deployed via Docker on TrueNAS/Dockge. Version 1.24.5.
 
 The version above was stale at 1.4.0 for five releases. `app/version.py`
 is the only authority; this line is a convenience and nothing reads it.
@@ -48,7 +48,7 @@ seriously.
 
 ## STATE
 
-**v1.24.4.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+**v1.24.5.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
 owner plus several FOs, who fly the same legs — hence shared flight rows
 (v5.1, retained).
 
@@ -69,7 +69,7 @@ page split (1.6.0–1.7.0). All three came out of the same problem — the app
 could not be OPERATED without SSH, and bugs could not be reproduced without
 flying a trip.
 
-Tests: **2,081**, twelve suites, all passing.
+Tests: **2,086**, twelve suites, all passing.
 
 **Current work: the UI chunks (1.9.0 onward).** Five agreed steps, owner's
 brief, reworking the tracker and calendar around one flight-strip
@@ -108,7 +108,7 @@ TRACKER SHOWS.
 | `tests_past_leg_detail.py` | 19 | past-leg + T-30 preview rendering |
 | `tests_budget_limit.py` | 17 | monthly spend cap at its enforcement point |
 | `tests_carrier_cap.py` | 13 | deadhead lookup cap, placeholder filter |
-| `tests_ui_fixes.py` | 668 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
+| `tests_ui_fixes.py` | 673 | the flight strip staying ONE component, layover labels, untracked phase, sequencing, flight list, time lines, viewer.html template audit, import diff page, month filter, calendar month nav |
 | `tests_regression_matrix.py` | 761 | every page x 6 odd states x 2 themes x 2 clocks, pilot and viewer |
 | `tests_app_shell.py` | 200 | install shell on every page, service worker, manifest, icon styles, version ordering, schema guard, rebrand |
 | `tests_timezones.py` | 68 | DST both directions, arrival-date resolution, date line, stored-timestamp parsing |
@@ -1683,14 +1683,14 @@ python tests_poller_end_to_end.py   #   47
 python tests_past_leg_detail.py     #   19
 python tests_budget_limit.py        #   17
 python tests_carrier_cap.py         #   13
-python tests_ui_fixes.py            #  668
+python tests_ui_fixes.py            #  673
 python tests_app_shell.py           #  200
 python tests_timezones.py           #   68
 python tests_closeout_sweep.py      #   42
 python tests_import_merge.py        #   43
 python tests_test_mode.py           #  133
 python tests_regression_matrix.py   #  761
-```                                  # 2081
+```                                  # 2086
 
 Each uses its own scratch DB via `PT_DB_FILE`. Read
 `tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
@@ -1757,6 +1757,45 @@ DECIDED, so it does not get re-litigated:
 
 
 ## VERSION HISTORY
+
+### 1.24.5 — the share table scrolls, and settings stops lecturing
+
+**RESTACKING THE ROWS WAS THE WRONG FIX.** 1.24.1 folded the share table
+into blocks on a phone. A five-field row folded into a block still has to
+put those fields somewhere, so what the owner saw next was the same
+content wrapping in a less predictable place — worse than before, because
+at least a table wraps consistently.
+
+The roster table directly below has always just scrolled sideways on a
+narrow screen and nobody has ever complained about it. Both tables now do
+that. Every cell is `white-space: nowrap`, because a table that CAN wrap
+will always choose to wrap before it scrolls, and wrapping was the
+complaint.
+
+Sized down while it was open: the name input is fixed rather than
+stretchy, the date input is pinned to the width a native picker actually
+needs (it will not go below roughly 9.4rem — the browser draws mm/dd/yyyy
+and a picker button whatever we ask for), and the card gives back some of
+its own padding under 600px so the table can use it.
+
+**Share moved to sit after the name** (owner's call). It is the thing you
+do to a named person, so it belongs next to the name rather than at the
+far end past the code and the date.
+
+**SETTINGS: the prose is cut roughly in half.** Owner's words — "SOOOOO
+wordy, don't write a novel for every explanation". Every control had
+grown a paragraph, each reasonable alone and collectively unreadable. The
+budget field carried four sentences of reassurance about costs; it now
+states the rule and one number. The AeroAPI key hint was a paragraph of
+sales copy; it is now the three steps and the free allowance.
+
+Nothing factual was dropped. Several hints carry the only statement of
+something in the whole app — where to get a key, that a home-screen icon
+does not update until the app is removed and re-added — and those
+survive, shorter. There is now a test capping any single hint at 40 words
+and the page at 220, because this is prose and prose creeps back.
+
+Tests: 2,081 → 2,086.
 
 ### 1.24.4 — N5 was describing an app that no longer exists
 

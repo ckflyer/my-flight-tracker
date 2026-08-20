@@ -158,8 +158,7 @@
   <h1>Settings</h1>
   {% if not is_pilot %}
   <p class="hint" style="margin:-0.35rem 0 1rem;">
-    These apply to you on this device only &mdash; they don't change anything
-    for anyone else following this schedule.
+    These apply to this device only.
   </p>
   {% endif %}
 
@@ -179,13 +178,13 @@
           <span class="track"></span>
         </label>
       </div>
-      <p class="hint">Adds gates, delays, diversions, cancellations and real gate-to-gate times &mdash; none of which ADS-B broadcasts. Position tracking is free either way.</p>
+      <p class="hint">Adds gates, delays, diversions and real gate-to-gate times. Position tracking works without it.</p>
 
       <div id="aeroapi-fields" class="sub-fields" style="{{ '' if s.aeroapi_enabled else 'display:none' }}">
         <label for="aeroapi-key">API key</label>
         <input type="password" name="aeroapi_key" id="aeroapi-key" autocomplete="off"
                placeholder="{{ 'saved \u2014 leave blank to keep it' if s.aeroapi_key else 'paste your AeroAPI key' }}">
-        <p class="hint">Your own key, on your own FlightAware account. Sign in at flightaware.com, open AeroAPI, choose the <strong>Personal</strong> tier and copy the key. It includes $5/month free &mdash; $10 if you feed ADS-B.</p>
+        <p class="hint">flightaware.com &rarr; AeroAPI &rarr; <strong>Personal</strong> tier. Includes $5/month free, $10 if you feed ADS-B.</p>
         <div class="usage-block">
           <span class="usage-label">Usage this month ({{ aeroapi_stats.period }})</span>
           {% if aeroapi_stats.has_reading %}
@@ -221,7 +220,7 @@
           <input type="number" name="aeroapi_budget" id="aeroapi-budget" step="0.01" min="0" max="500"
                  value="{{ '%.2f'|format(s.aeroapi_budget) }}">
         </div>
-        <p class="hint">A hard stop: queries pause for the rest of the month once spend reaches this. $0 turns them off but keeps your key saved. Each flight gets up to 18 queries, so even a 50-leg month stays under $4.50. Refreshing a page never costs anything, and ADS-B tracking is free and never stops.</p>
+        <p class="hint">Hard stop &mdash; queries pause for the month once spend hits this. $0 turns them off and keeps your key. A 50-leg month runs about $4.50.</p>
       </div>
     </div>
     {% endif %}
@@ -259,12 +258,12 @@
         </label>
         {% endfor %}
       </div>
-      <p class="hint">Sets the plane on the map and the app icon. The map changes as soon as you save. An icon already on your home screen won't change until you remove the app and add it again &mdash; iPhone and Android both read the icon once, when you install, and keep it.</p>
+      <p class="hint">Sets the map plane and app icon. An icon already on your home screen only changes if you remove and re-add the app.</p>
       {% endif %}
       {% if is_pilot %}
       <label>Live poll interval (seconds)</label>
       <input type="number" name="poll_seconds" value="{{ s.poll_seconds }}" min="10" max="300">
-      <p class="hint">How often to refresh live position while a flight is airborne. 15 is a good balance. Everyone watching a flight shares one lookup, so a lower number here doesn't multiply load.</p>
+      <p class="hint">Live position refresh while airborne. 15 is a good balance.</p>
       {% endif %}
     </div>
 
@@ -287,8 +286,7 @@
   <div class="card">
     <h2>Account recovery</h2>
     <p class="hint" style="margin-bottom:0.85rem;">
-      Lost your recovery code, or just want a fresh one? Generating a new
-      one immediately retires your old code.
+      Generating a new code retires the old one immediately.
     </p>
     <form method="post" action="/settings/regenerate-recovery" onsubmit="return confirm('Generate a new recovery code? Your current one will stop working immediately.');" style="margin:0;">
       <button type="submit" style="margin:0;">Generate new recovery code</button>

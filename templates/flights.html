@@ -235,34 +235,31 @@
       border-radius: 6px; padding: 0.3rem 0.4rem; min-height: 32px;
       width: 100%;
     }
-    /* SIZED TO ITS CONTENT (1.24.2). Both inputs were width:100% and the
-       Expires column had room to spare, so the date box stretched to fill
-       it — leaving the actions column too narrow for two 32px buttons
-       side by side, which is why they stacked. The date is a fixed ten
-       characters plus a picker button; it never needs more than this. */
-    .share-table td.share-expires { width: 1%; white-space: nowrap; }
-    .share-table input[type="date"] { width: auto; min-width: 9.5rem; }
-    .share-table td.share-tools { width: 1%; }
-    .share-table input:hover { border-color: var(--border); }
-    .share-table input:focus {
-      outline: none; border-color: var(--accent); background: var(--input-bg);
-    }
-    .share-table input::placeholder { color: var(--muted); opacity: 0.75; }
-    .share-table input[type="date"]::-webkit-calendar-picker-indicator {
-      filter: invert(0.6); cursor: pointer;
-    }
-    [data-theme="light"] .share-table input[type="date"]::-webkit-calendar-picker-indicator {
-      filter: none;
-    }
+    /* SIZED TIGHT, AND IT SCROLLS RATHER THAN WRAPS (1.24.5).
+    
+       1.24.1 restacked these rows into blocks on a phone. That was the
+       wrong fix: a five-field row folded into a block still has to put
+       those fields somewhere, and what the owner saw was the same content
+       wrapping in a less predictable place. The roster table below has
+       always just scrolled sideways on a narrow screen and nobody has
+       ever complained about it, so this does the same thing — one
+       behaviour for both tables on the page, which is the whole argument
+       that got this table rebuilt in the first place.
 
-    /* Five digits read down a column: mono and tabular, the same
-       treatment the roster gives its times. */
-    .share-table .share-digits {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-weight: 700; letter-spacing: 0.08em;
-      font-variant-numeric: tabular-nums; white-space: nowrap;
-    }
-    .share-table td { vertical-align: middle; }
+       Every cell is nowrap. A table that can wrap will always choose to
+       wrap before it scrolls, and wrapping is what looked broken. */
+    .share-table th, .share-table td { white-space: nowrap; }
+    .share-table td { vertical-align: middle; padding: 0.45rem 0.4rem; }
+    .share-table td.share-name-cell { width: 1%; }
+    .share-table input[type="text"] { width: 8.5rem; min-width: 8.5rem; }
+    /* A native date input will not shrink below roughly this: it reserves
+       room for mm/dd/yyyy plus the picker button, and the browser draws
+       both whatever we ask for. Fixed here so it stops stretching to fill
+       the column, which is what pushed the buttons apart. */
+    .share-table input[type="date"] { width: 9.4rem; min-width: 9.4rem; }
+    .share-table td.share-expires,
+    .share-table td.share-send-cell,
+    .share-table td.share-tools { width: 1%; padding-left: 0.15rem; padding-right: 0.15rem; }
     .share-tools {
       white-space: nowrap; text-align: right;
       display: flex; flex-wrap: nowrap; gap: 0.15rem; justify-content: flex-end;
@@ -292,44 +289,12 @@
     }
     .share-empty { color: var(--muted); }
 
-    /* MOBILE: THE TABLE STOPS BEING A TABLE (1.24.1).
-    
-       Four columns, two of them text inputs and one of them a native date
-       picker, do not fit across a phone. Sideways scrolling to reach a
-       delete button is worse than no table at all, and the date input is
-       the widest thing on the row — which is exactly why the owner saw it
-       scrunch as soon as a date was set.
-
-       So under 600px each row becomes a block: code and buttons on the
-       top line where they can be read and tapped, name and date full
-       width beneath. The header is hidden because the fields label
-       themselves — a placeholder for the name, and a date input that is
-       visibly a date. */
+    /* On a phone the card's own padding is the thing eating the width,
+       so it gives some back and lets the table use it. */
     @media (max-width: 600px) {
-      .share-table, .share-table tbody, .share-table tr, .share-table td {
-        display: block; width: 100%;
-      }
-      .share-table thead { display: none; }
-      .share-table tr.share-row {
-        padding: 0.7rem 0; border-bottom: 1px solid var(--border);
-      }
-      .share-table tr.share-row:last-child { border-bottom: none; }
-      .share-table td { border: none; padding: 0; white-space: normal; }
-      .share-table td.share-digits {
-        display: inline-block; width: auto;
-        font-size: 1.05rem; padding: 0.1rem 0 0.35rem;
-      }
-      .share-table td.share-tools {
-        display: inline-block; width: auto; float: right;
-      }
-      .share-table input[type="text"],
-      .share-table input[type="date"] {
-        border-color: var(--border); background: var(--input-bg);
-        margin-top: 0.3rem; min-height: 38px;
-      }
-      /* The scroller has nothing to scroll once the rows are blocks, and
-         leaving it on clips the focus ring on the inputs. */
-      .share-card .table-scroll { overflow-x: visible; }
+      .share-card { padding-left: 0.75rem; padding-right: 0.75rem; }
+      .share-table input[type="text"] { width: 7.5rem; min-width: 7.5rem; }
+      .share-table { font-size: 0.8125rem; }
     }
 
     /* Month filter (1.5.0). Wraps to two lines on a narrow phone rather
@@ -438,6 +403,7 @@
       <thead>
         <tr>
           <th>Name</th>
+          <th></th>
           <th>Code</th>
           <th>Expires</th>
           <th></th>
@@ -446,7 +412,7 @@
       <tbody>
         {% for sh in shares %}
         <tr class="share-row {% if sh.is_expired %}is-expired{% endif %}">
-          <td>
+          <td class="share-name-cell">
             {# The row's form lives after the table: a <form> cannot wrap a
                <tr>, so the inputs are associated by id instead. Valid
                HTML5 and it keeps one form per row. #}
@@ -455,30 +421,25 @@
                    placeholder="Who is this for?"
                    aria-label="Name for code {{ sh.code }}">
           </td>
+          <td class="share-send-cell">
+            <button type="button" class="row-icon-btn" data-share-send
+                    title="Send this code" aria-label="Send code {{ sh.code }}">{% include "partials/share_glyph.html" %}</button>
+          </td>
           <td class="share-digits" data-code="{{ sh.code }}">{{ sh.code }}</td>
           <td class="share-expires">
             <input type="date" name="expires_at" form="sh-{{ sh.id }}"
                    value="{{ sh.expires_at or '' }}"
                    aria-label="Expiry date for code {{ sh.code }}">
-            {% if sh.is_expired %}<span class="share-tag">expired</span>{% endif %}
+            {% if sh.is_expired %}<span class="share-tag">exp</span>{% endif %}
           </td>
           <td class="share-tools">
-            {# ICONS, NOT LABELS (1.24.1). The word "Share" sat next to a
-               date input whose native picker indicator renders right
-               beside it on desktop, so the two read as one control with a
-               calendar stuck to it. And the X is the same action the
-               roster below performs with a bare glyph — two tables on one
-               page should not disagree about what deleting a row looks
-               like. #}
-            <button type="button" class="row-icon-btn" data-share-send
-                    title="Send this code" aria-label="Send code {{ sh.code }}">{% include "partials/share_glyph.html" %}</button>
             <button type="submit" form="sh-del-{{ sh.id }}" class="delete-btn"
                     title="Delete this code"
                     aria-label="Delete code {{ sh.code }}">&times;</button>
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="4" class="share-empty">No share codes yet.</td></tr>
+        <tr><td colspan="5" class="share-empty">No share codes yet.</td></tr>
         {% endfor %}
       </tbody>
     </table>

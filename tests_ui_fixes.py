@@ -1973,6 +1973,39 @@ def test_named_share_codes_keep_existing_shares_working():
           get_user_by_share_code(original) is None)
 
 
+def test_settings_explains_itself_without_an_essay():
+    """Short hints, not paragraphs. (1.24.5)
+
+    The owner's words: "SOOOOO wordy. Don't write a novel for every
+    explanation." The page had grown a paragraph under every control,
+    each one reasonable on its own and collectively unreadable — the
+    budget field alone carried four sentences of reassurance.
+
+    A CAP, not a ban. The hints have to stay, because several of them
+    carry facts nothing else says (where to get an AeroAPI key, that a
+    home-screen icon does not update until the app is re-added). This
+    asserts none of them turns back into a paragraph.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "settings.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    hints = re.findall(r'<p class="hint"[^>]*>(.*?)</p>', html, re.S)
+    check("settings still explains its controls", len(hints) >= 5, str(len(hints)))
+
+    def words(h):
+        # Jinja and markup stripped, so a conditional does not read as prose.
+        t = re.sub(r"\{%.*?%\}", " ", h, flags=re.S)
+        t = re.sub(r"\{\{.*?\}\}", " ", t, flags=re.S)
+        return len(re.sub(r"<[^>]+>", " ", t).split())
+
+    longest = max(hints, key=words)
+    check("no single hint runs to a paragraph", words(longest) <= 40,
+          f"{words(longest)} words: " + re.sub(r'<[^>]+>', '', longest).strip()[:90])
+    total = sum(words(h) for h in hints)
+    check("...and the page as a whole is skimmable", total <= 220, f"{total} words")
+
+
 def test_the_accent_is_readable_in_both_of_its_jobs():
     """One colour could not do both jobs. (1.24.2)
 
@@ -2072,20 +2105,35 @@ def test_the_share_table_looks_like_the_flight_table():
     # The roster below deletes a row with a bare X. Two tables on one page
     # must not disagree about what deleting looks like.
     check("delete uses the same control as the roster's",
-          'class="delete-btn"' in html.split('data-share-send', 1)[1][:400])
+          'class="delete-btn"' in html)
 
-    # MOBILE: four columns, two of them inputs and one a native date
-    # picker, do not fit across a phone — and the date input is the widest
-    # thing on the row, which is why it scrunched as soon as a date was
-    # set. Under 600px the rows become blocks.
-    mq = html.split("@media (max-width: 600px)", 1)
-    check("the share table restacks on a phone", len(mq) == 2)
-    if len(mq) == 2:
-        block = mq[1][:1400]
-        check("...rows become blocks", ".share-table tr" in block and "display: block" in block)
-        check("...and the header is dropped", ".share-table thead" in block)
-        check("...with no sideways scroll left to trap the focus ring",
-              "overflow-x: visible" in block)
+    # SHARE SITS AFTER THE NAME (1.24.5, owner's call). It is the thing
+    # you do to a named person, so it belongs beside the name rather than
+    # at the far end past the code and the date.
+    head = html.split("<thead>", 1)[1].split("</thead>", 1)[0]
+    check("the share column follows the name",
+          head.index("Name") < head.index("Code"), head)
+    body = html.split("<tbody>", 1)[1].split("</tbody>", 1)[0]
+    check("...in the row too",
+          body.index("share-name-cell") < body.index("share-send-cell")
+          < body.index("share-digits"), "column order")
+
+    # IT SCROLLS, IT DOES NOT WRAP (1.24.5). 1.24.1 restacked the rows
+    # into blocks on a phone, which was the wrong fix: a five-field row
+    # folded into a block still has to put the fields somewhere, and the
+    # owner saw the same content wrapping in a less predictable place. The
+    # roster below has always just scrolled sideways and nobody has
+    # complained, so both tables now behave the same way.
+    check("the table no longer restacks into blocks",
+          "STOPS BEING A TABLE" not in html)
+    check("...every cell refuses to wrap",
+          ".share-table th, .share-table td { white-space: nowrap; }" in html)
+    check("...so the card can scroll it sideways like the roster",
+          '<div class="table-scroll">' in html.split('class="share-table"')[0][-400:])
+    # The date input was stretching to fill its column and shoving the
+    # buttons apart; it is pinned to the width the browser actually needs.
+    check("the date box is a fixed width, not a stretchy one",
+          'input[type="date"] { width: 9.4rem' in html)
 
     # THE BUTTON WAS THE PROBLEM, NOT THE HUE. A solid fill of --accent is
     # the default primary every framework ships; a large block of it is
@@ -2726,6 +2774,7 @@ def main():
     test_the_calendar_draws_flights_with_the_shared_strip(create_user("caltest", "pw-not-used"))
     test_the_calendar_row_opens_one_at_a_time(create_user("caltest2", "pw-not-used"))
     test_named_share_codes_keep_existing_shares_working()
+    test_settings_explains_itself_without_an_essay()
     test_the_accent_is_readable_in_both_of_its_jobs()
     test_the_share_table_looks_like_the_flight_table()
     test_late_is_measured_from_the_airlines_own_schedule(create_user("sbtest", "pw-not-used"))
