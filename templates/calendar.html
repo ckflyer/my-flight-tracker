@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="{{ settings.theme }}">
+<html lang="en" data-theme="{{ settings.theme }}" data-accent="{{ settings.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -372,6 +372,26 @@
                 ? 'light_all' : 'dark_all';
       }
 
+      // THE ACCENT, READ FROM THE PAGE (1.25.0). Same reasoning and same
+      // implementation as viewer.html's copy: Leaflet takes a colour
+      // string, not a CSS variable, and the hardcoded value these lines
+      // carried was the Tailwind blue-500 the app stopped using in
+      // 1.24.2. Falls back to the shipped indigo, never to '' — Leaflet
+      // reads an empty string as black, i.e. an invisible path.
+      //
+      // TWO COPIES OF FOUR LINES, deliberately. The alternative is a
+      // shared script file, and P0-6 is already the task of moving
+      // viewer.html's inline JavaScript out; adding a third home for
+      // script before that happens would make P0-6 harder, not easier.
+      // Invariant 27 applies — if this changes, change both.
+      function accentColour() {
+        try {
+          var v = getComputedStyle(document.documentElement)
+                    .getPropertyValue('--accent').trim();
+          return v || '#8b94f7';
+        } catch (e) { return '#8b94f7'; }
+      }
+
       function timeHtml(line, fallback) {
         if (!line) return esc(fallback || '');
         var out = esc(line.time_short || '');
@@ -491,16 +511,16 @@
           // stops early still reads as a journey between them rather
           // than a line beginning in open country.
           var path = [a].concat(track, [b]);
-          L.polyline(path, { color: '#3b82f6', weight: 3, opacity: 0.95 }).addTo(map);
+          L.polyline(path, { color: accentColour(), weight: 3, opacity: 0.95 }).addTo(map);
           fitTo = path;
         } else {
-          L.polyline([a, b], { color: '#3b82f6', weight: 2.5, opacity: 0.75,
+          L.polyline([a, b], { color: accentColour(), weight: 2.5, opacity: 0.75,
                                dashArray: '5 7' }).addTo(map);
           fitTo = [a, b];
         }
 
         [a, b].forEach(function(p) {
-          L.circleMarker(p, { radius: 4, color: '#3b82f6', fillColor: '#fff',
+          L.circleMarker(p, { radius: 4, color: accentColour(), fillColor: '#fff',
                               fillOpacity: 1, weight: 2 }).addTo(map);
         });
         map.fitBounds(L.latLngBounds(fitTo).pad(0.15));

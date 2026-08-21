@@ -469,7 +469,27 @@ def test_settings_is_one_page():
           html.find("{% if is_pilot %}") < html.find("Airline flight data"))
     check("the admin roster needs BOTH flags", "{% if is_pilot and is_admin %}" in html)
     check("the form action is supplied by the route", 'action="{{ post_to }}"' in html)
-    check("account recovery is gated", "{% if is_pilot %}\n  <div class=\"card\">\n    <h2>Account recovery" in html)
+    # REWRITTEN 1.25.0. This used to pin the exact markup around the
+    # recovery button — the literal string "{% if is_pilot %}\n  <div
+    # class=\"card\">\n    <h2>Account recovery". The RULE it was defending
+    # (a viewer must never be offered a recovery code, because they have
+    # no account to recover) survived the settings rebuild intact; the
+    # three lines of HTML did not, so the assertion failed on a page that
+    # was entirely correct.
+    #
+    # This is the same trap already recorded above test_zone_never_wraps_a_
+    # time: "a test that pins one surface's markup makes replacing that
+    # surface look like a regression". Asserted as the rule instead — the
+    # recovery form appears somewhere inside a pilot-only block and does
+    # not appear outside one.
+    recovery = html.find("/settings/regenerate-recovery")
+    check("account recovery exists", recovery != -1)
+    pilot_open = html.rfind("{% if is_pilot %}", 0, recovery)
+    check("...and is inside a pilot-only block",
+          pilot_open != -1 and html.find("{% endif %}", recovery) != -1)
+    # Nothing gated on is_pilot may appear before the first gate opens.
+    check("...which opens before it",
+          pilot_open < recovery, f"{pilot_open} vs {recovery}")
     check("the old viewer template is gone",
           not os.path.exists(os.path.join(here, "templates", "viewer_settings.html")))
 
@@ -2072,6 +2092,193 @@ def test_the_accent_is_readable_in_both_of_its_jobs():
                   f"{dark_link} vs {val}")
 
 
+def test_every_accent_is_readable_in_both_of_its_jobs():
+    """The contrast floors, applied to every colour a user can PICK. (1.25.0)
+
+    test_the_accent_is_readable_in_both_of_its_jobs (above) checks the
+    default indigo. This checks the other five, because the moment the
+    accent became a setting, "the accent is readable" stopped being a fact
+    about one hex and became a promise about every choice on offer.
+
+    This is the whole argument for a fixed palette over a colour wheel. A
+    wheel lets somebody choose a yellow that makes every link in the app
+    unreadable, and no test can check a colour that does not exist until
+    it is picked. These six exist, so they can be checked, and a seventh
+    added later fails here rather than shipping.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "static", "app.css"), encoding="utf-8") as fh:
+        css = fh.read()
+
+    def lum(h):
+        h = h.lstrip("#")
+        c = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+        f = lambda v: v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+        r, g, b = [f(v) for v in c]
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+    def ratio(a, b):
+        hi, lo = sorted([lum(a), lum(b)], reverse=True)
+        return (hi + 0.05) / (lo + 0.05)
+
+    from app.main import ACCENTS, DEFAULT_ACCENT
+    check("the default accent is one of the offered ones",
+          DEFAULT_ACCENT in ACCENTS, DEFAULT_ACCENT)
+
+    CARD_DARK = "#1a2332"
+    WHITE = "#ffffff"
+    for key in ACCENTS:
+        vals = {}
+        for role in ("lt", "dk", "on"):
+            m = re.search(rf"--a-{key}-{role}:\s*(#[0-9a-fA-F]{{6}})", css)
+            vals[role] = m.group(1) if m else None
+        if not all(vals.values()):
+            check(f"{key}: all three shades are declared", False, str(vals))
+            continue
+        check(f"{key}: all three shades are declared", True)
+        # 4.5:1 is the body-text floor, and a link is body text.
+        r = ratio(vals["lt"], CARD_DARK)
+        check(f"{key}: dark-mode link clears 4.5:1 on the card", r >= 4.5, f"{r:.2f}")
+        r = ratio(vals["dk"], WHITE)
+        check(f"{key}: dark-mode button fill clears 4.5:1 behind white", r >= 4.5, f"{r:.2f}")
+        r = ratio(vals["on"], WHITE)
+        check(f"{key}: light-mode value clears 4.5:1 on white", r >= 4.5, f"{r:.2f}")
+        # Both themes must be wired up, or choosing the colour does nothing
+        # in one of them — which reads as the setting not saving.
+        for theme in ("dark", "light"):
+            check(f"{key}: the {theme} theme block exists",
+                  f'[data-theme="{theme}"][data-accent="{key}"]' in css)
+
+    # EVERY HEX DECLARED ONCE. A palette written out twice is a palette
+    # that drifts — v5.9 spent a release undoing exactly that.
+    for key in ACCENTS:
+        for role in ("lt", "dk", "on"):
+            m = re.search(rf"--a-{key}-{role}:\s*(#[0-9a-fA-F]{{6}})", css)
+            if not m:
+                continue
+            check(f"{key}-{role} is declared once, not repeated",
+                  css.count(f"--a-{key}-{role}:") == 1,
+                  str(css.count(f"--a-{key}-{role}:")))
+
+    # NOT MISTAKABLE FOR A STATUS. Green means early, red late, amber
+    # caution (invariant 28). An accent sharing one of those hues makes a
+    # button look like a delay.
+    import colorsys
+
+    def hue(h):
+        h = h.lstrip("#")
+        r, g, b = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+        return colorsys.rgb_to_hls(r, g, b)[0] * 360
+
+    for status, sval in (("--good", "#22c55e"), ("--bad", "#f87171"),
+                         ("--warn", "#f59e0b")):
+        for key in ACCENTS:
+            m = re.search(rf"--a-{key}-lt:\s*(#[0-9a-fA-F]{{6}})", css)
+            if not m:
+                continue
+            gap = abs(hue(m.group(1)) - hue(sval))
+            gap = min(gap, 360 - gap)
+            check(f"{key} is not confusable with {status.lstrip('-')}",
+                  gap >= 30, f"{gap:.0f} degrees apart")
+
+
+def test_a_collapsed_settings_row_still_says_something():
+    """The design, asserted. (1.25.0)
+
+    A page of shut rows is only worth having if each row reports its own
+    value: "Theme & colour" is a promise, "Theme & colour ... Dark,
+    Indigo" is an answer. That distinction is the entire reason this
+    layout is not sparse, so it is a test rather than a note.
+
+    Also asserts the row is a NATIVE <details>. Invariant 16: nothing that
+    hides content in CSS may rely on script to bring it back. A div plus a
+    click handler would put every setting behind a script that can fail to
+    load, which is precisely what cost the tracker its schedule in v6.1.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(here, "templates", "settings.html"), encoding="utf-8") as fh:
+        html = fh.read()
+
+    check("rows are native <details>", "<details class=\"grow\"" in html)
+    check("...and not a div waiting on a click handler",
+          "grow-head" in html and "onclick" not in html.lower())
+    # The summary is what <details> toggles on. On a div this attribute
+    # would be decoration; here it is the mechanism.
+    check("each row's header is a <summary>", "<summary class=\"grow-head\"" in html)
+
+    # ONE MACRO, not N hand-written headers. Same argument as the flight
+    # strip (invariant 25): the second copy is where they start to differ.
+    check("the row header is defined once as a macro",
+          "{% macro rowhead(" in html)
+    check("...and every row goes through it",
+          html.count("{{ rowhead(") >= 5, str(html.count("{{ rowhead(")))
+    check("...with no header written by hand around it",
+          html.count("<summary") == 1, str(html.count("<summary")))
+
+    # The macro takes a value; a row that passes nothing for it would draw
+    # an empty right-hand side, which is the state this design exists to
+    # avoid.
+    for call in re.findall(r"\{\{ rowhead\((.*?)\) \}\}", html, re.S):
+        parts = call.count(",")
+        check("a row header carries a value as well as a title",
+              parts >= 2, call[:70])
+
+    # Collapsed groups must not drop what they hold. Inputs inside a closed
+    # <details> DO submit — this asserts the form actually wraps them, which
+    # is the thing that would silently stop being true if a group were moved
+    # outside it.
+    form_open = html.find('action="{{ post_to }}"')
+    form_close = html.find("</form>", form_open)
+    body = html[form_open:form_close]
+    for name in ("theme", "accent", "time_format", "show_flightaware", "show_fr24"):
+        check(f"{name} is inside the preferences form",
+              f'name="{name}"' in body)
+
+
+def test_the_accent_reaches_every_page_that_wears_a_theme():
+    """A setting that only applies on the page that sets it is not a setting.
+
+    Same failure viewer_display_overrides was written for, one level up:
+    the theme reached every page and the accent would not have, because
+    the accent rides on a SECOND attribute that each template has to
+    carry. A page missing data-accent silently falls back to indigo, which
+    reads as the setting not saving.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    themed = ["viewer", "calendar", "flights", "admin", "import_review",
+              "settings", "debug"]
+    for name in themed:
+        with open(os.path.join(here, "templates", f"{name}.html"), encoding="utf-8") as fh:
+            html = fh.read()
+        tag = re.search(r"<html[^>]*>", html)
+        check(f"{name}.html carries data-accent on <html>",
+              bool(tag) and "data-accent=" in tag.group(0),
+              tag.group(0)[:80] if tag else "no <html> tag")
+
+    # THE MAP CANNOT READ A CSS VARIABLE. Leaflet takes a colour string, so
+    # both map surfaces used to hardcode one — and kept the Tailwind blue
+    # the app dropped in 1.24.2. Invariant 27: one fact, drawn twice, fixed
+    # in both places.
+    for name in ("viewer", "calendar"):
+        with open(os.path.join(here, "templates", f"{name}.html"), encoding="utf-8") as fh:
+            html = fh.read()
+        check(f"{name}.html no longer hardcodes the old blue",
+              "#3b82f6" not in html)
+        check(f"{name}.html asks the document for the accent",
+              "function accentColour()" in html)
+        # Invariant 30: a function defined outside the script block that
+        # calls it is a string, not code. Assert the POSITION.
+        script = html.find("<script>")
+        defined = html.find("function accentColour()")
+        used = html.find("accentColour()", defined + 10)
+        check(f"{name}.html defines it inside a script block",
+              script != -1 and defined > script)
+        check(f"{name}.html defines it before it is used",
+              used > defined, f"{defined} vs {used}")
+        check(f"{name}.html falls back to a colour, never to an empty string",
+              "'#8b94f7'" in html)
+
+
 def test_the_share_table_looks_like_the_flight_table():
     """Edited in place, styled like its neighbour. (1.24.0)"""
     here = os.path.dirname(os.path.abspath(__file__))
@@ -2776,6 +2983,9 @@ def main():
     test_named_share_codes_keep_existing_shares_working()
     test_settings_explains_itself_without_an_essay()
     test_the_accent_is_readable_in_both_of_its_jobs()
+    test_every_accent_is_readable_in_both_of_its_jobs()
+    test_a_collapsed_settings_row_still_says_something()
+    test_the_accent_reaches_every_page_that_wears_a_theme()
     test_the_share_table_looks_like_the_flight_table()
     test_late_is_measured_from_the_airlines_own_schedule(create_user("sbtest", "pw-not-used"))
     test_flown_legs_are_removed_by_hand_never_by_default()

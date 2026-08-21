@@ -94,6 +94,113 @@
   }
 }
 
+/* ------------------------------------------------------------ ACCENT HUES
+   1.25.0. The accent is chosen SEPARATELY from dark/light, because they
+   answer different questions: dark/light is how bright the page is, the
+   accent is what colour the things you can tap are. Tying them together
+   would mean wanting a teal app forced you into a light one.
+
+   THREE VALUES PER HUE, NOT ONE. This is the split 1.24.2 made and the
+   reason is unchanged: a link on a dark navy card has to be LIGHT to be
+   read, and a filled button with white text on it has to be DARK. One
+   value compromises and loses the button. So:
+
+       --a-NAME-lt   light shade  -> dark theme's link colour
+       --a-NAME-dk   deep shade   -> dark theme's button fill, and the
+                                     swatch dot (which sits on the card
+                                     in both themes)
+       --a-NAME-on   deep shade   -> light theme, where one value does
+                                     both jobs against white
+
+   EVERY HEX IN THIS APP'S ACCENT PALETTE IS DECLARED EXACTLY ONCE, HERE.
+   The blocks below reference these names rather than repeating values,
+   because a palette written out twice is a palette that drifts — that is
+   what v5.9 was cleaning up when eleven templates each held their own
+   copy of these variables.
+
+   WHY THERE IS NO RED, GREEN, ORANGE OR PINK. Green means EARLY, red
+   means LATE and amber means CAUTION on every flight strip (invariant
+   28). An accent sharing a hue with a status makes both harder to read
+   and, worse, makes a button look like a delay. A rose accent tested at
+   18 degrees from --bad and was dropped for that reason. Six
+   well-separated hues beats nine with three landmines.
+
+   ADDING ONE is a block here plus an entry in ACCENTS in main.py. The
+   contrast floors are enforced across every key by
+   test_every_accent_is_readable_in_both_of_its_jobs — a new hue that does
+   not clear them fails the suite rather than shipping unreadable. */
+:root {
+  --a-indigo-lt:  #8b94f7;
+  --a-indigo-dk:  #4f46e5;
+  --a-indigo-on:  #4338ca;
+
+  --a-blue-lt:    #7cb2f8;
+  --a-blue-dk:    #1d64d8;
+  --a-blue-on:    #1e5fbf;
+
+  --a-cyan-lt:    #35c6d8;
+  --a-cyan-dk:    #0e7490;
+  --a-cyan-on:    #0e7490;
+
+  --a-violet-lt:  #b794f6;
+  --a-violet-dk:  #7c3aed;
+  --a-violet-on:  #6d28d9;
+
+  --a-fuchsia-lt: #e07fe8;
+  --a-fuchsia-dk: #a21caf;
+  --a-fuchsia-on: #a21caf;
+
+  /* PINK, added 1.25.0 at the owner's request, and it needed finding
+     rather than picking. --bad is #f87171, a light salmon red, so most
+     pinks sit close enough to it that a button starts to read as a delay
+     warning — a first attempt landed 18 degrees away and was rejected by
+     the hue check. This one is 31 degrees off --bad and 33 off fuchsia,
+     which are the two it could be confused with, and it clears the
+     contrast floors with room (7.08 / 5.87). */
+  --a-pink-lt:    #f28ec2;
+  --a-pink-dk:    #c2185b;
+  --a-pink-on:    #c2185b;
+
+  --a-slate-lt:   #9fb0c7;
+  --a-slate-dk:   #475569;
+  --a-slate-on:   #475569;
+}
+
+/* Two attribute selectors beat the one-attribute theme blocks above, so
+   these win without !important and without being order-dependent. A page
+   with no data-accent (the logged-out ones) simply keeps the indigo the
+   theme blocks already declare — which is why indigo appears both there
+   as a literal and here as a key, and why they must stay in step. */
+[data-theme="dark"][data-accent="indigo"]  { --accent: var(--a-indigo-lt);  --accent-fill: var(--a-indigo-dk); }
+[data-theme="light"][data-accent="indigo"] { --accent: var(--a-indigo-on);  --accent-fill: var(--a-indigo-on); }
+[data-theme="dark"][data-accent="blue"]    { --accent: var(--a-blue-lt);    --accent-fill: var(--a-blue-dk); }
+[data-theme="light"][data-accent="blue"]   { --accent: var(--a-blue-on);    --accent-fill: var(--a-blue-on); }
+[data-theme="dark"][data-accent="cyan"]    { --accent: var(--a-cyan-lt);    --accent-fill: var(--a-cyan-dk); }
+[data-theme="light"][data-accent="cyan"]   { --accent: var(--a-cyan-on);    --accent-fill: var(--a-cyan-on); }
+[data-theme="dark"][data-accent="violet"]  { --accent: var(--a-violet-lt);  --accent-fill: var(--a-violet-dk); }
+[data-theme="light"][data-accent="violet"] { --accent: var(--a-violet-on);  --accent-fill: var(--a-violet-on); }
+[data-theme="dark"][data-accent="fuchsia"] { --accent: var(--a-fuchsia-lt); --accent-fill: var(--a-fuchsia-dk); }
+[data-theme="light"][data-accent="fuchsia"]{ --accent: var(--a-fuchsia-on); --accent-fill: var(--a-fuchsia-on); }
+[data-theme="dark"][data-accent="pink"]    { --accent: var(--a-pink-lt);    --accent-fill: var(--a-pink-dk); }
+[data-theme="light"][data-accent="pink"]   { --accent: var(--a-pink-on);    --accent-fill: var(--a-pink-on); }
+[data-theme="dark"][data-accent="slate"]   { --accent: var(--a-slate-lt);   --accent-fill: var(--a-slate-dk); }
+[data-theme="light"][data-accent="slate"]  { --accent: var(--a-slate-on);   --accent-fill: var(--a-slate-on); }
+
+/* A translucent wash of whatever the accent currently is. Used by the
+   phase pill and the row-open highlight, both of which used to carry a
+   hardcoded rgba() of the OLD Tailwind blue — so they stayed blue when
+   1.24.2 moved the app to indigo and nobody noticed, because the two are
+   never quite side by side.
+
+   Declared twice on purpose. The first line is a plain colour every
+   browser understands; the second overrides it where color-mix is
+   supported (Safari 16.2+, Chrome 111+). An older phone gets the flat
+   fallback rather than a missing background. */
+.accent-wash {
+  background: rgba(120, 130, 200, 0.16);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
 /* Zone labels sit beside a time and must never be the reason a row wraps.
    Kept here rather than in one template because the tracker, the calendar
    agenda and the flight list all show times and all used to disagree. */
@@ -557,3 +664,255 @@ body { padding-bottom: calc(72px + env(safe-area-inset-bottom)) !important; }
 .icon-opt img { width: 46px; height: 46px; border-radius: 10px; display: block; }
 .icon-opt input:checked + span { border-color: var(--accent); color: var(--text); }
 .icon-opt input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------------------------------------------------------------------------
+   GROUPED LIST (1.25.0)
+
+   Built for settings, but deliberately built as a COMPONENT rather than as
+   settings-page CSS, because the same shape is wanted on the calendar and
+   the flights page next. Same reasoning as .fstrip in invariant 25: the
+   moment a second surface needs "a titled row with a value on the right",
+   the choice is one component or three that drift.
+
+   THE ROW IS A NATIVE <details>. Not a div plus a click handler, for two
+   reasons that are not style preferences:
+
+     1. Invariant 16 — nothing that hides content in CSS may rely on script
+        to bring it back. A <details> opens with no JavaScript at all, so a
+        failed or slow script leaves a page that still works. The scroll
+        reveal inside the map's IIFE (v6.1) is what that invariant is
+        written about, and this is the same trap.
+     2. Keyboard and screen-reader behaviour arrive for free and correct.
+        Hand-rolling it means hand-rolling aria-expanded, focus and the
+        Enter/Space keys, and getting one of them wrong.
+
+   THE COLLAPSED ROW STATES ITS OWN VALUE. This is the whole design, and
+   the reason a page of closed rows is not a page of nothing: "Theme &
+   colour" is a promise, "Theme & colour ... Dark, Indigo" is an answer.
+   Every .grow-head carries a .grow-value, and a row with nothing to
+   report should not be a row.
+
+   Inputs inside a CLOSED <details> still submit with the form. Collapsing
+   costs nothing on save, and a group never has to be opened to be kept.
+--------------------------------------------------------------------------- */
+
+/* The small-caps header above a group of rows. */
+.seclabel {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 1.6rem 0 0.5rem 0.9rem;
+}
+.seclabel:first-of-type { margin-top: 0.75rem; }
+
+/* The inset card holding N rows. Rows are divided by a hairline, not by
+   gaps: separate cards per control is what made the old page read as a
+   stack of unrelated boxes rather than a list. */
+.glist {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.glist > * + * { border-top: 1px solid var(--border); }
+
+.grow { display: block; }
+
+/* The tappable row itself. 52px min height — comfortably over the 44px
+   Apple asks for, because this is a list you scroll with a thumb. */
+.grow-head {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  min-height: 52px;
+  padding: 0.7rem 0.9rem;
+  cursor: pointer;
+  list-style: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+/* Both are needed: the pseudo-element is the WebKit/Safari marker, the
+   list-style above covers Firefox and Chrome. Miss either and a stray
+   triangle appears beside the icon on one browser only. */
+.grow-head::-webkit-details-marker { display: none; }
+.grow-head::marker { content: ""; }
+.grow-head:hover { background: var(--input-bg); }
+.grow-head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.grow-icon {
+  flex: 0 0 auto;
+  width: 22px; height: 22px;
+  color: var(--muted);
+  display: flex; align-items: center; justify-content: center;
+}
+.grow-icon svg { width: 20px; height: 20px; display: block; }
+.grow[open] .grow-icon { color: var(--accent); }
+
+.grow-title {
+  flex: 1 1 auto;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 0;
+}
+
+/* The value the collapsed row reports. Allowed to shrink and ellipsise
+   rather than wrap: a row that grows a second line when the value is long
+   makes the list ragged, and the full value is one tap away regardless. */
+.grow-value {
+  flex: 0 1 auto;
+  font-size: 0.85rem;
+  color: var(--muted);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 55%;
+}
+.grow-value .on  { color: var(--good); }
+.grow-value .off { color: var(--muted); }
+.grow-value .alert { color: var(--bad); }
+
+.grow-chev {
+  flex: 0 0 auto;
+  width: 16px; height: 16px;
+  color: var(--muted);
+  transition: transform 0.18s ease;
+}
+.grow-chev svg { width: 16px; height: 16px; display: block; }
+.grow[open] > .grow-head .grow-chev { transform: rotate(90deg); }
+
+/* The expanded content. Indented to the title, not to the icon, so the
+   open state reads as belonging to the row above it. */
+.grow-body {
+  padding: 0.2rem 0.9rem 1.1rem 0.9rem;
+  border-top: 1px solid var(--border);
+}
+.grow-body > :first-child { margin-top: 0.85rem; }
+
+/* A row that navigates instead of expanding — same shape, no <details>. */
+.grow-link {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  min-height: 52px;
+  padding: 0.7rem 0.9rem;
+  text-decoration: none;
+  color: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+.grow-link:hover { background: var(--input-bg); }
+
+/* ---------------------------------------------------------------- CONTROLS
+   Two options do not need a dropdown. A native <select> on a phone opens a
+   full-screen wheel to choose between "Dark" and "Light", which is three
+   interactions for a binary. A segmented control is one tap and shows both
+   states at rest.
+
+   Built on radio inputs rather than buttons so it works inside the form
+   with no JavaScript, and so the keyboard arrow-key behaviour is the one
+   people already expect from a radio group.
+--------------------------------------------------------------------------- */
+.seg {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.seg label {
+  flex: 1 1 0;
+  margin: 0;
+  position: relative;
+}
+.seg input {
+  position: absolute;
+  opacity: 0;
+  width: 0; height: 0;
+  margin: 0;
+}
+.seg span {
+  display: block;
+  text-align: center;
+  padding: 0.5rem 0.4rem;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.seg input:checked + span {
+  background: var(--accent-fill);
+  color: #fff;
+}
+.seg input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------ SWATCH
+   The accent picker. A grid of colour discs rather than a colour wheel,
+   and that is a correctness decision, not a taste one: a free wheel lets
+   somebody choose a yellow that makes every link in the app unreadable,
+   and no test can catch a colour that does not exist until it is picked.
+   These six are checked by the suite before they ship.
+
+   The dot uses each hue's DEEP shade in both themes, because the swatch
+   sits on the card either way and the deep shade is the one that clears
+   contrast against white as well as against navy.
+--------------------------------------------------------------------------- */
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 0.5rem;
+}
+.swatch { position: relative; margin: 0; }
+.swatch input {
+  position: absolute;
+  opacity: 0;
+  width: 0; height: 0;
+  margin: 0;
+}
+/* DIRECT CHILD, not any descendant. `.swatch span` also matched
+   .swatch-dot inside it — and at (0,1,1) it BEAT the (0,1,0) .swatch-dot
+   rule below, so every dot was drawn at the ring's 42px and the ring
+   vanished behind it. Specificity, not order, decided that one. */
+.swatch > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px; height: 42px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.swatch-dot {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  display: block;
+}
+/* The ring is drawn on the OUTER element and the dot keeps its size, so a
+   selected swatch does not shift its neighbours by growing. */
+.swatch input:checked + span { border-color: var(--text); }
+.swatch input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.swatch[data-key="indigo"]  .swatch-dot { background: var(--a-indigo-dk); }
+.swatch[data-key="blue"]    .swatch-dot { background: var(--a-blue-dk); }
+.swatch[data-key="cyan"]    .swatch-dot { background: var(--a-cyan-dk); }
+.swatch[data-key="violet"]  .swatch-dot { background: var(--a-violet-dk); }
+.swatch[data-key="fuchsia"] .swatch-dot { background: var(--a-fuchsia-dk); }
+.swatch[data-key="pink"]    .swatch-dot { background: var(--a-pink-dk); }
+.swatch[data-key="slate"]   .swatch-dot { background: var(--a-slate-dk); }

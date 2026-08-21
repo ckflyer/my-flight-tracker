@@ -48,7 +48,7 @@ seriously.
 
 ## STATE
 
-**v1.24.5.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
+**v1.25.0.** Renamed to MyPilot in 1.0.0. Deployed target: TrueNAS. Multi-user: the
 owner plus several FOs, who fly the same legs — hence shared flight rows
 (v5.1, retained).
 
@@ -119,6 +119,22 @@ TRACKER SHOWS.
 ## OPEN
 
 
+- **The pilot's name is nowhere the family can see it.** 1.25.0 added a
+  personal-information group but deliberately left OUT a display name: a
+  name field that renders nowhere is dead weight, and the place it belongs
+  is the header a viewer sees — "Dave's flights" rather than "MyPilot".
+  That means editing `viewer.html`, which invariant 32 says to touch
+  surgically and which has silently lost code twice. It also appears on
+  five templates, so invariant 27 applies: fix all five or none. Worth
+  doing as its own change, not bolted onto a settings rebuild.
+- **The grouped list is only on settings.** `.glist` / `.grow` / `.seg`
+  were built as reusable components in `app.css` for exactly this reason,
+  but the calendar and flights pages still wear the old look. Settings was
+  the agreed test bed; rolling it outward is the next visual step.
+- **`accentColour()` exists twice**, once per map template, because
+  Leaflet cannot read a CSS variable. Invariant 27 applies until P0-6
+  moves viewer.html's inline JavaScript into a file — adding a third home
+  for script before then would make P0-6 harder, not easier.
 - **AeroAPI field mapping verified only against a synthetic record.** Wiring
   confirmed end-to-end (gates, times, tail, Delayed pill all land). If
   FlightAware renames a field the failure is SILENT — data just never
@@ -867,6 +883,47 @@ Each encodes a shipped bug. Do not remove without reading VERSION HISTORY.
     viewer.html — a whole test in 1.13.0, `selectLeg` in 1.15.0. Both were
     caught by failing assertions, which is luck, not method. `difflib`
     against the last zip takes seconds and shows exactly what left. (1.15.0)
+
+33. **A colour a user can PICK is a promise, not a value.** The accent
+    stopped being one hex in 1.25.0 and became seven, and "the accent is
+    readable" stopped being a fact anyone could check by looking. Hence a
+    FIXED PALETTE rather than a colour wheel: a wheel lets somebody choose
+    a yellow that makes every link in the app unreadable, and no test can
+    check a colour that does not exist until the moment it is picked. The
+    seven exist, so `test_every_accent_is_readable_in_both_of_its_jobs`
+    runs the contrast maths across all of them and an eighth added later
+    fails the suite rather than shipping. If a future session is tempted
+    to "simplify" this into an `<input type="color">`, this is the reason
+    not to. (1.25.0)
+
+34. **An accent may not share a hue with a status.** Green means EARLY,
+    red means LATE, amber means CAUTION on every strip (invariant 28). An
+    accent within 30 degrees of one makes both harder to read and makes a
+    button look like a delay warning. This is asserted, not trusted — the
+    first pink attempted landed 18 degrees from `--bad` and was rejected by
+    the hue check before it reached a screen; the shipped one sits at 31.
+    That gap is also why the palette has no red, green or orange at all.
+    (1.25.0)
+
+35. **A setting that rides on a new attribute reaches no page by default.**
+    The theme travels on `data-theme` and every template already carried
+    it. The accent travels on `data-accent`, which every template had to be
+    given — and a page that misses it does not break, it silently falls
+    back to indigo, which the pilot reads as "the setting didn't save".
+    Same failure `viewer_display_overrides` was written for, one level up.
+    `test_the_accent_reaches_every_page_that_wears_a_theme` walks all seven
+    themed templates rather than trusting the edit. (1.25.0)
+
+36. **Leaflet takes a colour string, so the map cannot read a variable.**
+    Every other surface follows `--accent` for free; the map physically
+    cannot, which is why both map templates hardcoded `#3b82f6` and both
+    kept the Tailwind blue the app abandoned in 1.24.2 — a wrong colour
+    that survived a whole release because the map and the buttons are
+    never quite side by side. `accentColour()` asks the document instead.
+    It falls back to a real hex, never to `''`: Leaflet reads an empty
+    string as BLACK, which on a dark map is an invisible flight path —
+    worse than a wrong hue. Two copies, one per map template; invariant 27
+    applies until P0-6 gives them a shared script file. (1.25.0)
 
 ## MODULE MAP
 
@@ -1683,14 +1740,14 @@ python tests_poller_end_to_end.py   #   47
 python tests_past_leg_detail.py     #   19
 python tests_budget_limit.py        #   17
 python tests_carrier_cap.py         #   13
-python tests_ui_fixes.py            #  673
-python tests_app_shell.py           #  200
+python tests_ui_fixes.py            #  794
+python tests_app_shell.py           #  203
 python tests_timezones.py           #   68
 python tests_closeout_sweep.py      #   42
 python tests_import_merge.py        #   43
 python tests_test_mode.py           #  133
 python tests_regression_matrix.py   #  761
-```                                  # 2086
+```                                  # 2209
 
 Each uses its own scratch DB via `PT_DB_FILE`. Read
 `tests_poller_end_to_end.py` first: it scripts an ADS-B feed and walks one
@@ -1757,6 +1814,109 @@ DECIDED, so it does not get re-litigated:
 
 
 ## VERSION HISTORY
+
+### 1.25.0 — settings becomes a list, and the accent becomes a choice
+
+Settings was eight stacked cards in one column. Everything was visible at
+once, which sounds like a virtue and reads as a wall — and it was the
+oldest-looking page in the app, so it was chosen as the test bed for a
+sharper look the calendar and flights pages want next.
+
+**The page is now a grouped list of collapsible rows**, under small-caps
+headers, in the shape iOS settings has used for fifteen years.
+
+**Every collapsed row states its own value.** This is the whole design and
+the reason a shut page is not an empty one: "Theme & colour" is a promise,
+"Theme & colour ... Dark, Indigo" is an answer. Seven rows that each report
+something is a short page carrying real information. Built server-side
+(`settings_previews`, roadmap P1-5) — the alternative is JavaScript reading
+the form's own inputs to describe them, which is blank until a script runs
+and wrong the moment a control is renamed.
+
+**The rows are native `<details>`, not divs with click handlers.**
+Invariant 16: nothing that hides content in CSS may rely on script to bring
+it back. `<details>` opens with no JavaScript at all, and keyboard and
+screen-reader behaviour arrive correct for free. Inputs inside a CLOSED
+`<details>` still submit, so collapsing never drops a value — which is what
+makes shut-by-default safe.
+
+**The accent is now a setting, chosen separately from dark/light.** Seven
+hues. They answer different questions — dark/light is how bright the page
+is, the accent is what colour the things you can tap are — and tying them
+together would mean wanting a pink app forced you into a light one.
+
+A FIXED PALETTE, not a colour wheel, and that is a correctness decision
+rather than a conservative one. See invariants 33 and 34. Every hue's three
+shades are declared exactly once in `app.css` and the contrast test runs
+across all seven; storing a KEY rather than a hex in the database is what
+makes that possible, because a hex in a column is a colour nothing ever
+checks.
+
+Pink needed finding rather than picking. `--bad` is a light salmon red, so
+most pinks sit close enough that a button starts to read as a delay
+warning; the first attempt landed 18 degrees away and was rejected by the
+hue check before it reached a screen. The shipped one is 31 degrees off
+`--bad` and 33 off fuchsia.
+
+**Two toggles became segmented controls.** A native `<select>` on a phone
+opens a full-screen wheel to choose between "Dark" and "Light" — three
+interactions for a binary. One tap, both states visible at rest.
+
+**Personal information exists.** Username and email were collected at
+registration and then unreachable forever, and the ONLY route to a new
+password was the forgot-password flow — the way to change a password you
+knew was to pretend you had lost it. Kept as SEPARATE forms from the
+preferences save: a preferences save is cheap and idempotent, changing
+credentials is neither, and one submit would mean every theme change
+re-validated a username and every clash discarded the theme change. Rate
+limited like every other password path, because being logged in is not a
+reason to allow unlimited guesses at the current password. Does NOT rotate
+the recovery code — a routine password change must not quietly destroy the
+code a pilot has written down.
+
+**All three POST routes now redirect (POST-redirect-GET).** The old form
+re-rendered in place, so a pull-to-refresh after saving asked the phone to
+resubmit. Offering to resubmit a password change is not harmless.
+
+**FIXED: the map trails were still Tailwind blue.** `#3b82f6` hardcoded in
+five places across `viewer.html` and `calendar.html`, left behind when
+1.24.2 moved the app to indigo — a wrong colour that survived a whole
+release because the map and the buttons are never quite side by side. See
+invariant 36. The phase pill's background tint had the same problem. Both
+now follow the accent, so a chosen colour reaches the flight path for free.
+
+**FIXED: three numbers for one setting.** The `poll_seconds` column
+declared 45, `AppSettings` declared 15, and the settings page's own hint
+recommended 15. A fresh account was created on 45 and then shown advice
+against it. 15 wins — it is what the code defaults to and what the app
+recommends; 45 was only ever a table declaration nobody read. Migration
+moves only rows sitting on EXACTLY 45, so a pilot who chose it deliberately
+to spare their battery keeps it.
+
+**FIXED, in this release's own work: two CSS bugs worth recording** because
+they are the kind that ship silently. `.swatch span` matched the colour dot
+INSIDE the swatch as well as the ring around it, and at (0,1,1) beat the
+(0,1,0) `.swatch-dot` rule — so every dot rendered at the ring's 42px and
+the selection ring vanished behind it. Specificity decided that, not source
+order, so reordering would not have helped. And a bare `input:focus-visible`
+matched the zero-sized radios hiding behind the segmented controls and
+swatches, drawing an outline around nothing.
+
+**A test was rewritten, not deleted.** `test_settings_is_one_page` pinned
+the exact markup around the recovery button — the literal string
+`{% if is_pilot %}\n  <div class="card">\n    <h2>Account recovery`. The
+RULE it defended (a viewer is never offered a recovery code, having no
+account to recover) survived the rebuild intact; the three lines of HTML
+did not, so it failed on a page that was entirely correct. Same trap
+already recorded above `test_zone_never_wraps_a_time`. It now asserts the
+rule: the recovery form sits inside a pilot-only block.
+
+**The grouped list lives in `app.css`, not in the page.** Settings is the
+test bed; the calendar and flights pages want the same shape next, and a
+component defined in one template has to be copied to reach them.
+Invariant 25.
+
+2086 → 2209 assertions.
 
 ### 1.24.5 — the share table scrolls, and settings stops lecturing
 

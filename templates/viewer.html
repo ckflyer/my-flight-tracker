@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="{{ settings.theme }}">
+<html lang="en" data-theme="{{ settings.theme }}" data-accent="{{ settings.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -152,7 +152,11 @@
        would signal anything, and a green badge on every normal flight is
        wallpaper the eye stops seeing — which is why there is no "on time"
        pill at all. No status means no pill. */
-    .status.phase { background: rgba(59,130,246,0.18); color: var(--accent); }
+    /* Was a hardcoded rgba() of the OLD Tailwind blue, so this pill kept
+       its 1.24.1 tint after the app moved to indigo. Two declarations: the
+       first is understood everywhere, the second wins where color-mix is
+       supported and follows whatever accent the user picked. */
+    .status.phase { background: rgba(120,130,200,0.18); background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
     .status.arrived { background: rgba(139,155,180,0.2); color: var(--muted); }
     .status.delayed { background: rgba(245,158,11,0.22); color: var(--warn); }
     .status.diverted { background: rgba(245,158,11,0.28); color: var(--warn); font-weight: 700; }
@@ -1746,6 +1750,26 @@
       // disappears. Same shape, different treatment, on purpose.
       const PLANE_STYLE = {{ (settings.icon_style if settings and settings.icon_style else 'modern') | tojson }};
 
+      // THE ACCENT, READ FROM THE PAGE (1.25.0). Leaflet takes a colour
+      // STRING, not a CSS variable, so the map cannot write var(--accent)
+      // and used to carry a hardcoded Tailwind blue-500 instead — the
+      // colour this app STOPPED using in 1.24.2 — so the flight path
+      // stayed blue while everything around it went indigo, and nobody
+      // caught it because the two are never quite side by side.
+      // Asking the document means the trail follows the accent a user
+      // picks, for free, with nothing to keep in step.
+      //
+      // Falls back to the shipped indigo, never to an empty string:
+      // Leaflet reads '' as BLACK, which on a dark map is an invisible
+      // flight path — a worse failure than a wrong hue.
+      function accentColour() {
+        try {
+          var v = getComputedStyle(document.documentElement)
+                    .getPropertyValue('--accent').trim();
+          return v || '#8b94f7';
+        } catch (e) { return '#8b94f7'; }
+      }
+
       function makePlaneIcon(track) {
         const styles = window.PLANE_STYLES || {};
         const st = styles[PLANE_STYLE] || styles.modern;
@@ -1857,7 +1881,7 @@
           if (cur && cur.dest_lat != null) {
             remainingLine = L.polyline(
               [[live.lat, live.lon], [cur.dest_lat, cur.dest_lon]],
-              { color: '#3b82f6', weight: 2.5, opacity: 0.7, dashArray: '6 8' }
+              { color: accentColour(), weight: 2.5, opacity: 0.7, dashArray: '6 8' }
             ).addTo(map);
           }
 
@@ -1866,7 +1890,7 @@
             cur && cur.origin_lat != null ? [[cur.origin_lat, cur.origin_lon], [live.lat, live.lon]] : []
           );
           if (flownTrail.length > 1) {
-            flownLine = L.polyline(flownTrail, { color: '#3b82f6', weight: 3.5, opacity: 0.9 }).addTo(map);
+            flownLine = L.polyline(flownTrail, { color: accentColour(), weight: 3.5, opacity: 0.9 }).addTo(map);
           }
 
           const track = (live.track != null) ? Number(live.track) : 0;

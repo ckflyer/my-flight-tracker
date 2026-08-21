@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="{{ s.theme }}">
+<html lang="en" data-theme="{{ s.theme }}" data-accent="{{ s.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -7,62 +7,87 @@
   {% include "partials/app_shell.html" %}
   <link rel="stylesheet" href="/static/app.css?v={{ version }}">
   <style>
+    /* PAGE LAYOUT ONLY. Everything that draws a row, a group, a segmented
+       control or a swatch lives in static/app.css, because settings is the
+       test bed for a look the calendar and flights pages want next — and a
+       component defined here would have to be copied to reach them. Same
+       argument as .fstrip in invariant 25. */
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: var(--bg); color: var(--text);
       min-height: 100vh; max-width: 640px; margin: 0 auto;
-      padding: max(1.5rem, env(safe-area-inset-top)) max(1.5rem, env(safe-area-inset-right)) max(1.5rem, env(safe-area-inset-bottom)) max(1.5rem, env(safe-area-inset-left));
+      padding: max(1.25rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1.5rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
     }
-    h1 { font-size: 1.5rem; margin-bottom: 0.35rem; }
-    .sub { color: var(--muted); margin-bottom: 1.25rem; font-size: 0.9rem; }
-    .sub a { color: var(--accent); }
-    .card {
-      background: var(--card); border-radius: 12px; padding: 1.25rem; margin-bottom: 1rem;
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 0.5rem; margin-bottom: 1.1rem; padding: 0 0.4rem;
     }
-    .card h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 0.85rem; }
-    label { display: block; margin-bottom: 0.35rem; font-size: 0.9rem; }
-    input[type=text], input[type=password], input[type=number], select {
-      width: 100%; padding: 0.6rem 0.75rem; margin-bottom: 0.85rem;
-      background: var(--input-bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text);
-      font-size: 0.95rem;
+    .brand { font-size: 0.95rem; font-weight: 700; letter-spacing: 0.02em; }
+    .logout-btn {
+      width: 34px; height: 34px; padding: 0; margin: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: transparent; color: var(--muted);
+      border: 1px solid var(--border); border-radius: 999px;
+      cursor: pointer; flex-shrink: 0;
     }
-    .row { display: flex; gap: 1rem; flex-wrap: wrap; }
-    .row > div { flex: 1; min-width: 140px; }
-    .check { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.65rem; }
-    .check input { width: auto; margin: 0; }
-    button {
-      margin-top: 0.5rem; padding: 0.7rem 1.4rem; background: var(--accent);
-      color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.95rem;
+    .logout-btn:hover { color: var(--text); border-color: var(--muted); }
+    h1 { font-size: 1.75rem; letter-spacing: -0.02em; margin: 0 0 0.2rem 0.4rem; }
+    .sub { color: var(--muted); font-size: 0.85rem; margin: 0 0 0.5rem 0.4rem; }
+
+    /* Feedback from the three POST routes, which all redirect back here. */
+    .flash {
+      padding: 0.7rem 0.9rem; border-radius: 10px;
+      margin: 0 0 0.9rem; font-size: 0.875rem; font-weight: 600;
+    }
+    .flash.good { background: rgba(34,197,94,0.15); color: var(--good); }
+    .flash.bad  { background: rgba(248,113,113,0.15); color: var(--bad); }
+
+    /* Form controls inside an expanded row. */
+    label { display: block; margin-bottom: 0.3rem; font-size: 0.8125rem; color: var(--muted); }
+    input[type=text], input[type=email], input[type=password], input[type=number] {
+      width: 100%; padding: 0.6rem 0.7rem; margin-bottom: 0.8rem;
+      background: var(--input-bg); border: 1px solid var(--border);
+      border-radius: 9px; color: var(--text); font-size: 0.95rem;
+    }
+    /* Scoped to the visible fields. A bare `input:focus-visible` also
+       matched the zero-sized radios behind the segmented control and the
+       swatches, which draws an outline round nothing. Those two carry
+       their own focus rules on the span they label. */
+    input[type=text]:focus-visible, input[type=email]:focus-visible,
+    input[type=password]:focus-visible, input[type=number]:focus-visible {
+      outline: 2px solid var(--accent); outline-offset: 1px;
+    }
+    .field-pair { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+    .field-pair > div { flex: 1 1 150px; }
+    .hint { font-size: 0.78rem; color: var(--muted); margin: -0.45rem 0 0.85rem; line-height: 1.45; }
+    .ctl { margin-bottom: 0.9rem; }
+    .ctl:last-child { margin-bottom: 0; }
+    .ctl > label { margin-bottom: 0.4rem; }
+
+    button.primary {
+      padding: 0.65rem 1.1rem; background: var(--accent-fill); color: #fff;
+      border: none; border-radius: 9px; font-weight: 600;
+      cursor: pointer; font-size: 0.9rem;
+    }
+    button.ghost {
+      padding: 0.6rem 1rem; background: transparent; color: var(--accent);
+      border: 1px solid var(--border); border-radius: 9px;
+      font-weight: 600; cursor: pointer; font-size: 0.875rem;
     }
     .save-settings-btn {
-      display: block;
-      width: 100%;
-      margin: 1.5rem 0 2rem;
-      padding: 0.75rem;
-      background: var(--accent);
-      color: white;
-      border: none;
-      border-radius: 8px;
-      font-weight: 600;
-      font-size: 0.95rem;
-      cursor: pointer;
+      display: block; width: 100%; margin: 1.5rem 0 0.5rem;
+      padding: 0.85rem; background: var(--accent-fill); color: #fff;
+      border: none; border-radius: 11px; font-weight: 600;
+      font-size: 0.95rem; cursor: pointer;
     }
-    .saved {
-      background: rgba(34,197,94,0.15); color: #22c55e; padding: 0.65rem 0.85rem;
-      border-radius: 8px; margin-bottom: 1rem; font-size: 0.9rem;
-    }
-    .budget-input { position: relative; }
-    .budget-input .budget-prefix {
-      position: absolute; left: 0.75rem; top: 0.6rem;
-      color: var(--muted); font-size: 0.95rem; pointer-events: none;
-    }
-    .budget-input input { padding-left: 1.6rem; }
+
+    /* Toggle switch, unchanged from the old page — it already looked right. */
     .switch-row {
       display: flex; align-items: center; justify-content: space-between;
       gap: 1rem; margin-bottom: 0.6rem;
     }
-    .switch-row .switch-label { font-size: 0.95rem; font-weight: 600; }
+    .switch-row .switch-label { font-size: 0.9rem; font-weight: 600; }
     .switch { position: relative; display: inline-block; width: 46px; height: 26px; flex-shrink: 0; }
     .switch input { opacity: 0; width: 0; height: 0; position: absolute; }
     .switch .track {
@@ -74,250 +99,340 @@
       background: #fff; border-radius: 50%; transition: transform 0.18s ease;
       box-shadow: 0 1px 3px rgba(0,0,0,0.3);
     }
-    .switch input:checked + .track { background: var(--accent); }
+    .switch input:checked + .track { background: var(--accent-fill); }
     .switch input:checked + .track:before { transform: translateX(20px); }
     .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
-    .sub-fields {
-      margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid var(--border);
+
+    .sub-fields { margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid var(--border); }
+    .budget-input { position: relative; }
+    .budget-input .budget-prefix {
+      position: absolute; left: 0.7rem; top: 0.6rem;
+      color: var(--muted); font-size: 0.95rem; pointer-events: none;
     }
+    .budget-input input { padding-left: 1.55rem; }
+
     /* Was a space-between flex row. On a phone "Usage this month (2026-08)"
        plus "18 calls - $0.09 of $4.90" does not fit, so the value wrapped
-       to a second line — and .hint's negative top margin (below) then
-       pulled the following paragraph up on top of it. Stacked block: it
-       cannot wrap into itself, at any width. */
-    .usage-block {
-      margin-top: 0.9rem; padding-top: 0.7rem;
-      border-top: 1px solid var(--border);
-    }
-    .usage-label {
-      font-size: 0.8rem; color: var(--muted); display: block;
-      margin-bottom: 0.15rem;
-    }
+       to a second line — and .hint's negative top margin then pulled the
+       following paragraph on top of it. Stacked block: it cannot wrap into
+       itself, at any width. */
+    .usage-block { margin-top: 0.9rem; padding-top: 0.7rem; border-top: 1px solid var(--border); }
+    .usage-label { font-size: 0.78rem; color: var(--muted); display: block; margin-bottom: 0.15rem; }
     .usage-value {
       display: block; color: var(--text); font-size: 1.05rem;
       font-weight: 700; line-height: 1.25; font-variant-numeric: tabular-nums;
     }
-    .usage-meta {
-      display: block; font-size: 0.75rem; color: var(--muted);
-      margin-top: 0.3rem; line-height: 1.45;
-    }
+    .usage-meta { display: block; font-size: 0.74rem; color: var(--muted); margin-top: 0.3rem; line-height: 1.45; }
     .usage-meta .warn { color: var(--warn); }
     .usage-meta .bad { color: var(--bad); }
-    /* The negative top margin is what tucks a hint under its own input.
-       It must never apply to a hint following the usage block, or it
-       climbs over it. */
-    .hint { font-size: 0.8rem; color: var(--muted); margin-top: -0.5rem; margin-bottom: 0.85rem; }
     .usage-block + .hint { margin-top: 0.5rem; }
-    .topbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-      margin-bottom: 1.25rem;
-    }
-    .brand { font-size: 0.95rem; font-weight: 700; letter-spacing: 0.02em; }
-    .topbar-right { display: flex; align-items: center; gap: 0.5rem; }
-    .logout-btn {
-      margin: 0;
-      width: 34px;
-      height: 34px;
-      padding: 0;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      background: transparent;
-      color: var(--muted);
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      cursor: pointer;
-      flex-shrink: 0;
-    }
-    .logout-btn:hover { color: var(--text); border-color: var(--muted); }
-    .topbar-right { flex-wrap: wrap; justify-content: flex-end; }
-    @media (max-width: 400px) {
-    }
-    .logout-btn:hover { color: var(--text); border-color: var(--muted); }
-    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-    .table-scroll table td:last-child, .table-scroll table th:last-child { width: 72px; white-space: nowrap; }
-    @media (max-width: 480px) {
-      .table-scroll table { font-size: 0.78rem; }
-      .table-scroll table td, .table-scroll table th { padding: 0.35rem 0.25rem !important; }
-    }
+
+    .footnote { text-align: center; color: var(--muted); font-size: 0.72rem; margin-top: 1.75rem; }
   </style>
 </head>
 <body>
   <div class="topbar">
     <div class="brand">MyPilot</div>
-    <div class="topbar-right">
-      <form method="post" action="/logout" style="margin:0;">
-        <button type="submit" class="logout-btn" title="Log out" aria-label="Log out"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg></button>
-      </form>
-    </div>
+    <form method="post" action="/logout" style="margin:0;">
+      <button type="submit" class="logout-btn" title="Log out" aria-label="Log out"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg></button>
+    </form>
   </div>
+
   <h1>Settings</h1>
   {% if not is_pilot %}
-  <p class="hint" style="margin:-0.35rem 0 1rem;">
-    These apply to this device only.
-  </p>
+  <p class="sub">These apply to this device only.</p>
   {% endif %}
 
-  {% if saved %}
-  <div class="saved">Settings saved.</div>
-  {% endif %}
+  {% if notice %}<div class="flash good">{{ notice }}</div>{% endif %}
+  {% if error %}<div class="flash bad">{{ error }}</div>{% endif %}
 
-  <form method="post" action="{{ post_to }}">
-    {% if is_pilot %}
-    <div class="card">
-      <h2>Airline flight data</h2>
-      <div class="switch-row">
-        <span class="switch-label">FlightAware AeroAPI</span>
-        <label class="switch">
-          <input type="checkbox" name="aeroapi_enabled" value="1" id="aeroapi-toggle"
-                 {{ 'checked' if s.aeroapi_enabled else '' }}>
-          <span class="track"></span>
-        </label>
+  {#- THE ROW MACRO. One definition, so a row cannot be drawn two ways —
+      the same reasoning as the flight strip. `key` names the group so a
+      redirect can reopen it; `value` is the summary the collapsed row
+      reports, and is the reason a shut page is still informative. -#}
+  {% macro rowhead(icon, title, value) %}
+    <summary class="grow-head">
+      <span class="grow-icon">{{ icon }}</span>
+      <span class="grow-title">{{ title }}</span>
+      <span class="grow-value">{{ value }}</span>
+      <span class="grow-chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 5 16 12 9 19"/></svg></span>
+    </summary>
+  {% endmacro %}
+
+  {% if is_pilot %}
+  <div class="seclabel">Account</div>
+  <div class="glist">
+    <details class="grow" {% if open_group == 'account' %}open{% endif %}>
+      {{ rowhead('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg>'|safe, 'Your details', preview.account) }}
+      <div class="grow-body">
+        {#- A SEPARATE FORM, not part of the preferences form below. Changing
+            a username is neither cheap nor idempotent, and sharing a submit
+            would mean every theme change re-validated it and every clash
+            discarded the theme change. -#}
+        <form method="post" action="/settings/account">
+          <div class="field-pair">
+            <div>
+              <label for="acct-username">Username</label>
+              <input type="text" id="acct-username" name="username" autocomplete="username"
+                     minlength="3" required value="{{ account.username }}">
+            </div>
+            <div>
+              <label for="acct-email">Email</label>
+              <input type="email" id="acct-email" name="email" autocomplete="email"
+                     value="{{ account.email }}">
+            </div>
+          </div>
+          <p class="hint">Your username is what you log in with. Email is only used for your own reference.</p>
+          <button type="submit" class="primary">Save details</button>
+        </form>
       </div>
-      <p class="hint">Adds gates, delays, diversions and real gate-to-gate times. Position tracking works without it.</p>
+    </details>
 
-      <div id="aeroapi-fields" class="sub-fields" style="{{ '' if s.aeroapi_enabled else 'display:none' }}">
-        <label for="aeroapi-key">API key</label>
-        <input type="password" name="aeroapi_key" id="aeroapi-key" autocomplete="off"
-               placeholder="{{ 'saved \u2014 leave blank to keep it' if s.aeroapi_key else 'paste your AeroAPI key' }}">
-        <p class="hint">flightaware.com &rarr; AeroAPI &rarr; <strong>Personal</strong> tier. Includes $5/month free, $10 if you feed ADS-B.</p>
-        <div class="usage-block">
-          <span class="usage-label">Usage this month ({{ aeroapi_stats.period }})</span>
-          {% if aeroapi_stats.has_reading %}
-          <span class="usage-value"{% if aeroapi_stats.over_budget %} style="color:var(--bad)"{% endif %}>${{ '%.2f'|format(aeroapi_stats.spent) }} of ${{ '%.2f'|format(aeroapi_stats.budget) }}</span>
-          <span class="usage-meta">
-            {{ aeroapi_stats.reported_calls or aeroapi_stats.queries }} calls &middot; FlightAware&rsquo;s figure{% if aeroapi_stats.usage_age %}, {{ aeroapi_stats.usage_age }}{% endif %}<br>
-            Tracker last ran <strong{% if poller.stale %} class="warn"{% endif %}>{{ poller.label }}</strong>{% if poller.stale %} &mdash; longer ago than it should be{% endif %}
-            {%- if not aeroapi_stats.reading_fresh %}<br><span class="bad">Spend reading is stale; the limit is being held against a local count until it updates.</span>{% endif %}
-          </span>
-          {% else %}
-          <span class="usage-value" style="color:var(--muted)">&mdash; of ${{ '%.2f'|format(aeroapi_stats.budget) }}</span>
-          <span class="usage-meta">
-            No reading yet; it appears within 15 minutes of the key being used.<br>
-            Tracker last ran <strong{% if poller.stale %} class="warn"{% endif %}>{{ poller.label }}</strong>
-          </span>
+    <details class="grow" {% if open_group == 'password' %}open{% endif %}>
+      {{ rowhead('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10.5" width="16" height="10" rx="2.2"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/></svg>'|safe, 'Password & recovery', 'Change, reset') }}
+      <div class="grow-body">
+        <form method="post" action="/settings/password">
+          <label for="pw-current">Current password</label>
+          <input type="password" id="pw-current" name="current_password" autocomplete="current-password" required>
+          <label for="pw-new">New password</label>
+          <input type="password" id="pw-new" name="new_password" autocomplete="new-password" minlength="8" required>
+          <label for="pw-confirm">Confirm new password</label>
+          <input type="password" id="pw-confirm" name="confirm_password" autocomplete="new-password" minlength="8" required>
+          <p class="hint">At least 8 characters. Your recovery code keeps working.</p>
+          <button type="submit" class="primary">Change password</button>
+        </form>
+        <div class="sub-fields">
+          <p class="hint" style="margin:0 0 0.7rem;">A new recovery code retires the old one immediately.</p>
+          <form method="post" action="/settings/regenerate-recovery"
+                onsubmit="return confirm('Generate a new recovery code? Your current one will stop working immediately.');"
+                style="margin:0;">
+            <button type="submit" class="ghost">Generate new recovery code</button>
+          </form>
+        </div>
+      </div>
+    </details>
+  </div>
+  {% endif %}
+
+  {#- THE PREFERENCES FORM wraps every group below it. Inputs inside a
+      CLOSED <details> still submit, so collapsing a group never drops the
+      value it holds — which is what makes shut-by-default safe. -#}
+  <form method="post" action="{{ post_to }}">
+
+    <div class="seclabel">Appearance</div>
+    <div class="glist">
+      <details class="grow" {% if open_group == 'appearance' %}open{% endif %}>
+        {{ rowhead('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17" /><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor" stroke="none"/></svg>'|safe, 'Theme & colour', preview.appearance) }}
+        <div class="grow-body">
+          <div class="ctl">
+            <label>Theme</label>
+            <div class="seg" role="radiogroup" aria-label="Theme">
+              <label><input type="radio" name="theme" value="dark" {% if s.theme != 'light' %}checked{% endif %}><span>Dark</span></label>
+              <label><input type="radio" name="theme" value="light" {% if s.theme == 'light' %}checked{% endif %}><span>Light</span></label>
+            </div>
+          </div>
+          <div class="ctl">
+            <label>Accent colour</label>
+            <div class="swatches" role="radiogroup" aria-label="Accent colour">
+              {% for key, label in accents.items() %}
+              <label class="swatch" data-key="{{ key }}">
+                {#- The name is an aria-label on the INPUT rather than a
+                    visually-hidden span, so the swatch has exactly one
+                    child span for the CSS ring to attach to. A second
+                    span here was what made `.swatch span` ambiguous. -#}
+                <input type="radio" name="accent" value="{{ key }}" aria-label="{{ label }}"
+                       {% if (s.accent | default('indigo', true)) == key %}checked{% endif %}>
+                <span title="{{ label }}"><span class="swatch-dot"></span></span>
+              </label>
+              {% endfor %}
+            </div>
+            <p class="hint">Colours buttons, links and the live flight marker. Works with either theme.</p>
+          </div>
+        </div>
+      </details>
+
+      <details class="grow" {% if open_group == 'display' %}open{% endif %}>
+        {{ rowhead('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><polyline points="12 7 12 12 15.5 14"/></svg>'|safe, 'Display', preview.display) }}
+        <div class="grow-body">
+          <div class="ctl">
+            <label>Clock</label>
+            <div class="seg" role="radiogroup" aria-label="Clock">
+              <label><input type="radio" name="time_format" value="24" {% if s.time_format != '12' %}checked{% endif %}><span>24-hour</span></label>
+              <label><input type="radio" name="time_format" value="12" {% if s.time_format == '12' %}checked{% endif %}><span>12-hour</span></label>
+            </div>
+          </div>
+          {% if is_pilot %}
+          <div class="ctl">
+            <label>Plane icon</label>
+            <div class="icon-picker">
+              {% for key, label in (icon_styles or {'modern':'Modern','sharp':'Sharp','rounded':'Rounded','delta':'Delta'}).items() %}
+              <label class="icon-opt">
+                <input type="radio" name="icon_style" value="{{ key }}"
+                       {% if s.icon_style == key %}checked{% endif %}>
+                <span>
+                  <img src="/static/icon-{{ key }}-192.png?v={{ version }}" alt="{{ label }} plane icon">
+                  {{ label }}
+                </span>
+              </label>
+              {% endfor %}
+            </div>
+            <p class="hint">Sets the map plane and app icon. A home-screen icon only changes if you remove and re-add the app.</p>
+          </div>
           {% endif %}
         </div>
-        {% if aeroapi_stats.exhausted %}
-        <p class="hint" style="color:var(--bad);font-weight:600;">
-          {% if aeroapi_stats.budget <= 0 %}Limit set to $0 &mdash; AeroAPI queries are off. Live ADS-B tracking is unaffected.
-          {%- else %}Limit reached &mdash; AeroAPI is paused until the month rolls over. Live ADS-B tracking is unaffected.{% endif %}
-        </p>
-        {% endif %}
-        <label for="aeroapi-budget" style="margin-top:1rem;">Monthly spend limit (USD)</label>
-        <div class="budget-input">
-          <span class="budget-prefix">$</span>
-          {# step was 0.25, which means the browser only accepts multiples of
-             a quarter. The DEFAULT budget is 4.90, so a fresh account could
-             not save settings at all: the field failed validation before the
-             form was ever submitted and the browser said "please enter a
-             valid value" against a number the app itself had put there.
-             Cents are the real unit of a dollar budget. #}
-          <input type="number" name="aeroapi_budget" id="aeroapi-budget" step="0.01" min="0" max="500"
-                 value="{{ '%.2f'|format(s.aeroapi_budget) }}">
-        </div>
-        <p class="hint">Hard stop &mdash; queries pause for the month once spend hits this. $0 turns them off and keeps your key. A 50-leg month runs about $4.50.</p>
-      </div>
-    </div>
-    {% endif %}
-
-    <div class="card">
-      <h2>Display</h2>
-      <div class="row">
-        <div>
-          <label>Time format</label>
-          <select name="time_format">
-            <option value="24" {% if s.time_format == '24' %}selected{% endif %}>24-hour</option>
-            <option value="12" {% if s.time_format == '12' %}selected{% endif %}>12-hour</option>
-          </select>
-        </div>
-        <div>
-          <label>Theme</label>
-          <select name="theme">
-            <option value="dark" {% if s.theme == 'dark' %}selected{% endif %}>Dark</option>
-            <option value="light" {% if s.theme == 'light' %}selected{% endif %}>Light</option>
-          </select>
-        </div>
-      </div>
-
-      {% if is_pilot %}
-      <label>Plane icon</label>
-      <div class="icon-picker">
-        {% for key, label in (icon_styles or {'modern':'Modern','sharp':'Sharp','rounded':'Rounded','delta':'Delta'}).items() %}
-        <label class="icon-opt">
-          <input type="radio" name="icon_style" value="{{ key }}"
-                 {% if s.icon_style == key %}checked{% endif %}>
-          <span>
-            <img src="/static/icon-{{ key }}-192.png?v={{ version }}" alt="{{ label }} plane icon">
-            {{ label }}
-          </span>
-        </label>
-        {% endfor %}
-      </div>
-      <p class="hint">Sets the map plane and app icon. An icon already on your home screen only changes if you remove and re-add the app.</p>
-      {% endif %}
-      {% if is_pilot %}
-      <label>Live poll interval (seconds)</label>
-      <input type="number" name="poll_seconds" value="{{ s.poll_seconds }}" min="10" max="300">
-      <p class="hint">Live position refresh while airborne. 15 is a good balance.</p>
-      {% endif %}
+      </details>
     </div>
 
-    <div class="card">
-      <h2>Tracking links</h2>
-      <div class="check">
-        <input type="checkbox" name="show_flightaware" id="fa" {% if s.show_flightaware %}checked{% endif %}>
-        <label for="fa" style="margin:0">Show FlightAware</label>
-      </div>
-      <div class="check">
-        <input type="checkbox" name="show_fr24" id="fr" {% if s.show_fr24 %}checked{% endif %}>
-        <label for="fr" style="margin:0">Show FlightRadar24</label>
-      </div>
+    <div class="seclabel">Flight data</div>
+    <div class="glist">
+      {% if is_pilot %}
+      <details class="grow" {% if open_group == 'airline' %}open{% endif %}>
+        {{ rowhead('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4.5L10 7h2.5l-1.5 5H16l2-2.5h2L18 12l2 2.5h-2L16 12h-5l1.5 5H10l-2.5-5H3z"/></svg>'|safe, 'Airline flight data', preview.airline) }}
+        <div class="grow-body">
+          <div class="switch-row">
+            <span class="switch-label">FlightAware AeroAPI</span>
+            <label class="switch">
+              <input type="checkbox" name="aeroapi_enabled" value="1" id="aeroapi-toggle"
+                     {{ 'checked' if s.aeroapi_enabled else '' }}>
+              <span class="track"></span>
+            </label>
+          </div>
+          <p class="hint">Adds gates, delays, diversions and real gate-to-gate times. Position tracking works without it.</p>
+
+          <div id="aeroapi-fields" class="sub-fields" style="{{ '' if s.aeroapi_enabled else 'display:none' }}">
+            <label for="aeroapi-key">API key</label>
+            <input type="password" name="aeroapi_key" id="aeroapi-key" autocomplete="off"
+                   placeholder="{{ 'saved \u2014 leave blank to keep it' if s.aeroapi_key else 'paste your AeroAPI key' }}">
+            <p class="hint">flightaware.com &rarr; AeroAPI &rarr; <strong>Personal</strong> tier. Includes $5/month free, $10 if you feed ADS-B.</p>
+            <div class="usage-block">
+              <span class="usage-label">Usage this month ({{ aeroapi_stats.period }})</span>
+              {% if aeroapi_stats.has_reading %}
+              <span class="usage-value"{% if aeroapi_stats.over_budget %} style="color:var(--bad)"{% endif %}>${{ '%.2f'|format(aeroapi_stats.spent) }} of ${{ '%.2f'|format(aeroapi_stats.budget) }}</span>
+              <span class="usage-meta">
+                {{ aeroapi_stats.reported_calls or aeroapi_stats.queries }} calls &middot; FlightAware&rsquo;s figure{% if aeroapi_stats.usage_age %}, {{ aeroapi_stats.usage_age }}{% endif %}<br>
+                Tracker last ran <strong{% if poller.stale %} class="warn"{% endif %}>{{ poller.label }}</strong>{% if poller.stale %} &mdash; longer ago than it should be{% endif %}
+                {%- if not aeroapi_stats.reading_fresh %}<br><span class="bad">Spend reading is stale; the limit is being held against a local count until it updates.</span>{% endif %}
+              </span>
+              {% else %}
+              <span class="usage-value" style="color:var(--muted)">&mdash; of ${{ '%.2f'|format(aeroapi_stats.budget) }}</span>
+              <span class="usage-meta">
+                No reading yet; it appears within 15 minutes of the key being used.<br>
+                Tracker last ran <strong{% if poller.stale %} class="warn"{% endif %}>{{ poller.label }}</strong>
+              </span>
+              {% endif %}
+            </div>
+            {% if aeroapi_stats.exhausted %}
+            <p class="hint" style="color:var(--bad);font-weight:600;">
+              {% if aeroapi_stats.budget <= 0 %}Limit set to $0 &mdash; AeroAPI queries are off. Live ADS-B tracking is unaffected.
+              {%- else %}Limit reached &mdash; AeroAPI is paused until the month rolls over. Live ADS-B tracking is unaffected.{% endif %}
+            </p>
+            {% endif %}
+            <label for="aeroapi-budget" style="margin-top:1rem;">Monthly spend limit (USD)</label>
+            <div class="budget-input">
+              <span class="budget-prefix">$</span>
+              {# step was 0.25, which means the browser only accepts multiples of
+                 a quarter. The DEFAULT budget is 4.90, so a fresh account could
+                 not save settings at all: the field failed validation before the
+                 form was ever submitted and the browser said "please enter a
+                 valid value" against a number the app itself had put there.
+                 Cents are the real unit of a dollar budget. #}
+              <input type="number" name="aeroapi_budget" id="aeroapi-budget" step="0.01" min="0" max="500"
+                     value="{{ '%.2f'|format(s.aeroapi_budget) }}">
+            </div>
+            <p class="hint">Hard stop &mdash; queries pause for the month once spend hits this. $0 turns them off and keeps your key.</p>
+          </div>
+        </div>
+      </details>
+      {% endif %}
+
+      <details class="grow" {% if open_group == 'tracking' %}open{% endif %}>
+        {{ rowhead('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10.5c0 5.2-8 11-8 11s-8-5.8-8-11a8 8 0 0 1 16 0z"/><circle cx="12" cy="10.3" r="2.8"/></svg>'|safe, 'Live tracking', preview.tracking) }}
+        <div class="grow-body">
+          {% if is_pilot %}
+          <div class="ctl">
+            <label for="poll-seconds">Live poll interval (seconds)</label>
+            <input type="number" name="poll_seconds" id="poll-seconds" value="{{ s.poll_seconds }}" min="10" max="300">
+            <p class="hint">Position refresh while airborne. 15 is a good balance.</p>
+          </div>
+          {% endif %}
+          <div class="ctl">
+            <label>Show links to</label>
+            <div class="switch-row">
+              <span class="switch-label">FlightAware</span>
+              <label class="switch">
+                <input type="checkbox" name="show_flightaware" {% if s.show_flightaware %}checked{% endif %}>
+                <span class="track"></span>
+              </label>
+            </div>
+            <div class="switch-row" style="margin-bottom:0;">
+              <span class="switch-label">FlightRadar24</span>
+              <label class="switch">
+                <input type="checkbox" name="show_fr24" {% if s.show_fr24 %}checked{% endif %}>
+                <span class="track"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </details>
     </div>
 
     <button type="submit" class="save-settings-btn">Save settings</button>
   </form>
 
-  {% if is_pilot %}
-  <div class="card">
-    <h2>Account recovery</h2>
-    <p class="hint" style="margin-bottom:0.85rem;">
-      Generating a new code retires the old one immediately.
-    </p>
-    <form method="post" action="/settings/regenerate-recovery" onsubmit="return confirm('Generate a new recovery code? Your current one will stop working immediately.');" style="margin:0;">
-      <button type="submit" style="margin:0;">Generate new recovery code</button>
-    </form>
-  </div>
-  {% endif %}
-
   {% if is_pilot and is_admin %}
-  <div class="card">
-    <h2>Admin</h2>
-    <p style="color:var(--muted); font-size:0.85rem; margin:0 0 0.75rem;">
-      Registered pilots, test mode, live-tracking diagnostics and the
-      decision log are all on the admin page. Settings is for how the app
-      behaves for <em>you</em>; that page is for running the install.
-    </p>
-    <a href="/admin"
-       style="display:inline-block; padding:0.5rem 0.9rem; border-radius:8px;
-              border:1px solid var(--border); color:var(--accent);
-              text-decoration:none; font-size:0.875rem; font-weight:600;">
-      Open admin &rarr;
+  <div class="seclabel">Install</div>
+  <div class="glist">
+    {#- A LINK ROW, NOT A COLLAPSING ONE. Admin is a whole page: registered
+        pilots, test mode, diagnostics and the decision log. Settings is how
+        the app behaves for YOU; that page is for running the install. -#}
+    <a class="grow-link" href="/admin">
+      <span class="grow-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7.5 3.4v5.1c0 4.4-3.1 8.2-7.5 9.5-4.4-1.3-7.5-5.1-7.5-9.5V6.4z"/></svg></span>
+      <span class="grow-title">Admin</span>
+      <span class="grow-value">People, test mode, logs</span>
+      <span class="grow-chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 5 16 12 9 19"/></svg></span>
     </a>
   </div>
   {% endif %}
-  <div style="text-align:center; color:var(--muted); font-size:0.75rem; margin-top:2rem;">v{{ version }}</div>
+
+  <div class="footnote">v{{ version }}</div>
+
 <script>
   (function() {
+    // The AeroAPI sub-fields, as before.
     var t = document.getElementById('aeroapi-toggle');
     var f = document.getElementById('aeroapi-fields');
     if (t && f) t.addEventListener('change', function() {
       f.style.display = t.checked ? '' : 'none';
     });
+
+    // LIVE PREVIEW of theme and accent. Strictly an enhancement: both
+    // controls are radio inputs inside the form, so with no JavaScript at
+    // all they still save and still apply on the next page load. Nothing
+    // here is the only route to anything (invariant 16).
+    var root = document.documentElement;
+    document.querySelectorAll('input[name="accent"]').forEach(function(el) {
+      el.addEventListener('change', function() {
+        if (el.checked) root.setAttribute('data-accent', el.value);
+      });
+    });
+    document.querySelectorAll('input[name="theme"]').forEach(function(el) {
+      el.addEventListener('change', function() {
+        if (el.checked) root.setAttribute('data-theme', el.value);
+      });
+    });
+
+    // UNSAVED-CHANGES MARK. The save button sits below every group, and a
+    // collapsed page is short enough that it is usually on screen — but
+    // changing a colour and walking away without saving is the one easy
+    // mistake this layout allows, so the button says so.
+    var form = document.querySelector('form[action$="settings"]');
+    var btn = form && form.querySelector('.save-settings-btn');
+    if (form && btn) {
+      var original = btn.textContent;
+      form.addEventListener('change', function() {
+        btn.textContent = original + ' — unsaved changes';
+      });
+    }
   })();
 </script>
   {% include "partials/tabbar.html" %}

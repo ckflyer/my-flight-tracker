@@ -13,7 +13,7 @@
     and a layout you have to learn is the wrong layout for that.
 -#}
 <!DOCTYPE html>
-<html lang="en" data-theme="{{ settings.theme }}">
+<html lang="en" data-theme="{{ settings.theme }}" data-accent="{{ settings.accent | default('indigo', true) }}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
